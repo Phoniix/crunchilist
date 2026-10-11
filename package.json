@@ -1,0 +1,10 @@
+{
+  "name": "crunchyroll-corner-assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "icons": "node scripts/gen-icons.js",
+    "bundle": "npx --yes esbuild content/main.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist.js"
+  }
+}

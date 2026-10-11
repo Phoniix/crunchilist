@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "Crunchilist",
+  "version": "1.0.37",
+  "minimum_chrome_version": "114",
+  "description": "Search the Crunchyroll catalog with local season memory, an AniList account, and optional AI.",
+  "permissions": ["storage", "identity", "tabs", "webNavigation"],
+  "host_permissions": [
+    "https://www.crunchyroll.com/*",
+    "https://*.crunchyroll.com/*",
+    "https://anilist.co/*",
+    "https://graphql.anilist.co/*",
+    "https://*.chromiumapp.org/*",
+    "https://api.openai.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Crunchilist",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.crunchyroll.com/*",
+        "https://*.crunchyroll.com/*"
+      ],
+      "js": ["content/page-hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.crunchyroll.com/*",
+        "https://*.crunchyroll.com/*"
+      ],
+      "js": ["content/crunchilist.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/nunito-latin.woff2"],
+      "matches": [
+        "https://www.crunchyroll.com/*",
+        "https://*.crunchyroll.com/*"
+      ]
+    }
+  ]
+}
