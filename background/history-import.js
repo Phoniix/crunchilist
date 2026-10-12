@@ -1,27 +1,19 @@
-import {
-  CATALOG_MATCH_BATCH,
-  cacheKeyForSeries,
-  catalogMatchQuery,
-  catalogMatchVariables,
-  matchTitleToMedia,
-  readCache,
-} from "../lib/anilist.js";
+import { CATALOG_MATCH_BATCH, cacheKeyForSeries, readCache } from "../lib/anilist.js";
 import {
   HISTORY_MAX_PAGES,
   HISTORY_PAGE_SIZE,
   applyHistoryChanges,
   groupHistory,
-  historyItems,
   historyPageUrl,
-  historySearch,
   historySummary,
+  matchHistory,
   parseHistoryPage,
   planHistoryImport,
 } from "../lib/history.js";
+import { HISTORY_SEARCH_BATCH } from "../lib/history-match.js";
 import { anilistSession } from "../lib/settings.js";
-import { normalizeTitle } from "../lib/title-match.js";
 import { syncKeysPaced } from "./anilist-sync.js";
-import { crGet, currentLocale, currentToken, linkLibraryToCatalog, validBearer } from "./catalog-sync.js";
+import { crGet, currentToken, linkLibraryToCatalog, validBearer } from "./catalog-sync.js";
 import { anilist, delay, loadState, saveState } from "./store.js";
 
 const PREVIEW_KEY = "historyPreview";
@@ -53,10 +45,6 @@ export function historyActivity() {
   };
 }
 
-function hitTitle(media) {
-  return media?.title?.english || media?.title?.romaji || media?.title?.native || "";
-}
-
 function tokenAccount(token) {
   try {
     const body = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
@@ -80,7 +68,8 @@ async function accountId(token) {
 
 async function readHistory(token, signal) {
   const account = await accountId(token);
-  const locale = currentLocale();
+  // English titles whatever the account language: matching relies on English season words and AniList's English titles.
+  const locale = "en-US";
   const rows = [];
   let seen = 0;
   let url = historyPageUrl(account, 1, locale);
@@ -117,9 +106,7 @@ async function readHistory(token, signal) {
   return { rows, seen, cutShort };
 }
 
-async function searchBatch(batch, signal) {
-  const query = catalogMatchQuery(batch.length);
-  const variables = catalogMatchVariables(batch.map((row) => row.search));
+async function askAniList(query, variables, signal) {
   try {
     return await anilist(query, variables, undefined, signal);
   } catch (error) {
@@ -133,56 +120,30 @@ async function searchBatch(batch, signal) {
 
 async function matchGroups(groups, state, signal) {
   const now = Date.now();
-  const bySearch = new Map();
-  const seriesHit = (group) => {
+  const known = (group) => {
     const hit = readCache(state.anilistCache, cacheKeyForSeries(group.seriesId), now);
-    return hit?.kind === "hit" && hit.anilistId ? hit : null;
+    if (hit?.kind !== "hit" || !hit.anilistId) return null;
+    return {
+      settled: hit.releaseStatus === "FINISHED" && Boolean(hit.episodes),
+      media: { id: hit.anilistId, episodes: hit.episodes ?? null, coverImage: { large: hit.cover || "" }, title: { english: hit.titles?.english || "", romaji: hit.titles?.romaji || "" } },
+    };
   };
-  const firstSeason = (group) => group.kind === "movie"
-    || !group.seasonNumber
-    || group.seasonNumber === 1
-    || normalizeTitle(group.seasonTitle) === normalizeTitle(group.seriesTitle);
-  const pending = [];
-  for (const group of groups) {
-    const plan = historySearch(group);
-    group.searchKey = normalizeTitle(plan.search);
-    if (!group.searchKey || bySearch.has(group.searchKey)) continue;
-    const known = firstSeason(group) ? seriesHit(group) : null;
-    if (known) {
-      bySearch.set(group.searchKey, { anilistId: known.anilistId, episodes: known.episodes, cover: known.cover, title: known.titles?.english || known.titles?.romaji || "" });
-      continue;
-    }
-    bySearch.set(group.searchKey, null);
-    pending.push({ key: group.searchKey, search: plan.search, matchTitle: plan.matchTitle, kind: group.kind === "movie" ? "movie" : "series" });
-  }
   scan.pages = scan.pagesDone;
-  scan.batches = Math.ceil(pending.length / CATALOG_MATCH_BATCH);
+  scan.batches = Math.max(1, Math.ceil(groups.length / HISTORY_SEARCH_BATCH));
   scan.batchesDone = 0;
   bumpScan();
-  for (let index = 0; index < pending.length; index += CATALOG_MATCH_BATCH) {
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    const batch = pending.slice(index, index + CATALOG_MATCH_BATCH);
-    const payload = await searchBatch(batch, signal);
-    batch.forEach((row, offset) => {
-      const media = payload?.data?.[`p${offset}`]?.media || [];
-      const match = matchTitleToMedia(row.matchTitle, media, { kind: row.kind });
-      if (match.confidence !== "high") return;
-      bySearch.set(row.key, {
-        anilistId: match.media.id,
-        episodes: match.media.episodes ?? null,
-        cover: match.media.coverImage?.large || "",
-        title: hitTitle(match.media),
-      });
-    });
-    scan.batchesDone += 1;
-    bumpScan();
-    job.note = `Matching with AniList… ${Math.min(pending.length, index + batch.length)} of ${pending.length}`;
-    await delay(800, signal);
-  }
-  return historyItems(groups, (group) => {
-    const hit = bySearch.get(group.searchKey);
-    if (!hit) return null;
-    return { ...hit, primary: hit.anilistId === seriesHit(group)?.anilistId };
+  let searches = 0;
+  return matchHistory(groups, {
+    ask: (query, variables) => askAniList(query, variables, signal),
+    known,
+    signal,
+    pause: () => delay(800, signal),
+    onStep: () => {
+      searches += 1;
+      scan.batchesDone = Math.min(scan.batches - 1, searches);
+      bumpScan();
+      job.note = `Matching with AniList… ${searches * HISTORY_SEARCH_BATCH} searches so far`;
+    },
   });
 }
 

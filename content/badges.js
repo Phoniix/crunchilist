@@ -1,6 +1,6 @@
 import { seriesIdFromHref } from "../lib/page-model.js";
 import { BADGE_CSS, BADGE_MENU_CSS, badgeOptions, badgeSignature, paintBadge } from "../ui/badge-style.js";
-import { closeBadgeMenu, openBadgeMenu } from "./badge-menu.js";
+import { closeBadgeMenu, openBadgeMenu } from "../ui/badge-menu.js";
 
 const STYLE_ID = "crl-badge-style";
 const BANNER_SELECTOR = '[class*="hero" i], [class*="spotlight" i], [class*="banner" i], [class*="billboard" i], [data-t*="hero" i]';

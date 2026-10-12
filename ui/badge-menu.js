@@ -1,4 +1,4 @@
-import { BADGE_LABELS, badgeIcon } from "../ui/badge-style.js";
+import { BADGE_LABELS, badgeIcon } from "./badge-style.js";
 
 const CHOICES = ["in_progress", "finished", "plan", "dropped"];
 let menu = null;

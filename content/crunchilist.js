@@ -571,8 +571,7 @@
   function badgeSignature(mark, info, options, inline) {
     return [mark, info.progress ?? "", info.episodes ?? "", options.style, options.corner, options.size, options.progress, options.unwatched, options.motion, options.lite, inline].join("|");
   }
-  function paintBadge(badge, mark, info, options, { inline = false } = {}) {
-    const doc = badge.ownerDocument;
+  function badgeModel(mark, info, options, { inline = false } = {}) {
     const label = BADGE_LABELS[mark] || BADGE_LABELS.unwatched;
     const footer = options.style === "footer" && !inline;
     const classes = ["crl-badge", `crl-${options.style}`, `crl-t-${mark}`];
@@ -581,38 +580,46 @@
     if (mark === "unwatched" && options.unwatched === "hover") classes.push("crl-quiet");
     if (options.motion === "static") classes.push("crl-still");
     if (options.lite) classes.push("crl-lite");
-    badge.className = classes.join(" ");
+    const share = footer && options.progress ? progressShare(mark, info.progress, info.episodes) : 0;
+    return {
+      className: classes.join(" "),
+      label,
+      extra: options.progress ? progressText(mark, info.progress, info.episodes, footer) : "",
+      extraInWord: options.style === "glow",
+      line: share > 0 ? Math.round(share * 100) : 0
+    };
+  }
+  function paintBadge(badge, mark, info, options, { inline = false } = {}) {
+    const doc = badge.ownerDocument;
+    const model = badgeModel(mark, info, options, { inline });
+    badge.className = model.className;
     badge.setAttribute("role", "button");
     badge.setAttribute("tabindex", "0");
     badge.setAttribute("aria-haspopup", "menu");
     if (!badge.hasAttribute("aria-expanded")) badge.setAttribute("aria-expanded", "false");
-    badge.setAttribute("aria-label", `Status: ${label}. Change status`);
+    badge.setAttribute("aria-label", `Status: ${model.label}. Change status`);
     badge.title = "Change status";
     const word = doc.createElement("span");
     word.className = "crl-word";
-    word.textContent = label;
+    word.textContent = model.label;
     const parts = [badgeIcon(doc, mark), word];
-    const extra = options.progress ? progressText(mark, info.progress, info.episodes, footer) : "";
-    if (extra) {
+    if (model.extra) {
       const sub = doc.createElement("span");
       sub.className = "crl-sub";
-      sub.textContent = extra;
-      if (options.style === "glow") word.append(" ", sub);
+      sub.textContent = model.extra;
+      if (model.extraInWord) word.append(" ", sub);
       else parts.push(sub);
     }
-    if (footer && options.progress) {
-      const share = progressShare(mark, info.progress, info.episodes);
-      if (share > 0) {
-        const line = doc.createElement("span");
-        line.className = "crl-line";
-        line.style.width = `${Math.round(share * 100)}%`;
-        parts.push(line);
-      }
+    if (model.line) {
+      const line = doc.createElement("span");
+      line.className = "crl-line";
+      line.style.width = `${model.line}%`;
+      parts.push(line);
     }
     badge.replaceChildren(...parts);
   }
 
-  // content/badge-menu.js
+  // ui/badge-menu.js
   var CHOICES = ["in_progress", "finished", "plan", "dropped"];
   var menu = null;
   var opener = null;
@@ -1267,7 +1274,9 @@
     onView = () => {
     },
     placeholder = "Search anime or describe a mood",
-    linkFor = (item) => item.url || "#"
+    linkFor = (item) => item.url || "#",
+    onSearch = () => {
+    }
   } = {}) {
     let chip = "";
     let currentSite = site;
@@ -1801,6 +1810,7 @@
         return;
       }
       lastRun = { query: query2, response };
+      if (query2) onSearch(query2);
       if (response.sections) {
         writeNote([response.notice, response.note].filter(Boolean).join(" "));
         renderHome(response);

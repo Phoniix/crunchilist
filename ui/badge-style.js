@@ -175,8 +175,8 @@ export function badgeSignature(mark, info, options, inline) {
   return [mark, info.progress ?? "", info.episodes ?? "", options.style, options.corner, options.size, options.progress, options.unwatched, options.motion, options.lite, inline].join("|");
 }
 
-export function paintBadge(badge, mark, info, options, { inline = false } = {}) {
-  const doc = badge.ownerDocument;
+// What a badge shows, shared by the DOM painter (Crunchyroll pages) and the HTML string (Prism cards).
+export function badgeModel(mark, info, options, { inline = false } = {}) {
   const label = BADGE_LABELS[mark] || BADGE_LABELS.unwatched;
   const footer = options.style === "footer" && !inline;
   const classes = ["crl-badge", `crl-${options.style}`, `crl-t-${mark}`];
@@ -185,33 +185,55 @@ export function paintBadge(badge, mark, info, options, { inline = false } = {}) 
   if (mark === "unwatched" && options.unwatched === "hover") classes.push("crl-quiet");
   if (options.motion === "static") classes.push("crl-still");
   if (options.lite) classes.push("crl-lite");
-  badge.className = classes.join(" ");
+  const share = footer && options.progress ? progressShare(mark, info.progress, info.episodes) : 0;
+  return {
+    className: classes.join(" "),
+    label,
+    extra: options.progress ? progressText(mark, info.progress, info.episodes, footer) : "",
+    extraInWord: options.style === "glow",
+    line: share > 0 ? Math.round(share * 100) : 0,
+  };
+}
+
+export function paintBadge(badge, mark, info, options, { inline = false } = {}) {
+  const doc = badge.ownerDocument;
+  const model = badgeModel(mark, info, options, { inline });
+  badge.className = model.className;
   badge.setAttribute("role", "button");
   badge.setAttribute("tabindex", "0");
   badge.setAttribute("aria-haspopup", "menu");
   if (!badge.hasAttribute("aria-expanded")) badge.setAttribute("aria-expanded", "false");
-  badge.setAttribute("aria-label", `Status: ${label}. Change status`);
+  badge.setAttribute("aria-label", `Status: ${model.label}. Change status`);
   badge.title = "Change status";
   const word = doc.createElement("span");
   word.className = "crl-word";
-  word.textContent = label;
+  word.textContent = model.label;
   const parts = [badgeIcon(doc, mark), word];
-  const extra = options.progress ? progressText(mark, info.progress, info.episodes, footer) : "";
-  if (extra) {
+  if (model.extra) {
     const sub = doc.createElement("span");
     sub.className = "crl-sub";
-    sub.textContent = extra;
-    if (options.style === "glow") word.append(" ", sub);
+    sub.textContent = model.extra;
+    if (model.extraInWord) word.append(" ", sub);
     else parts.push(sub);
   }
-  if (footer && options.progress) {
-    const share = progressShare(mark, info.progress, info.episodes);
-    if (share > 0) {
-      const line = doc.createElement("span");
-      line.className = "crl-line";
-      line.style.width = `${Math.round(share * 100)}%`;
-      parts.push(line);
-    }
+  if (model.line) {
+    const line = doc.createElement("span");
+    line.className = "crl-line";
+    line.style.width = `${model.line}%`;
+    parts.push(line);
   }
   badge.replaceChildren(...parts);
+}
+
+const attr = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const iconHtml = (mark) => `<span class="crl-ico"><svg viewBox="0 0 24 24" aria-hidden="true">${(ICON_PATHS[mark] || ICON_PATHS.unwatched)
+  .map(([tag, attrs]) => `<${tag} ${Object.entries(attrs).map(([key, value]) => `${key}="${attr(value)}"`).join(" ")}/>`).join("")}</svg></span>`;
+
+// The same badge as paintBadge, as markup. dataAttrs are extra attributes, already escaped by the caller.
+export function badgeHtml(mark, info, options, { inline = false, focusable = true, dataAttrs = "" } = {}) {
+  const model = badgeModel(mark, info, options, { inline });
+  const sub = model.extra ? `<span class="crl-sub">${attr(model.extra)}</span>` : "";
+  const word = `<span class="crl-word">${attr(model.label)}${model.extraInWord && sub ? ` ${sub}` : ""}</span>`;
+  return `<span class="${model.className}" role="button" tabindex="${focusable ? 0 : -1}" aria-haspopup="menu" aria-expanded="false" aria-label="Status: ${attr(model.label)}. Change status" title="Change status" data-crl-mark="${mark}" ${dataAttrs}>`
+    + `${iconHtml(mark)}${word}${model.extraInWord ? "" : sub}${model.line ? `<span class="crl-line" style="width:${model.line}%"></span>` : ""}</span>`;
 }

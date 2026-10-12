@@ -407,6 +407,188 @@ const SCENARIOS = {
     },
   },
 
+  "search side panel inspired by recent searches": (() => {
+    const prompts = [];
+    const model = goodModel();
+    const create = model.create;
+    model.create = async (...args) => {
+      const session = await create(...args);
+      const prompt = session.prompt;
+      session.prompt = async (input) => { prompts.push(String(input)); return prompt.call(session, input); };
+      return session;
+    };
+    return {
+      storage: {
+        crCatalog: catalogFrom(full),
+        state: { library: libraryWith([[0, "finished"], [1, "in_progress"], [2, "dropped"]]), taste: { liked: ["Romance"], disliked: [], dropped: [], hardAvoids: ["Horror"], subDub: "any" } },
+      },
+      model,
+      async steps({ send, see, expect, read }) {
+        const state = await read();
+        const watchedIds = new Set(Object.values(state.library).filter((entry) => entry.status !== "plan").map((entry) => `sight:${entry.crSeriesId}`));
+        const watchedTitles = Object.values(state.library).filter((entry) => ["finished", "in_progress"].includes(entry.status)).map((entry) => entry.title);
+        const isHorror = (row) => full.find((show) => `sight:${show.id}` === row.id)?.genres?.includes("Horror");
+        const empty = await send("searchInspired", { searches: [] });
+        see("with no searches", `${empty.results.length} picks, ai ${empty.ai}: ${empty.results.slice(0, 3).map((row) => `${row.title} (${row.reason})`).join(" | ")}`);
+        expect("no searches yet still fills the panel from taste, without AI", empty.results.length >= 3 && !empty.ai && empty.results.every((row) => row.reason === "Fits your taste"), `${empty.results.length} picks`);
+        const searches = ["sports anime about a team", "a short romance I have not seen", "something scary"];
+        const plain = await send("searchInspired", { searches, ai: false });
+        see("engine blend", plain.results.map((row) => `${row.title} (${row.reason})`).join(" | "));
+        expect("the engine blend takes from more than one search", new Set(plain.results.map((row) => row.reason)).size >= 2, [...new Set(plain.results.map((row) => row.reason))].join(" | "));
+        const picked = await send("searchInspired", { searches });
+        see("AI picks", `${picked.by}: ${picked.results.map((row) => row.title).join(" | ")}`);
+        expect("AI picks from the searches", picked.ai && picked.results.length >= 3, picked.note || `${picked.results.length} picks`);
+        const all = [...plain.results, ...picked.results, ...empty.results];
+        expect("never suggests shows already watched, watching or dropped", !all.some((row) => watchedIds.has(row.id)), all.filter((row) => watchedIds.has(row.id)).map((row) => row.title).join(" | ") || "none");
+        expect("respects hard avoids even when a search asks for them", !all.some(isHorror), all.filter(isHorror).map((row) => row.title).join(" | ") || "none");
+        const ask = prompts.at(-1) || "";
+        expect("the AI request names the searches and the watch history", searches.every((query) => ask.includes(query)) && watchedTitles.every((title) => ask.includes(title)), ask.slice(0, 160));
+        const again = await send("searchInspired", { searches });
+        expect("asking again with the same searches reuses the answer", again.cached === true && prompts.length === 1, `cached ${again.cached}, ${prompts.length} model calls`);
+        await send("setSettings", { patch: { useAi: false } });
+        const off = await send("searchInspired", { searches });
+        expect("with AI off the engine blend shows", !off.ai && off.results.length >= 3, `ai ${off.ai}, ${off.results.length} picks`);
+      },
+    };
+  })(),
+
+  "generated home rows": (() => {
+    const prompts = [];
+    const themes = [
+      { title: "Scary nights", query: "horror", why: "Spooky." },
+      { title: "Heart flutters", query: "romance", why: "You love romance." },
+      { title: "Laugh tracks", query: "comedy", why: "Light and funny." },
+      { title: "Big fights", query: "action", why: "Action you'll like." },
+      { title: "Other worlds", query: "fantasy", why: "Fantasy picks." },
+      { title: "Game day", query: "sports", why: "Team spirit." },
+    ];
+    const base = goodModel();
+    const model = {
+      ...base,
+      create: async (options) => {
+        const session = await base.create(options);
+        return {
+          ...session,
+          async prompt(input, extra) {
+            if (!String(input).includes("topTags")) return session.prompt(input, extra);
+            prompts.push(String(input));
+            if (globalThis.__homeBroken) return "sorry, no JSON today";
+            return JSON.stringify({ rows: themes });
+          },
+          clone: async function clone() { return this; },
+        };
+      },
+    };
+    return {
+      storage: {
+        crCatalog: catalogFrom(full),
+        state: { library: libraryWith([[0, "finished"], [1, "in_progress"], [2, "dropped"]]), taste: { liked: ["Romance"], disliked: [], dropped: [], hardAvoids: ["Horror"], subDub: "any" } },
+      },
+      model,
+      async steps({ send, see, expect, read }) {
+        const state = await read();
+        const watchedIds = new Set(Object.values(state.library).map((entry) => entry.crSeriesId));
+        const watchedTitles = Object.values(state.library).filter((entry) => ["finished", "in_progress"].includes(entry.status)).map((entry) => entry.title);
+        const known = new Set(full.map((show) => show.id));
+        const isHorror = (id) => full.find((show) => show.id === id)?.genres?.includes("Horror");
+        const saved = async () => (await chrome.storage.local.get("crHomeRows")).crHomeRows;
+        const age = async (patch) => chrome.storage.local.set({ crHomeRows: { ...(await saved()), ...patch } });
+
+        const first = await send("homeRows", { searches: ["space adventure"] });
+        see("rows", first.rows.map((row) => `${row.title} [${row.query}] ${row.ids.length}`).join(" | "));
+        expect("AI names 4-6 rows filled by the search engine", first.ai && first.rows.length >= 4 && first.rows.length <= 6 && first.rows.every((row) => row.ids.length >= 5), `ai ${first.ai}, ${first.rows.length} rows`);
+        const ids = first.rows.flatMap((row) => row.ids);
+        expect("every show is a real catalog show", ids.every((id) => known.has(id)), ids.filter((id) => !known.has(id)).join(" ") || "all known");
+        expect("no show appears in two rows", new Set(ids).size === ids.length, `${ids.length} ids, ${new Set(ids).size} unique`);
+        expect("no watched, watching or dropped shows", !ids.some((id) => watchedIds.has(id)), ids.filter((id) => watchedIds.has(id)).join(" ") || "none");
+        expect("a row asking for a hard-avoided tag is dropped, and no avoided shows appear", !first.rows.some((row) => row.title === "Scary nights") && !ids.some(isHorror), first.rows.map((row) => row.title).join(" | "));
+        const ask = prompts.at(-1) || "";
+        expect("the prompt carries recent watching and searches", watchedTitles.every((title) => ask.includes(title)) && ask.includes("space adventure"), ask.slice(0, 160));
+
+        const again = await send("homeRows", { searches: ["space adventure"] });
+        expect("a later visit reuses the saved rows", prompts.length === 1 && again.createdAt === first.createdAt, `${prompts.length} model calls`);
+        await send("homeRows", { searches: ["giant robots", "space adventure"] });
+        expect("new activity within the hour keeps the rows", prompts.length === 1, `${prompts.length} model calls`);
+        await age({ createdAt: Date.now() - 2 * 60 * 60_000 });
+        await send("homeRows", { searches: ["giant robots", "space adventure"] });
+        expect("new activity after an hour makes new rows", prompts.length === 2, `${prompts.length} model calls`);
+        await send("homeRows", { searches: ["giant robots", "space adventure"] });
+        expect("no new activity keeps them", prompts.length === 2, `${prompts.length} model calls`);
+        await age({ expiresAt: Date.now() - 1 });
+        await send("homeRows", { searches: ["giant robots", "space adventure"] });
+        expect("12 hours later they are remade", prompts.length === 3, `${prompts.length} model calls`);
+        await send("homeRows", { searches: [], fresh: true });
+        expect("New rows remakes them on demand", prompts.length === 4, `${prompts.length} model calls`);
+        const record = await saved();
+        expect("good AI rows last 12 hours", Math.round((record.expiresAt - record.createdAt) / 3_600_000) === 12, `${(record.expiresAt - record.createdAt) / 3_600_000} h`);
+
+        const nudged = await send("homeRows", { searches: [], nudge: "  rainy   day " });
+        const nudgeAsk = JSON.parse(prompts.at(-1) || "{}");
+        expect("typing a nudge remakes the rows with it in the prompt", prompts.length === 5 && nudgeAsk.nudge === "rainy day" && nudged.nudge === "rainy day", `${prompts.length} calls, nudge ${nudgeAsk.nudge}`);
+        await age({ createdAt: Date.now() - 2 * 60 * 60_000 });
+        const carried = await send("homeRows", { searches: ["mecha"] });
+        expect("an activity refresh keeps the nudge", prompts.length === 6 && JSON.parse(prompts.at(-1)).nudge === "rainy day" && carried.nudge === "rainy day", `${prompts.length} calls, nudge ${carried.nudge}`);
+        await send("homeRows", { searches: ["mecha"] });
+        expect("a plain visit keeps the nudged rows", prompts.length === 6, `${prompts.length} calls`);
+        await age({ nudgeUntil: Date.now() - 1 });
+        const lapsed = await send("homeRows", { searches: ["mecha"] });
+        expect("12 hours after typing, the rows go back to plain taste", prompts.length === 7 && !("nudge" in JSON.parse(prompts.at(-1))) && lapsed.nudge === "", `${prompts.length} calls, nudge "${lapsed.nudge}"`);
+        await send("homeRows", { searches: [], nudge: "found family" });
+        const cleared = await send("homeRows", { searches: [], nudge: "" });
+        expect("Clear drops the nudge and remakes the rows", prompts.length === 9 && cleared.nudge === "" && !("nudge" in JSON.parse(prompts.at(-1))), `${prompts.length} calls, nudge "${cleared.nudge}"`);
+
+        globalThis.__homeBroken = true;
+        const broken = await send("homeRows", { searches: ["space adventure"], fresh: true });
+        see("fallback rows", broken.rows.map((row) => `${row.title} ${row.ids.length}`).join(" | "));
+        const failed = await saved();
+        expect("an unreadable AI answer falls back to taste rows", !broken.ai && broken.rows.length >= 4, `ai ${broken.ai}, ${broken.rows.length} rows`);
+        expect("and tries AI again within the hour", Math.round((failed.expiresAt - failed.createdAt) / 60_000) === 60, `${(failed.expiresAt - failed.createdAt) / 60_000} min`);
+        globalThis.__homeBroken = false;
+
+        await send("setSettings", { patch: { useAi: false } });
+        const calls = prompts.length;
+        const off = await send("homeRows", { searches: ["space adventure"], fresh: true });
+        expect("with AI off the rows come from taste and history only", !off.ai && off.rows.length >= 4 && prompts.length === calls, `ai ${off.ai}, ${off.rows.length} rows, ${prompts.length - calls} model calls`);
+        expect("fallback rows also skip watched and avoided shows", !off.rows.flatMap((row) => row.ids).some((id) => watchedIds.has(id) || isHorror(id)), "checked");
+        const offNudge = await send("homeRows", { searches: [], nudge: "sports" });
+        see("AI off with a nudge", offNudge.rows.map((row) => row.title).join(" | "));
+        expect("with AI off a nudge still steers the first rows", !offNudge.ai && offNudge.rows[0]?.title === 'Inspired by "sports"' && offNudge.rows.length >= 4, offNudge.rows[0]?.title);
+        const avoided = await send("homeRows", { searches: [], nudge: "horror" });
+        expect("a nudge for a hard-avoided tag never brings those shows in", !avoided.rows.flatMap((row) => row.ids).some(isHorror) && avoided.rows.length >= 4, avoided.rows.map((row) => row.title).join(" | "));
+      },
+    };
+  })(),
+
+  "generated home rows through an AI service": (() => {
+    const bodies = [];
+    let reply = { rows: [
+      { title: "Heart flutters", query: "romance", why: "You love romance." },
+      { title: "Laugh tracks", query: "comedy", why: "Light and funny." },
+      { title: "Big fights", query: "action", why: "Action you'll like." },
+      { title: "Other worlds", query: "fantasy", why: "Fantasy picks." },
+      { title: "Game day", query: "sports", why: "Team spirit." },
+    ] };
+    return {
+      storage: { crCatalog: catalogFrom(full), state: { settings: { aiService: "groq", apiKeys: { groq: "gsk_test" } } } },
+      model: null,
+      fetch: (url, init) => {
+        if (!url.endsWith("/chat/completions")) return null;
+        bodies.push(JSON.parse(String(init.body || "{}")));
+        return { status: 200, body: { choices: [{ message: { content: typeof reply === "string" ? reply : JSON.stringify(reply) } }] } };
+      },
+      async steps({ send, see, expect }) {
+        const made = await send("homeRows", { searches: ["space adventure"] });
+        see("rows", `${made.by}: ${made.rows.map((row) => `${row.title} ${row.ids.length}`).join(" | ")}`);
+        expect("the service names the rows", made.ai && made.rows.length === 5 && made.by, `ai ${made.ai}, ${made.rows.length} rows, by ${made.by}`);
+        const body = bodies.at(-1) || {};
+        expect("the request carries the home-row prompt, not the pick prompt", /rows for an anime streaming home page/.test(body.messages?.[0]?.content || "") && /space adventure/.test(body.messages?.[1]?.content || ""), (body.messages?.[0]?.content || "").slice(0, 80));
+        reply = "I can't help with that.";
+        const broken = await send("homeRows", { searches: [], fresh: true });
+        expect("an unreadable answer falls back to taste rows", !broken.ai && broken.rows.length >= 4, `ai ${broken.ai}, ${broken.rows.length} rows`);
+      },
+    };
+  })(),
+
   "invalid input from the page": {
     storage: { crCatalog: catalogFrom(full) },
     model: goodModel(),

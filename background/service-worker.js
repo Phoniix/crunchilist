@@ -23,8 +23,8 @@ import { episodeFinished, resolveAllNotices, resolveNotice } from "./episodes.js
 import { applyHistory, cancelHistory, historyPlan, historyProgress, scanHistory, skipHistory } from "./history-import.js";
 import { modelStatus, originAllowed, resolveModel } from "./model.js";
 import { currentView, makeView, pageUpdate, showForSeries } from "./page.js";
-import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, tokenArrived, undoMove, watchPlayerTabs } from "./player.js";
-import { catalogRerank, catalogSearch, catalogSuggest } from "./search.js";
+import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, tokenArrived, undoMove, warmEpisodes, watchPlayerTabs } from "./player.js";
+import { catalogRerank, catalogSearch, catalogSuggest, homeRows, searchInspired } from "./search.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
 
 function seriesIdFrom(id) {
@@ -122,11 +122,15 @@ async function handle(message, sender) {
       return pageUpdate(message.observation, sender);
     case "catalogSession": {
       const result = await catalogSession(message.token, message.locale);
-      if (sender?.tab?.id != null) tokenArrived(sender.tab.id).catch(() => {});
+      const arrived = sender?.tab?.id != null ? tokenArrived(sender.tab.id).catch(() => {}) : Promise.resolve();
+      arrived.then(() => warmEpisodes([])).catch(() => {});
       return result;
     }
     case "playEpisode":
       return playEpisode(message, sender);
+    case "warmEpisodes":
+      warmEpisodes(message.requests).catch(() => {});
+      return {};
     case "tabRole":
       return tabRole(sender);
     case "moveTab":
@@ -150,6 +154,10 @@ async function handle(message, sender) {
       return catalogSuggest(message.query, message.chip, message.site);
     case "catalogRerank":
       return catalogRerank(message.query, message.chip, message.site, message.ids, { reroll: message.reroll, seen: message.seen, last: message.last, save: message.save });
+    case "searchInspired":
+      return searchInspired(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh) });
+    case "homeRows":
+      return homeRows(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh), nudge: typeof message.nudge === "string" ? message.nudge : undefined });
     case "catalogProgress":
       return catalogProgress();
     case "refreshCatalogCovers":

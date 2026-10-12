@@ -6,11 +6,43 @@ let heroIds = [];
 let heroRows = new Map();
 const bgUrl = (url) => `url("${String(url || "").replace(/["'()\\\s]/g, (c) => encodeURIComponent(c))}")`;
 
+const PAGE_SIZE = 6;
+const pageOf = (i) => Math.floor(i / PAGE_SIZE);
+// Six bars at a time; the dots switch pages, and the page follows the slide as the banner plays.
 function heroBars(spots) {
-  return spots.map((s, i) => `<button class="hero-bar" data-act="hero" data-i="${i}" aria-label="${m.esc(s.title)}"><i></i>
-        <span class="hero-tip"><span style="background-image:url('${m.cssUrl(m.artOf(s))}')"></span><b>${m.esc(s.title)}</b></span></button>`).join("");
+  const bar = (s, i) => `<button class="hero-bar" data-act="hero" data-i="${i}" aria-label="${m.esc(s.title)}"><i></i>
+        <span class="hero-tip"><span style="background-image:url('${m.cssUrl(m.artOf(s))}')"></span><b>${m.esc(s.title)}</b></span></button>`;
+  const pages = Math.ceil(spots.length / PAGE_SIZE);
+  const groups = Array.from({ length: pages }, (_, p) => `<div class="hero-page" data-page="${p}">${spots.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE).map((s, n) => bar(s, p * PAGE_SIZE + n)).join("")}</div>`).join("");
+  const dots = pages > 1 ? `<div class="hero-dots">${Array.from({ length: pages }, (_, p) => `<button class="hero-dot" data-act="hero-page" data-page="${p}" aria-label="Banner page ${p + 1} of ${pages}"></button>`).join("")}</div>` : "";
+  return groups + dots;
 }
-function heroSpots(rows = m.bannerRows(6)) {
+function showPage(hero, page) {
+  hero.querySelectorAll(".hero-page").forEach((el) => el.classList.toggle("on", Number(el.dataset.page) === page));
+  hero.querySelectorAll(".hero-dot").forEach((el) => {
+    const on = Number(el.dataset.page) === page;
+    el.classList.toggle("on", on);
+    el.setAttribute("aria-current", on ? "true" : "false");
+  });
+}
+// Long titles step down a size class; if the copy still reaches up under the header, it tightens until it clears.
+const NAV_CLEARANCE = 18;
+function titleSize(title) {
+  const n = String(title || "").length;
+  return n > 70 ? "xl" : n > 44 ? "l" : n > 26 ? "m" : "";
+}
+function fitHeroCopy(hero) {
+  const copy = hero.querySelector(".hero-copy");
+  const nav = document.querySelector(".nav");
+  if (!copy || !nav) return;
+  copy.removeAttribute("data-tight");
+  const limit = nav.getBoundingClientRect().bottom - hero.getBoundingClientRect().top + NAV_CLEARANCE;
+  for (const level of ["1", "2", "3"]) {
+    if (copy.offsetTop >= limit) return;
+    copy.dataset.tight = level;
+  }
+}
+function heroSpots(rows = m.bannerRows()) {
   heroRows = new Map(rows.map((row) => [row.id, row]));
   heroIds = rows.map((row) => row.id);
   return heroIds.map((id) => m.byId.get(id));
@@ -25,7 +57,7 @@ function heroHtml(spots) {
 }
 function rollHtml() {
   const { busy, last } = m.bannerRoll();
-  return `<button class="hero-roll-btn" data-act="hero-reroll" ${busy ? "disabled" : ""} title="Show six different banner picks">${m.icon("refresh")}<span>${busy ? "Rolling…" : "Reroll"}</span></button>
+  return `<button class="hero-roll-btn" data-act="hero-reroll" ${busy ? "disabled" : ""} title="Show different banner picks">${m.icon("refresh")}<span>${busy ? "Rolling…" : "Reroll"}</span></button>
     ${last ? `<button class="hero-roll-btn" data-act="hero-last" ${busy ? "disabled" : ""} title="Bring back the banner picks from before">${m.icon("history")}<span>Last roll</span></button>` : ""}`;
 }
 function paintRoll() {
@@ -36,14 +68,12 @@ function paintRoll() {
 function render(api) {
   m = api;
   const spots = heroSpots();
-  const finished = m.lastFinished();
-  const because = finished ? m.similar(finished, 14) : [];
   return `${spots.length ? heroHtml(spots) : ""}
     ${m.rail("Continue watching", m.inStatus("watching"), { render: m.wide, href: "#list/watching" })}
     ${m.forYouRail()}
+    ${m.homeRowsHtml()}
     ${m.rail("Top 10 on Crunchyroll", m.popular().slice(0, 10), { ranked: true, sub: "Most popular right now" })}
     ${m.rail("New and airing", m.fresh().slice(0, 14), { href: "#airing" })}
-    ${because.length ? m.rail(`Because you finished ${m.esc(finished.title)}`, because) : ""}
     ${m.rail("Your plan to watch", m.inStatus("plan"), { href: "#list/plan" })}
     ${m.rail("Highest rated", m.rated().filter((s) => !m.entry(s)).slice(0, 14), { href: "#browse" })}`;
 }
@@ -73,7 +103,7 @@ function heroTag(s, row) {
 function refreshBanner(api, { restart = false } = {}) {
   m = api;
   if (document.body.dataset.page !== "home") return;
-  const rows = m.bannerRows(6);
+  const rows = m.bannerRows();
   if (!rows.length) return paintRoll();
   const hero = document.querySelector(".hero");
   if (!hero) {
@@ -103,6 +133,7 @@ function refreshBanner(api, { restart = false } = {}) {
       });
     }
     hero.querySelector(".hero-copy").innerHTML = heroCopy(spots[slide]);
+    fitHeroCopy(hero);
     return;
   }
   hero.querySelector(".hero-bars").innerHTML = heroBars(spots);
@@ -111,9 +142,10 @@ function refreshBanner(api, { restart = false } = {}) {
 function heroCopy(s) {
   const item = m.entry(s);
   const row = heroRows.get(s.id) || {};
+  const size = titleSize(s.title);
   return `<div class="hero-tag"><i></i>${heroTag(s, row)}</div>
-    <h1>${m.esc(s.title)}</h1>
-    <div class="peek-meta">${m.matchBadge(row.match, "hero-match")}<span class="star">★ ${m.score(s)}</span>${s.year ? `<span>${s.year}</span>` : ""}<span>${m.seasonCount(s)}</span>${s.genres.length ? `<span>${m.esc(s.genres.slice(0, 3).join(" · "))}</span>` : ""}</div>
+    <h1${size ? ` data-size="${size}"` : ""} title="${m.esc(s.title)}">${m.esc(s.title)}</h1>
+    <div class="peek-meta">${m.statusBadge(s, { inline: true, focusable: true })}${m.matchBadge(row.match, "hero-match")}<span class="star">★ ${m.score(s)}</span>${s.year ? `<span>${s.year}</span>` : ""}<span>${m.seasonCount(s)}</span>${s.genres.length ? `<span>${m.esc(s.genres.slice(0, 3).join(" · "))}</span>` : ""}</div>
     ${row.reason ? `<p class="hero-why">${m.icon("sparkle")} ${m.esc(row.reason)}</p>` : s.about ? `<p>${m.esc(s.about)}</p>` : ""}
     <div class="peek-actions" data-show="${m.esc(s.id)}"><button class="btn accent" data-act="watch">${m.icon(m.onCrunchyroll(s) ? "play" : "right")} ${m.esc(m.playLabel(s))}</button>
       <button class="btn" data-act="toggle">${m.icon(item ? "check" : "plus")} ${item ? m.STATUS[item.status] : "My list"}</button><a class="btn" href="#show/${m.esc(s.id)}">Details</a></div>`;
@@ -148,6 +180,8 @@ function showSlide(i) {
   const copy = hero.querySelector(".hero-copy");
   copy.style.animation = "none"; void copy.offsetWidth; copy.style.animation = "";
   copy.innerHTML = heroCopy(s);
+  fitHeroCopy(hero);
+  showPage(hero, pageOf(slide));
   const dur = withVideo ? 30 : 9;
   hero.querySelectorAll(".hero-bar").forEach((bar, n) => {
     bar.classList.remove("on", "done"); void bar.offsetWidth;
@@ -272,6 +306,7 @@ function bind() {
     if (t.dataset.go) { palette(false); location.hash = t.dataset.go; }
     if (t.dataset.act === "kpal") palette(true);
     if (t.dataset.act === "hero") showSlide(Number(t.dataset.i));
+    if (t.dataset.act === "hero-page") showSlide(Number(t.dataset.page) * PAGE_SIZE);
   });
   document.addEventListener("keydown", (e) => {
     // Typing inside the embedded search shows up here as its shadow host, so look at where the key really went.
@@ -286,6 +321,11 @@ function bind() {
     if (card) { const s = m?.byId.get(card.dataset.show); if (s) setAmbient(m.artOf(s)); }
   });
   addEventListener("scroll", () => document.querySelector(".nav")?.classList.toggle("solid", scrollY > 30), { passive: true });
+  let fitFrame = 0;
+  addEventListener("resize", () => {
+    cancelAnimationFrame(fitFrame);
+    fitFrame = requestAnimationFrame(() => { const hero = document.querySelector(".hero"); if (hero) fitHeroCopy(hero); });
+  });
 }
 
 export function createHome() {

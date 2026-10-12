@@ -6,14 +6,16 @@ import {
   promptFallbackBrief,
 } from "../lib/catalog.js";
 import { tasteMatches } from "../lib/banner.js";
+import { activitySignature, buildHomeRowsPrompt, cleanNudge, expiryFor, fallbackThemes, fillThemes, HOME_ROWS_SCHEMA, HOME_ROWS_TTL_MS, needsRefresh, parseHomeRows } from "../lib/home-rows.js";
+import { cleanSearches, inspiredRequest, interleave, recentlyWatched } from "../lib/inspired.js";
 import { activeEntries, statusForSeries } from "../lib/library.js";
 import { hasIntent, parseQuery, placeVariants } from "../lib/query.js";
 import { LIGHT_MODEL_CANDIDATES } from "../lib/llm.js";
 import { remoteSignature } from "../lib/settings.js";
 import { buildIndex, docFromShow, searchIndex } from "../lib/search-index.js";
-import { allowedByTaste, buildWeights, scoreLabels } from "../lib/taste.js";
+import { allowedByTaste, buildWeights, compactProfile, scoreLabels } from "../lib/taste.js";
 import { applyStoredCovers, currentToken, liveSearch, validBearer } from "./catalog-sync.js";
-import { pickWithModel } from "./model.js";
+import { askJson, pickWithModel } from "./model.js";
 import { loadCatalog, loadState } from "./store.js";
 
 const CATALOG_CHIPS = new Set(["unwatched", "one-cour", "long", "movie", "in-progress", "plan", "new"]);
@@ -537,6 +539,122 @@ export async function catalogRerank(query, chip, site, ids, options = {}) {
   } finally {
     rerankInFlight.delete(flightKey);
   }
+}
+
+// The search page's side panel: candidates come from the engine's results for each recent search (shows not yet
+// watched, without hard avoids), then AI picks the ones that best connect those searches with the viewer's history.
+// With AI off or unavailable, the engine's own blend is shown.
+const INSPIRED_PER_SEARCH = 8;
+const INSPIRED_SHOWN = 6;
+export async function searchInspired(searches, { ai = true, fresh = false } = {}) {
+  const queries = cleanSearches(searches);
+  const state = await loadState();
+  const catalog = await loadCatalog();
+  const { scoreFor } = tasteRank(state);
+  const pool = withoutAvoids(state, catalog.items || []).filter((item) => ["unwatched", "plan"].includes(statusFor(state, item)));
+  const lists = queries.map((query) => rankPool(state, catalog, pool, query, { scoreFor, limit: INSPIRED_PER_SEARCH })
+    .map((entry) => ({ ...entry.doc.item, matched: query })));
+  if (!lists.some((list) => list.length)) lists.splice(0, lists.length, forYouRanked(state, catalog, scoreFor).slice(0, LIGHT_MODEL_CANDIDATES));
+  const items = interleave(lists, LIGHT_MODEL_CANDIDATES);
+  const fallback = items.slice(0, INSPIRED_SHOWN).map((item) => ({
+    ...presentCatalogItem(state, item),
+    reason: item.matched ? `Matches "${item.matched}"` : "Fits your taste",
+  }));
+  const base = { searches: queries, results: fallback, ai: false };
+  if (!ai || state.settings.useAi === false || items.length < 3 || !queries.length) return base;
+  const watched = recentlyWatched(activeEntries(state.library));
+  const key = rerankKey(["inspired", queries.map((query) => query.toLowerCase()), items.map((item) => item.id), watched, state.taste, catalog.updatedAt, remoteSignature(state.settings)]);
+  if (!fresh) {
+    const cached = await readRerank(key);
+    if (cached) return { ...base, results: cached.results, by: cached.by || "", ai: true, cached: true };
+  }
+  if (rerankInFlight.has(key)) return rerankInFlight.get(key);
+  const work = (async () => {
+    const scores = items.map((item) => Math.max(0, scoreFor(item)));
+    const best = Math.max(1, ...scores);
+    const candidates = items.map((item, index) => ({ ...candidateFromCatalogItem(state, item), fit: 0.35 + 0.5 * (scores[index] / best) }));
+    const answer = await pickWithModel(state, { candidates, request: inspiredRequest(queries, watched), light: true });
+    if (!answer.ok) return { ...base, note: answer.note, downloading: Boolean(answer.downloading) };
+    const results = presentFromModel(candidates, answer.parsed).filter((row) => !row.mention).slice(0, INSPIRED_SHOWN);
+    if (results.length < 3) return base;
+    await writeRerank(key, results, answer.by || "");
+    return { ...base, results, by: answer.by || "", ai: true };
+  })();
+  rerankInFlight.set(key, work);
+  try {
+    return await work;
+  } finally {
+    rerankInFlight.delete(key);
+  }
+}
+
+const HOME_ROWS_KEY = "crHomeRows";
+let homeRowsInFlight = null;
+
+function likedTags(state, weights, limit = 8) {
+  const avoids = new Set((state.taste?.hardAvoids || []).map((label) => String(label).toLowerCase()));
+  return [...weights.liked.entries()]
+    .filter(([label, weight]) => weight > 0 && !avoids.has(label))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label]) => label);
+}
+
+async function homeThemes(state, inputs, wantAi) {
+  if (wantAi) {
+    const prompt = buildHomeRowsPrompt({ profile: compactProfile(state.taste), ...inputs });
+    const answer = await askJson(state, {
+      ...prompt,
+      schema: HOME_ROWS_SCHEMA,
+      parse: (text) => parseHomeRows(text, state.taste?.hardAvoids),
+    });
+    if (answer.ok) return { themes: answer.parsed.rows, by: answer.by || "", ai: true };
+  }
+  return { themes: fallbackThemes(inputs), by: "", ai: false };
+}
+
+// nudge: text the viewer typed to steer the rows. undefined keeps the current one; "" clears it.
+export async function homeRows(searches, { ai = true, fresh = false, nudge } = {}) {
+  const state = await loadState();
+  const catalog = await loadCatalog();
+  const { weights, scoreFor } = tasteRank(state);
+  const entries = activeEntries(state.library);
+  const inputs = {
+    liked: likedTags(state, weights),
+    watched: recentlyWatched(entries, 6),
+    searches: cleanSearches(searches),
+  };
+  const wantAi = ai && state.settings.useAi !== false;
+  const signature = activitySignature({
+    taste: state.taste,
+    watchedIds: entries.filter((entry) => entry.status === "finished" || entry.status === "in_progress").map((entry) => entry.crSeriesId || entry.title),
+    searches: inputs.searches,
+    aiKey: wantAi ? remoteSignature(state.settings) || "chrome" : "off",
+  });
+  let saved = null;
+  try {
+    saved = (await chrome.storage.local.get(HOME_ROWS_KEY))[HOME_ROWS_KEY] || null;
+  } catch {
+    saved = null;
+  }
+  const now = Date.now();
+  const typed = nudge !== undefined;
+  const kept = saved?.nudge && now < (saved.nudgeUntil || 0) ? saved.nudge : "";
+  inputs.nudge = typed ? cleanNudge(nudge) : kept;
+  const nudgeUntil = !inputs.nudge ? 0 : typed ? now + HOME_ROWS_TTL_MS : saved.nudgeUntil;
+  if (fresh || inputs.nudge !== (saved?.nudge || "") || needsRefresh(saved, signature, now)) {
+    if (typed) await homeRowsInFlight?.catch(() => {});
+    homeRowsInFlight ||= (async () => {
+      const made = await homeThemes(state, inputs, wantAi);
+      const record = { ...made, signature, nudge: inputs.nudge, nudgeUntil, createdAt: now, expiresAt: expiryFor({ wantedAi: wantAi, gotAi: made.ai, now }) };
+      await chrome.storage.local.set({ [HOME_ROWS_KEY]: record }).catch(() => {});
+      return record;
+    })().finally(() => { homeRowsInFlight = null; });
+    saved = await homeRowsInFlight;
+  }
+  const pool = withoutAvoids(state, catalog.items || []).filter((item) => ["unwatched", "plan"].includes(statusFor(state, item)));
+  const rows = fillThemes(saved.themes, (query) => rankPool(state, catalog, pool, query, { scoreFor, limit: 40 }).map((entry) => entry.doc.item.id));
+  return { rows, by: saved.by || "", ai: Boolean(saved.ai), nudge: saved.nudge || "", createdAt: saved.createdAt, expiresAt: saved.expiresAt };
 }
 
 const rerankInFlight = new Map();

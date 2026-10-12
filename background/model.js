@@ -165,7 +165,7 @@ function coolDown(provider, error, now = Date.now()) {
   remoteHealth[provider.id] = { coolUntil: span ? now + span : 0, error: error?.message || "" };
 }
 
-async function askRemote(state, body, { candidates } = {}) {
+async function askRemote(state, body, { candidates, parse = (text) => resolveModelResults(candidates, text) } = {}) {
   const targets = remoteTargets(state.settings, { health: remoteHealth });
   if (!targets.length) throw new RemoteError("none", "No AI service key is saved.");
   const auto = targets.length > 1;
@@ -175,7 +175,7 @@ async function askRemote(state, body, { candidates } = {}) {
     const timeoutMs = auto && index < targets.length - 1 ? AUTO_TRY_MS : SINGLE_TRY_MS;
     try {
       const { payload, model } = await askOne(state, target, body, timeoutMs);
-      const parsed = resolveModelResults(candidates, messageText(payload));
+      const parsed = parse(messageText(payload));
       if (!parsed.ok) throw new RemoteError("failed", `${target.provider.label}'s answer could not be read.`);
       remoteHealth.lastWinner = target.provider.id;
       remoteHealth[target.provider.id] = { coolUntil: 0, error: "" };
@@ -327,8 +327,8 @@ const CHROME_IDLE_MS = 60_000;
 let chromeQueue = Promise.resolve();
 let chromeIdleTimer = 0;
 
-function askChrome(system, user) {
-  const run = chromeQueue.then(() => askChromeNow(system, user));
+function askChrome(system, user, schema = CHROME_PICK_SCHEMA) {
+  const run = chromeQueue.then(() => askChromeNow(system, user, schema));
   chromeQueue = run.catch(() => {});
   return run;
 }
@@ -340,7 +340,7 @@ function releaseWhenIdle() {
   }, CHROME_IDLE_MS);
 }
 
-async function askChromeNow(system, user) {
+async function askChromeNow(system, user, schema) {
   clearTimeout(chromeIdleTimer);
   const model = languageModel();
   if (!model?.create) throw new Error("Chrome model unavailable");
@@ -376,7 +376,7 @@ async function askChromeNow(system, user) {
   };
   try {
     try {
-      const constrained = await promptWithin(await freshSession(), input, { responseConstraint: CHROME_PICK_SCHEMA });
+      const constrained = await promptWithin(await freshSession(), input, { responseConstraint: schema });
       if (constrained.trim()) {
         chromeLastFailed = false;
         return constrained;
@@ -463,11 +463,11 @@ function chromeModelIsDownloading() {
   return Boolean(chromeModelDownload);
 }
 
-async function answerWithChrome(system, user, candidates) {
+async function answerWithChrome(system, user, candidates, { schema = CHROME_PICK_SCHEMA, parse = (text) => resolveModelResults(candidates, text) } = {}) {
   const status = await chromeModelStatus();
   if (status === "available" || (chromeSession && !chromeModelDownload)) {
     try {
-      const parsed = resolveModelResults(candidates, await askChrome(system, user));
+      const parsed = parse(await askChrome(system, user, schema));
       if (!parsed.ok) return { ok: false, failed: true, note: "Chrome's model gave an answer that could not be read." };
       return { ok: true, parsed };
     } catch (error) {
@@ -520,7 +520,29 @@ async function pickWithModel(state, { candidates, request, chip = null, light = 
   }
 }
 
+async function askJson(state, { system, user, schema, parse, temperature = 0.6 }) {
+  state.settings = withKeys(state.settings);
+  if (!hasRemote(state.settings)) {
+    try {
+      const answer = await answerWithChrome(system, user, [], { schema, parse });
+      if (answer.downloading) return { ok: false, downloading: true, note: MODEL_DOWNLOADING_NOTE };
+      if (!answer.ok) return { ok: false, note: answer.note || "Chrome's model could not be used." };
+      return { ok: true, parsed: answer.parsed, by: "Gemini Nano" };
+    } catch {
+      return { ok: false, note: "Chrome's model could not answer." };
+    }
+  }
+  try {
+    const body = { model: "", temperature, messages: [{ role: "system", content: system }, { role: "user", content: user }] };
+    const answer = await askRemote(state, body, { parse });
+    return { ok: true, parsed: answer.parsed, service: answer.provider.label, by: modelDisplayName(answer.model) };
+  } catch (error) {
+    return { ok: false, note: error?.message || "The assistant could not answer." };
+  }
+}
+
 export {
+  askJson,
   clearModelStall,
   modelDownloadNote,
   modelProgress,

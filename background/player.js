@@ -1,10 +1,12 @@
 // Crunchyroll tab management: Play reuses one Crunchyroll tab (or pop-out window) that Crunchilist opened,
 // stray Crunchyroll tabs can be folded into it, and every Crunchyroll tab can jump back to the Crunchilist tab.
-import { resolveEpisode, seriesUrl } from "../lib/episode-link.js";
+import { cachedLink, rememberLinks, resolveEpisode, seasonLinks, seriesUrl } from "../lib/episode-link.js";
 import { crGet, currentLocale, currentToken, validBearer } from "./catalog-sync.js";
 import { loadState } from "./store.js";
 
 const KEY = "crPlayer";
+const LINKS_KEY = "crEpisodeLinks";
+const WARM_KEY = "crWarmEpisodes";
 const MOVE_UNDO_MS = 20000;
 const CR_URL = /^https:\/\/([a-z0-9-]+\.)?crunchyroll\.com\//i;
 const CR_TABS = ["https://www.crunchyroll.com/*", "https://*.crunchyroll.com/*"];
@@ -77,14 +79,75 @@ function episodeLabel(request) {
   return title ? `${title} ${where}` : `episode ${request.episode}`;
 }
 
+async function loadLinks() {
+  try {
+    return (await chrome.storage.local.get(LINKS_KEY))[LINKS_KEY] || {};
+  } catch {
+    return {};
+  }
+}
+
+// Episode links come from Crunchyroll's season lists, which need a sign-in that only lasts minutes.
+// Every list fetched is kept, so a later Play can open the episode straight away without one.
+async function resolveAndRemember(token, request) {
+  const fetched = [];
+  const found = await resolveEpisode((url) => crGet(token, url), { ...request, locale: currentLocale() }, (index, list) => fetched.push([index, seasonLinks(list)]));
+  let links = await loadLinks();
+  for (const [index, seasonMap] of fetched) links = rememberLinks(links, request.seriesId, index, seasonMap);
+  if (found.exact) links = rememberLinks(links, request.seriesId, request.season, { [request.episode]: found.url });
+  if (fetched.length) await chrome.storage.local.set({ [LINKS_KEY]: links }).catch(() => {});
+  return found;
+}
+
+// null means "wait for Crunchyroll's sign-in", which happens once the opened page loads.
 async function lookUp(request) {
+  const known = cachedLink(await loadLinks(), request);
+  if (known) return { url: known, exact: true };
   const token = await currentToken();
   if (!validBearer(token)) return null;
   try {
-    return await resolveEpisode((url) => crGet(token, url), { ...request, locale: currentLocale() });
-  } catch {
+    return await resolveAndRemember(token, request);
+  } catch (error) {
+    if (/expired/i.test(String(error?.message))) return null;
     return { url: seriesUrl(request.seriesId), exact: false };
   }
+}
+
+const WARM_MAX = 16;
+let warming = null;
+
+function cleanRequest(request) {
+  const seriesId = String(request?.seriesId || "").trim();
+  if (!/^[A-Z0-9]{6,16}$/i.test(seriesId)) return null;
+  return {
+    seriesId,
+    season: Math.max(0, Math.floor(Number(request.season) || 0)),
+    episode: Math.max(1, Math.floor(Number(request.episode) || 1)),
+  };
+}
+
+// Looks up the episodes Play is likely to open next (the banner, Continue watching) while a sign-in is fresh.
+// Without one, the list waits until a Crunchyroll page shares a sign-in.
+export async function warmEpisodes(requests) {
+  const wanted = (Array.isArray(requests) ? requests : []).map(cleanRequest).filter(Boolean).slice(0, WARM_MAX);
+  if (wanted.length) await chrome.storage.session.set({ [WARM_KEY]: wanted }).catch(() => {});
+  if (warming) return {};
+  warming = (async () => {
+    const list = wanted.length ? wanted : (await chrome.storage.session.get(WARM_KEY).catch(() => ({})))[WARM_KEY] || [];
+    for (const request of list) {
+      if (cachedLink(await loadLinks(), request)) continue;
+      const token = await currentToken();
+      if (!validBearer(token)) return;
+      try {
+        await resolveAndRemember(token, request);
+      } catch (error) {
+        if (/expired/i.test(String(error?.message))) return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  })().finally(() => { warming = null; });
+  await warming;
+  return {};
 }
 
 async function openTab(url, mode, player, home) {
@@ -107,12 +170,11 @@ async function openTab(url, mode, player, home) {
 
 // request: { seriesId, season (index among Crunchyroll seasons), episode, title, seasonLabel }
 export async function playEpisode(request, sender) {
-  const seriesId = String(request?.seriesId || "").trim();
-  if (!/^[A-Z0-9]{6,16}$/i.test(seriesId)) throw new Error("This show isn't on Crunchyroll.");
+  const base = cleanRequest(request);
+  if (!base) throw new Error("This show isn't on Crunchyroll.");
+  const { seriesId } = base;
   const clean = {
-    seriesId,
-    season: Math.max(0, Math.floor(Number(request.season) || 0)),
-    episode: Math.max(1, Math.floor(Number(request.episode) || 1)),
+    ...base,
     title: String(request.title || "").slice(0, 160),
     seasonLabel: String(request.seasonLabel || "").slice(0, 40),
   };

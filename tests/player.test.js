@@ -233,3 +233,41 @@ test("once signed in, Play goes straight to the exact episode", async () => {
   assert.equal(env.session.crPlayer.pending, null);
   delete globalThis.fetch;
 });
+
+test("a remembered episode link plays straight away, even without a sign-in", async () => {
+  const env = setup();
+  env.local.crEpisodeLinks = { GG5H5XQX4: { at: Date.now(), seasons: { 0: { 3: "https://www.crunchyroll.com/watch/EP3/three" } } } };
+  const reply = await player.playEpisode({ seriesId: "GG5H5XQX4", season: 0, episode: 3, title: "Frieren" }, env.sender(env.app));
+  assert.equal(reply.exact, true);
+  assert.equal(reply.waiting, false);
+  const opened = [...env.tabs.values()].find((tab) => player.isCrunchyroll(tab.url));
+  assert.equal(opened.url, "https://www.crunchyroll.com/watch/EP3/three");
+});
+
+test("an expired sign-in waits for the page's fresh one instead of stopping on the show page", async () => {
+  const env = setup();
+  env.session.crCatalogToken = "y".repeat(40);
+  globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  const reply = await player.playEpisode({ seriesId: "GG5H5XQX4", season: 0, episode: 2, title: "Frieren" }, env.sender(env.app));
+  assert.equal(reply.waiting, true);
+  const opened = [...env.tabs.values()].find((tab) => player.isCrunchyroll(tab.url));
+  assert.equal(env.session.crPlayer.pending.tabId, opened.id);
+  delete globalThis.fetch;
+});
+
+test("warming looks up the next episodes so a later Play needs no sign-in", async () => {
+  const env = setup();
+  env.session.crCatalogToken = "z".repeat(40);
+  globalThis.fetch = async (url) => {
+    const body = /\/seasons\?/.test(url)
+      ? { data: [{ id: "S1", season_sequence_number: 1, season_number: 1, audio_locale: "ja-JP" }] }
+      : { data: [{ id: "EP1", episode_number: 1, slug_title: "one" }, { id: "EP2", episode_number: 2, slug_title: "two" }] };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  await player.warmEpisodes([{ seriesId: "GG5H5XQX4", season: 0, episode: 1 }, { seriesId: "../bad", episode: 1 }]);
+  delete globalThis.fetch;
+  delete env.session.crCatalogToken;
+  const reply = await player.playEpisode({ seriesId: "GG5H5XQX4", season: 0, episode: 2, title: "Frieren" }, env.sender(env.app));
+  assert.equal(reply.exact, true);
+  assert.equal([...env.tabs.values()].find((tab) => player.isCrunchyroll(tab.url)).url, "https://www.crunchyroll.com/watch/EP2/two");
+});

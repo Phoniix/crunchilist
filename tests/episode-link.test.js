@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mainSeasons, resolveEpisode, seasonForAbsolute, watchUrl } from "../lib/episode-link.js";
+import { cachedLink, mainSeasons, rememberLinks, resolveEpisode, seasonForAbsolute, seasonLinks, watchUrl } from "../lib/episode-link.js";
 
 const ep = (id, number, slug = `ep-${number}`) => ({ id, episode_number: number, sequence_number: number, slug_title: slug });
 
@@ -60,4 +60,35 @@ test("episodes without numbers fall back to their position in the season", async
 test("an unknown episode opens the series page instead", async () => {
   const api = fakeApi([{ id: "S1", season_sequence_number: 1, number_of_episodes: 12 }], { S1: [ep("A1", 1)] });
   assert.deepEqual(await resolveEpisode(api.fetchJson, { seriesId: "SER", episode: 40 }), { url: "https://www.crunchyroll.com/series/SER", exact: false });
+});
+
+test("a season Crunchyroll doesn't list never borrows another season's episode by position", async () => {
+  const api = fakeApi([{ id: "S1", season_sequence_number: 1, number_of_episodes: 2 }, { id: "S2", season_sequence_number: 2, number_of_episodes: 6 }], { S1: [ep("A1", 1)], S2: [{ id: "X1", slug_title: "a" }, { id: "X2", slug_title: "b" }, { id: "X3", slug_title: "c" }, { id: "X4", slug_title: "d" }, { id: "X5", slug_title: "e" }] });
+  assert.deepEqual(await resolveEpisode(api.fetchJson, { seriesId: "SER", season: 2, episode: 5 }), { url: "https://www.crunchyroll.com/series/SER", exact: false });
+});
+
+test("fetched season lists become cached links that expire after a month", () => {
+  const links = seasonLinks({ data: [ep("E1", 1), ep("E2", 2), { id: "", episode_number: 3 }] });
+  assert.deepEqual(links, { 1: "https://www.crunchyroll.com/watch/E1/ep-1", 2: "https://www.crunchyroll.com/watch/E2/ep-2" });
+  const now = 1_000_000_000_000;
+  const store = rememberLinks({}, "GSERIES1", 1, links, now);
+  assert.equal(cachedLink(store, { seriesId: "GSERIES1", season: 1, episode: 2 }, now), links[2]);
+  assert.equal(cachedLink(store, { seriesId: "GSERIES1", season: 0, episode: 2 }, now), null);
+  assert.equal(cachedLink(store, { seriesId: "GSERIES1", season: 1, episode: 2 }, now + 31 * 24 * 60 * 60 * 1000), null);
+});
+
+test("the link cache keeps the most recently used shows", () => {
+  let store = {};
+  for (let n = 0; n < 160; n += 1) store = rememberLinks(store, `GS${String(n).padStart(6, "0")}`, 0, { 1: `https://www.crunchyroll.com/watch/E${n}` }, 1000 + n);
+  assert.equal(Object.keys(store).length, 150);
+  assert.equal(store.GS000000, undefined);
+  assert.ok(store.GS000159);
+});
+
+test("every season list fetched along the way is reported", async () => {
+  const api = fakeApi([{ id: "S1", season_number: 1, number_of_episodes: 2 }, { id: "S2", season_number: 2, number_of_episodes: 2 }], { S1: [ep("A1", 1), ep("A2", 2)], S2: [ep("B3", 3), ep("B4", 4)] });
+  const seen = [];
+  const found = await resolveEpisode(api.fetchJson, { seriesId: "GSERIES1", season: 0, episode: 4 }, (index, list) => seen.push([index, list.data.length]));
+  assert.equal(found.exact, true);
+  assert.deepEqual(seen, [[0, 2], [1, 2]]);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { orderForYou, rankBanner, tasteMatches } from "../lib/banner.js";
+import { galleryBanner, orderForYou, rankBanner, tasteMatches } from "../lib/banner.js";
 
 const shows = "abcdefghijklmnop".split("").map((id) => ({ id }));
 const trending = shows.map((show) => show.id);
@@ -95,4 +95,38 @@ test("banner without AI blends trending, taste and unstarted shows", () => {
   assert.ok(rows.every((row) => !row.ai));
   assert.ok(rows.map((row) => row.id).includes("j"));
   assert.equal(rows.find((row) => row.id === "j").match, 85);
+});
+
+const many = Array.from({ length: 40 }, (_, n) => ({ id: `s${n}` }));
+const manyTrending = many.map((show) => show.id);
+
+test("the paged banner fills three pages of six, mostly AI picks, one blended slide per page", () => {
+  const picks = ["s30", "s31", "s32", "s33", "s34"].map((id, index) => ({ id, rank: index + 1, confidence: 90 - index, reason: `why ${id}` }));
+  picks.push({ id: "s35", mention: true, reason: "also" });
+  const extraPicks = ["s20", "s21", "s22", "s23", "s24", "s25", "s26", "s27", "s28", "s29"].map((id) => ({ id, reason: `row ${id}` }));
+  const rows = galleryBanner({ shows: many, trending: manyTrending, picks, extraPicks, count: 18 });
+  assert.equal(rows.length, 18);
+  assert.deepEqual(rows.slice(0, 5).map((row) => row.id), ["s30", "s31", "s32", "s33", "s34"], "ranked picks lead in rank order");
+  assert.equal(rows[6].id, "s35", "mentions follow the ranked picks");
+  for (const index of [5, 11, 17]) assert.equal(rows[index].ai, false, `slide ${index + 1} closes its page with a blended pick`);
+  assert.equal(rows.filter((row) => row.ai).length, 15);
+  assert.ok(rows.some((row) => row.trend >= 0 && row.trend < 10), "a top-10 show keeps a slot");
+  assert.equal(new Set(rows.map((row) => row.id)).size, 18);
+  assert.equal(rows.find((row) => row.id === "s20").reason, "row s20");
+});
+
+test("the paged banner tops up with the blend when AI picks run short, and skips unusable ones", () => {
+  const status = { s31: "finished" };
+  const picks = [{ id: "s30", rank: 1, confidence: 88 }, { id: "s31", rank: 2, confidence: 80 }];
+  const rows = galleryBanner({ shows: many, trending: manyTrending, picks, extraPicks: [{ id: "missing" }, { id: "s30" }], statusOf: (show) => status[show.id] || "", count: 18 });
+  assert.equal(rows.length, 18);
+  assert.equal(rows[0].id, "s30");
+  assert.equal(rows.filter((row) => row.ai).length, 1);
+  assert.equal(rows.some((row) => row.id === "s31"), false);
+});
+
+test("without AI the paged banner is the plain blend", () => {
+  const rows = galleryBanner({ shows: many, trending: manyTrending, extraPicks: [{ id: "s39" }], count: 18 });
+  assert.equal(rows.length, 18);
+  assert.ok(rows.every((row) => !row.ai));
 });

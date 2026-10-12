@@ -11,6 +11,7 @@ export function createData() {
     load: () => send("appData"),
     saveSeasons: (showId, changes) => send("setSeasonState", { showId, changes }),
     play: (request) => send("playEpisode", request),
+    warm: (requests) => send("warmEpisodes", { requests }),
     // Calls back with "data" when the library, catalog or AniList extras change in storage, and with a view when the background pushes one.
     watch(onChange) {
       let timer = 0;

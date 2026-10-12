@@ -245,6 +245,7 @@ export function createSearchView({
   onView = () => {},
   placeholder = "Search anime or describe a mood",
   linkFor = (item) => item.url || "#",
+  onSearch = () => {},
 } = {}) {
   let chip = "";
   let currentSite = site;
@@ -812,6 +813,7 @@ export function createSearchView({
       return;
     }
     lastRun = { query, response };
+    if (query) onSearch(query);
     if (response.sections) {
       writeNote([response.notice, response.note].filter(Boolean).join(" "));
       renderHome(response);

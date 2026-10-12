@@ -1,10 +1,14 @@
 // Prism: the Crunchilist page. Pages, cards, theme, trailers and the library, drawn from the extension's own data.
 // The data layer (prism-data.js) is the only part that talks to the background.
 import { applySeasonChanges, playRequest } from "../lib/app-shows.js";
-import { orderForYou, rankBanner } from "../lib/banner.js";
+import { galleryBanner, orderForYou } from "../lib/banner.js";
+import { closeBadgeMenu, openBadgeMenu } from "../ui/badge-menu.js";
+import { BADGE_CSS, BADGE_MENU_CSS, badgeHtml, badgeOptions } from "../ui/badge-style.js";
 import { SEARCH_CSS, createSearchView } from "../ui/search-view.js";
 import { SETTINGS_CSS, createSettingsView } from "../ui/settings-view.js";
 import { embed } from "./embed.js";
+import { translatedTrack } from "../lib/captions.js";
+import { INSPIRED_SEARCHES, RECENT_LIMIT, cleanSearches, rememberSearch } from "../lib/inspired.js";
 import { CUSTOM_VARS, clamp, customVars, hexHsv, hsvHex } from "./prism-color.js";
 import { createTastePop } from "./prism-taste.js";
 
@@ -76,7 +80,7 @@ let view = null;
 let tastePop = null;
 let shortcut = null;
 let theme = {};
-let prefs = { previews: true, sound: false, volume: 60 };
+let prefs = { previews: true, sound: false, volume: 60, subs: true };
 let loaded = false;
 let writes = 0;
 
@@ -173,6 +177,7 @@ function applyTheme() {
   document.querySelectorAll(".theme-tile[data-palette='custom']").forEach((tile) => paintVars(tile, customVars(theme.custom, root.dataset.mode)));
   syncWheel();
   root.classList.toggle("reduce", lite());
+  root.classList.toggle("pv-subs", prefs.subs);
   localStorage.setItem(THEME_KEY, JSON.stringify(theme));
   savePrefs();
   document.querySelectorAll("[data-set-palette]").forEach((el) => el.classList.toggle("on", el.dataset.setPalette === theme.palette));
@@ -196,13 +201,36 @@ function crBadge(show, cls = "") {
 }
 
 // Cards
-function badgeFor(show) {
+function newsBadge(show) {
   const item = entry(show);
   if (!item) return show.status === "RELEASING" ? '<span class="badge new">New episodes</span>' : "";
-  if (item.status === "watching") return `<span class="badge watching">${epLabel(show)}</span>`;
   const next = nextSeason(show);
-  if (next) return `<span class="badge new">${next.format === "MOVIE" ? "New movie" : `${esc(next.label)} out`}</span>`;
-  return `<span class="badge ${item.status}">${item.multi && item.status !== "finished" ? seasonTag(item) : ""}${STATUS[item.status]}</span>`;
+  return next ? `<span class="badge new">${next.format === "MOVIE" ? "New movie" : `${esc(next.label)} out`}</span>` : "";
+}
+// Status badges look and behave like the ones on Crunchyroll pages, following the same badge settings.
+const MARK_OF = { watching: "in_progress", plan: "plan", finished: "finished", dropped: "dropped" };
+const STATUS_OF = { in_progress: "watching", plan: "plan", finished: "finished", dropped: "dropped" };
+// look overrides the badge settings for a spot; always shows an Unwatched badge even when the settings hide it.
+function statusBadge(show, { inline = false, focusable = !inline, always = inline, look = {} } = {}) {
+  const item = entry(show);
+  const mark = MARK_OF[item?.status] || "unwatched";
+  const options = { ...badgeOptions(settings()), ...look };
+  if (mark === "unwatched" && options.unwatched === "never" && !always) return "";
+  if (always) options.unwatched = "always";
+  const info = { progress: item ? item.progress : null, episodes: item?.episodes || null };
+  return badgeHtml(mark, info, options, { inline, focusable, dataAttrs: `data-status-badge data-show="${esc(show.id)}"` });
+}
+// Continue watching keeps its badge top left, clear of the play button, like the Crunchyroll continue row.
+const wideLook = () => ({ corner: "top-left", style: badgeOptions(settings()).style === "footer" ? "tinted" : badgeOptions(settings()).style });
+function toggleStatusMenu(badge) {
+  if (badge.getAttribute("aria-expanded") === "true") return closeBadgeMenu();
+  const show = byId.get(badge.closest("[data-show]")?.dataset.show);
+  if (!show) return;
+  openBadgeMenu(badge, {
+    mark: badge.dataset.crlMark,
+    title: show.title,
+    onPick: (mark) => (mark === "unwatched" ? library[show.id] && toggleList(show) : setStatus(show, entry(show)?.index ?? 0, STATUS_OF[mark])),
+  });
 }
 function meter(show) {
   const item = entry(show);
@@ -222,7 +250,7 @@ function card(show, opts = {}) {
         <div class="peek-body">
           <h4>${esc(show.title)}</h4>
           <div class="peek-meta"><span class="star">★ ${score(show)}</span>${show.year ? `<span>${show.year}</span>` : ""}<span>${seasonCount(show)}</span></div>
-          ${crBadge(show, "small")}
+          <div class="peek-badges">${crBadge(show, "small")}${statusBadge(show, { inline: true })}</div>
           ${opts.why ? `<p class="peek-why">${icon("sparkle")} ${esc(opts.why)}</p>` : show.about ? `<p>${esc(clip(show.about, 220))}</p>` : ""}
           <div class="peek-tags">${show.genres.slice(0, 3).map((g) => `<span>${esc(g)}</span>`).join("")}</div>
           <div class="peek-actions">
@@ -234,11 +262,11 @@ function card(show, opts = {}) {
           </div>
         </div>
       </div>`.replace(/<(button|a) /g, '<$1 tabindex="-1" ');
-  return `<div class="card${opts.rank ? " ranked" : ""}" data-show="${esc(show.id)}" style="--c:${esc(show.color)}" tabindex="0" role="link" aria-label="${esc(show.title)}">
+  return `<div class="card${opts.rank ? " ranked" : ""}" data-show="${esc(show.id)}" data-crl-card style="--c:${esc(show.color)}" tabindex="0" role="link" aria-label="${esc(show.title)}">
     ${rank}
     <div class="poster">
       ${posterImg(show)}
-      ${badgeFor(show)}${meter(show)}${!onCrunchyroll(show) ? crBadge(show, "mini") : ""}${matchBadge(opts.match)}
+      ${newsBadge(show)}${statusBadge(show)}${meter(show)}${!onCrunchyroll(show) ? crBadge(show, "mini") : ""}${matchBadge(opts.match)}
     </div>
     ${peek}
     <div class="cap"><div class="title">${esc(show.title)}</div>${opts.why
@@ -247,8 +275,8 @@ function card(show, opts = {}) {
   </div>`;
 }
 function wide(show) {
-  return `<div class="wide" data-show="${esc(show.id)}" tabindex="0" role="link" aria-label="${esc(show.title)}, ${esc(epLabel(show, true))}">
-    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>
+  return `<div class="wide" data-show="${esc(show.id)}" data-crl-card tabindex="0" role="${onCrunchyroll(show) ? "button" : "link"}" aria-label="${onCrunchyroll(show) ? `Play ${esc(show.title)}, ${esc(playLabel(show).toLowerCase())}` : `${esc(show.title)}, ${esc(epLabel(show, true))}`}">
+    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook() })}
       <div class="wide-copy"><b>${esc(show.title)}</b><small>${epLabel(show, true)}</small>${meter(show)}</div>
     </div>
   </div>`;
@@ -259,9 +287,9 @@ function rail(title, items, opts = {}) {
   return `<section class="row ${opts.cls || ""}"${opts.id ? ` id="${opts.id}"` : ""}>
     <div class="row-head"><h2>${title}</h2>${opts.sub ? `<span class="muted">${opts.sub}</span>` : ""}${opts.extra || ""}${opts.href === false ? "" : `<a href="${opts.href || "#browse"}">See all</a>`}</div>
     ${items.length ? `<div class="rail-wrap">
-      <button class="rail-arrow prev" data-act="rail-prev" aria-label="Scroll ${esc(title)} left" tabindex="-1">${icon("left")}</button>
+      <button class="rail-arrow prev" data-act="rail-prev" aria-label="Scroll ${esc(opts.label || title)} left" tabindex="-1">${icon("left")}</button>
       <div class="rail">${items.map(render).join("")}</div>
-      <button class="rail-arrow next" data-act="rail-next" aria-label="Scroll ${esc(title)} right" tabindex="-1">${icon("right")}</button>
+      <button class="rail-arrow next" data-act="rail-next" aria-label="Scroll ${esc(opts.label || title)} right" tabindex="-1">${icon("right")}</button>
     </div>` : opts.empty || ""}
   </section>`;
 }
@@ -307,11 +335,6 @@ function similar(show, count = 12) {
     .sort((a, b) => b.hits - a.hits || (b.other.score || 0) - (a.other.score || 0))
     .slice(0, count).map((row) => row.other);
 }
-const lastFinished = () => {
-  const finished = inStatus("finished").filter((show) => labelsOf(show).length);
-  return finished[0];
-};
-
 // Picked for you: the search engine's own For you row. With AI on, the model ranks it on its own when Home opens
 // (cached for 12 hours in the background), and Reroll asks for different picks. With AI off it stays in taste order.
 // `ranked` keeps the first AI ranking so a reroll changes this row without reshuffling the banner.
@@ -349,26 +372,73 @@ function paintForYou() {
 }
 // The banner blends the AI ranking, Crunchyroll popularity, taste and shows you haven't started.
 // After a reroll it holds that roll (`rows`) until the next one; `prev` is the roll Last roll brings back.
-const banner = { rows: null, prev: null, seen: new Set(), busy: false };
+// Three pages of six. `extra` is a second AI roll kept for the banner alone, so most slides are AI picks.
+const BANNER_COUNT = 18;
+const BANNER_EXTRA_KEY = "cl-banner-ai";
+const BANNER_EXTRA_MS = 12 * 60 * 60 * 1000;
+const banner = { rows: null, prev: null, seen: new Set(), busy: false, extra: [], extraFor: "" };
+// The AI-named Home rows, a few from each in turn, each saying which row it came from.
+function homeRowPicks() {
+  if (!homeGen.ai || !homeGen.rows?.length) return [];
+  const out = [];
+  for (let depth = 0; depth < 3; depth += 1) {
+    for (const row of homeGen.rows) {
+      const id = row.ids?.[depth];
+      if (id) out.push({ id, reason: `Fits “${row.title}”, one of your rows today` });
+    }
+  }
+  return out;
+}
 const bannerBase = (picks) => ({
   shows: SHOWS,
   trending: popular().map((show) => show.id),
   tasteIds: forYou.ids,
   picks,
+  extraPicks: picks ? [...banner.extra, ...homeRowPicks()] : [],
   tasteMatch: forYou.matches,
   statusOf: (show) => entry(show)?.status || "",
   hasArt: (show) => Boolean(show.banner || show.cover),
 });
-function bannerRows(count = 6) {
+function bannerRows(count = BANNER_COUNT) {
   if (banner.rows) return banner.rows.filter((row) => byId.has(row.id) && !["finished", "dropped"].includes(entry(byId.get(row.id))?.status));
-  return rankBanner({ ...bannerBase(aiOn() ? forYou.ranked : null), count });
+  return galleryBanner({ ...bannerBase(aiOn() ? forYou.ranked : null), count });
+}
+function rerankPicks(answer) {
+  return (answer?.ok ? answer.results || [] : []).map((row) => ({
+    id: String(row.id).replace(/^sight:/, ""),
+    reason: row.reason || "",
+    rank: row.rank ?? null,
+    confidence: Number.isFinite(row.confidence) ? row.confidence : null,
+    mention: Boolean(row.mention),
+  })).filter((pick) => byId.has(pick.id));
+}
+// One more AI roll after the first ranking, asked to avoid it, cached for 12 hours per ranking.
+async function loadBannerExtra() {
+  const ranked = (forYou.ranked || []).map((pick) => pick.id);
+  const key = ranked.join(",");
+  if (!key || banner.extraFor === key) return;
+  banner.extraFor = key;
+  try {
+    const saved = JSON.parse(localStorage.getItem(BANNER_EXTRA_KEY) || "null");
+    if (saved?.key === key && Date.now() - saved.at < BANNER_EXTRA_MS) {
+      banner.extra = saved.picks.filter((pick) => byId.has(pick.id));
+      return home?.refreshBanner?.(api);
+    }
+  } catch {}
+  const seen = ranked.map((id) => `sight:${id}`);
+  const answer = await send("catalogRerank", { query: "", chip: "", site: "all", ids: forYou.ids.map((id) => `sight:${id}`), reroll: true, seen, last: seen, save: false });
+  const picks = rerankPicks(answer).map((pick) => ({ ...pick, mention: false }));
+  if (!picks.length || banner.extraFor !== key) return;
+  banner.extra = picks;
+  try { localStorage.setItem(BANNER_EXTRA_KEY, JSON.stringify({ key, at: Date.now(), picks })); } catch {}
+  home?.refreshBanner?.(api);
 }
 const bannerRoll = () => ({ busy: banner.busy, last: Boolean(banner.prev) });
 // The rows in the order their bars show, which can differ from the ranking once the slide on screen was kept in place.
 function shownBanner() {
   const order = home.shownIds?.() || [];
   const at = (row) => (order.includes(row.id) ? order.indexOf(row.id) : order.length);
-  return bannerRows(6).sort((a, b) => at(a) - at(b));
+  return bannerRows().sort((a, b) => at(a) - at(b));
 }
 function lastForYouRoll() {
   if (forYou.busy || !forYou.prev) return;
@@ -377,7 +447,7 @@ function lastForYouRoll() {
   forYou.prev = current;
   paintForYou();
 }
-// Shows six banner picks it hasn't shown since Home opened. With AI on, the model rerolls them too, without touching For you.
+// Shows banner picks it hasn't shown since Home opened. With AI on, the model rerolls them too, without touching For you.
 async function rerollBanner() {
   if (banner.busy) return;
   const current = shownBanner();
@@ -396,19 +466,13 @@ async function rerollBanner() {
       last: current.map((row) => `sight:${row.id}`),
       save: false,
     });
-    picks = (answer?.ok ? answer.results || [] : []).map((row) => ({
-      id: String(row.id).replace(/^sight:/, ""),
-      reason: row.reason || "",
-      rank: row.rank ?? null,
-      confidence: Number.isFinite(row.confidence) ? row.confidence : null,
-      mention: Boolean(row.mention),
-    })).filter((pick) => byId.has(pick.id));
+    picks = rerankPicks(answer);
   }
   const base = bannerBase(picks?.some((pick) => !pick.mention) ? picks : null);
-  let next = rankBanner({ ...base, count: 6, exclude: banner.seen });
-  if (next.length < 3) {
+  let next = galleryBanner({ ...base, count: BANNER_COUNT, exclude: banner.seen });
+  if (next.length < 6) {
     banner.seen = new Set(current.map((row) => row.id));
-    next = rankBanner({ ...base, count: 6, exclude: banner.seen });
+    next = galleryBanner({ ...base, count: BANNER_COUNT, exclude: banner.seen });
   }
   banner.busy = false;
   if (!next.length) {
@@ -485,7 +549,10 @@ async function pickForYou(reroll, { quiet = false } = {}) {
       : `${answer?.note || answer?.error || "AI couldn't pick right now."}${reroll ? " Kept your current picks" : ""}`);
   }
   if (reroll) paintForYou();
-  else paintAi();
+  else {
+    paintAi();
+    if (forYou.ranked) loadBannerExtra();
+  }
 }
 
 // Search: the extension's real search engine, unchanged, inside its own shadow root.
@@ -510,6 +577,7 @@ function ensureSearch() {
       const id = String(item.id || "").replace(/^sight:/, "");
       return byId.has(id) ? `#show/${encodeURIComponent(id)}` : item.url || "#";
     },
+    onSearch: rememberQuery,
   });
   if (view) searchView.setView(view);
   searchEmbed = embed(SEARCH_CSS, searchView.root, { label: "Search", extra: SEARCH_EXTRA });
@@ -531,17 +599,143 @@ function ensureSettings() {
   settingsEmbed = embed(SETTINGS_CSS, settingsView.root, { label: "More settings", extra: SETTINGS_EXTRA });
 }
 
+// Side panel on wide screens: picks inspired by recent searches (kept on this device) and the viewer's history.
+const RECENT_KEY = "cl-recent";
+const SIDE_QUERY = "(min-width: 1320px)";
+let recent = (() => { try { return cleanSearches(JSON.parse(localStorage.getItem(RECENT_KEY)), RECENT_LIMIT); } catch { return []; } })();
+let inspired = { key: "", results: null, by: "", ai: false, busy: false, note: "" };
+let inspiredTimer = 0;
+let inspiredSeq = 0;
+const sideWide = () => matchMedia(SIDE_QUERY).matches;
+function rememberQuery(query) {
+  const next = rememberSearch(recent, query);
+  if (next.join("\n") === recent.join("\n")) return;
+  recent = next;
+  localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
+  clearTimeout(inspiredTimer);
+  inspiredTimer = setTimeout(() => loadInspired(), 1200);
+}
+async function loadInspired({ fresh = false } = {}) {
+  if (document.body.dataset.page !== "search" || !sideWide() || !SHOWS.length) return;
+  const searches = recent.slice(0, INSPIRED_SEARCHES);
+  const key = JSON.stringify([searches, aiOn()]);
+  if (!fresh && key === inspired.key && (inspired.results || inspired.busy)) return paintSide();
+  const seq = ++inspiredSeq;
+  inspired = { ...inspired, key, busy: true };
+  paintSide();
+  // Never starts Chrome's model download on its own; the engine's blend shows instead.
+  const model = aiOn() && searches.length ? await send("modelStatus") : null;
+  const reply = await send("searchInspired", { searches, ai: Boolean(model) && !model.status?.needsDownload, fresh });
+  if (seq !== inspiredSeq) return;
+  const results = (reply?.ok ? reply.results || [] : []).map((row) => ({ id: String(row.id).replace(/^sight:/, ""), reason: row.reason || "" })).filter((row) => byId.has(row.id));
+  inspired = { key, results, by: reply?.by || "", ai: Boolean(reply?.ai), busy: false, note: reply?.ok ? "" : reply?.error || "" };
+  paintSide();
+}
+function sidePick({ id, reason }) {
+  const show = byId.get(id);
+  return `<a class="side-pick" href="#show/${esc(id)}" data-show="${esc(id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b>${reason ? `<small>${esc(reason)}</small>` : ""}<span class="side-pick-meta">${statusBadge(show, { inline: true, focusable: false, always: false, look: { size: "small" } })}<span>★ ${score(show)}</span><span>${seasonCount(show)}</span></span></div></a>`;
+}
+function paintSide() {
+  const side = document.querySelector(".search-side");
+  if (!side) return;
+  const searches = recent.slice(0, INSPIRED_SEARCHES);
+  const title = searches.length ? "Inspired by your searches" : "Picked for you";
+  const by = inspired.busy ? (aiOn() && searches.length ? "Thinking…" : "Loading…")
+    : inspired.ai ? `Picked by ${esc(inspired.by || "AI")} from your searches and watch history`
+    : searches.length ? "From your searches and taste" : "Search something and picks inspired by it show up here";
+  const list = inspired.busy && !inspired.results?.length
+    ? Array.from({ length: 5 }, () => '<div class="side-pick skeleton"><span></span><div><i></i><i></i></div></div>').join("")
+    : inspired.results?.length ? inspired.results.map(sidePick).join("")
+    : `<p class="muted side-empty">${esc(inspired.note || "Nothing to suggest yet.")}</p>`;
+  side.innerHTML = `<div class="side-card inspired${inspired.busy ? " busy" : ""}">
+    <div class="side-head"><h3>${icon("sparkle")} ${title}</h3><button class="btn sm icon ghost" data-act="inspired-refresh" title="New picks" aria-label="New picks" ${inspired.busy ? "disabled" : ""}>${icon("refresh")}</button></div>
+    <p class="side-by">${by}</p>
+    ${recent.length ? `<div class="side-recent">${recent.map((query) => `<button class="chip" data-recent="${esc(query)}" title="Search again">${esc(query)}</button>`).join("")}<button class="side-clear" data-act="recent-clear">Clear</button></div>` : ""}
+    <div class="side-list" aria-busy="${inspired.busy}">${list}</div>
+  </div>`;
+}
+
+// Generated rows on Home: AI names 5-6 themes and the search engine fills each with real shows.
+// The background keeps them 12 hours, or remakes them sooner (at most hourly) after new watching, taste or searches.
+// Text typed in the bar above them nudges the themes for 12 hours; it steers the mix rather than filtering it.
+const GEN_CHECK_MS = 10 * 60_000;
+const homeGen = { rows: null, by: "", ai: false, busy: false, checkedAt: 0, createdAt: 0, nudge: "" };
+async function loadHomeRows({ fresh = false, nudge } = {}) {
+  if (!SHOWS.length || homeGen.busy) return;
+  if (!fresh && nudge === undefined && homeGen.rows && Date.now() - homeGen.checkedAt < GEN_CHECK_MS) return;
+  homeGen.busy = true;
+  paintHomeRows();
+  // Never starts Chrome's model download on its own; the taste-based rows show instead.
+  const model = aiOn() ? await send("modelStatus") : null;
+  const reply = await send("homeRows", {
+    searches: recent.slice(0, INSPIRED_SEARCHES),
+    ai: Boolean(model) && !model.status?.needsDownload,
+    fresh,
+    ...(nudge === undefined ? {} : { nudge }),
+  });
+  homeGen.busy = false;
+  homeGen.checkedAt = Date.now();
+  if (reply?.ok) {
+    homeGen.rows = (reply.rows || []).map((row) => ({ ...row, ids: (row.ids || []).map((id) => String(id).replace(/^sight:/, "")) }));
+    Object.assign(homeGen, { by: reply.by || "", ai: Boolean(reply.ai), createdAt: reply.createdAt || 0, nudge: reply.nudge || "" });
+  } else if (fresh || nudge !== undefined) {
+    toast(reply?.error || "Couldn't make new rows right now");
+  }
+  paintHomeRows();
+  if (homeGen.ai && aiOn() && forYou.ranked) home?.refreshBanner?.(api);
+}
+function genNote() {
+  if (homeGen.busy) return `${icon("sparkle")} Making rows…`;
+  if (!homeGen.rows) return "";
+  const made = homeGen.createdAt ? new Date(homeGen.createdAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+  const who = homeGen.ai ? `Named by ${esc(homeGen.by || "AI")}` : "Made from your taste and history";
+  return `${homeGen.nudge ? `Leaning toward “${esc(homeGen.nudge)}”. ` : ""}${who}${made ? ` · ${made}` : ""}`;
+}
+function genRailsHtml() {
+  return (homeGen.rows || []).map((row) => ({
+    ...row,
+    shows: row.ids.map((id) => byId.get(id)).filter((show) => show && !["finished", "dropped"].includes(entry(show)?.status)),
+  })).filter((row) => row.shows.length >= 4).map((row) => rail(`${homeGen.ai ? icon("sparkle") : ""}${esc(row.title)}`, row.shows, {
+    cls: "gen-row", label: row.title, sub: esc(row.why), href: `#search?q=${encodeURIComponent(row.query)}`,
+  })).join("");
+}
+function homeRowsHtml() {
+  return `<section class="gen-wrap${homeGen.ai ? " ai" : ""}">
+    <form class="gen-ask" data-gen-ask role="search" aria-label="Inspire your own feed">
+      <span class="gen-ask-ico" aria-hidden="true">${icon("sparkle")}</span>
+      <input name="nudge" type="text" maxlength="80" autocomplete="off" spellcheck="false" aria-label="Inspire your own feed" placeholder="Inspire your own feed: “rainy day”, “set in space”, “found family”…" value="${esc(homeGen.nudge)}">
+      <button class="btn sm accent" type="submit"${homeGen.busy ? " disabled" : ""}>Remix</button>
+      <button class="btn sm ghost" type="button" data-act="gen-clear"${homeGen.nudge ? "" : " hidden"}>Clear</button>
+    </form>
+    <p class="gen-note muted" aria-live="polite">${genNote()}</p>
+    <div id="gen-rows">${genRailsHtml()}</div>
+  </section>`;
+}
+function paintHomeRows() {
+  const wrap = document.querySelector(".gen-wrap");
+  if (!wrap) return;
+  wrap.classList.toggle("ai", homeGen.ai);
+  wrap.querySelector("#gen-rows").innerHTML = genRailsHtml();
+  wrap.querySelector(".gen-note").innerHTML = genNote();
+  wrap.querySelector('.gen-ask [type="submit"]').disabled = homeGen.busy;
+  wrap.querySelector('[data-act="gen-clear"]').hidden = !homeGen.nudge;
+  const input = wrap.querySelector(".gen-ask input");
+  if (document.activeElement !== input) input.value = homeGen.nudge;
+}
+
 function pageSearch(query) {
   return `<div class="search-hero">
     <h1 class="page-title">Find your next obsession</h1>
     <p class="page-sub">Search a title, or describe a mood, a vibe, or a show you loved. ${aiOn() ? "AI ranks the best matches and says why." : "Matches are ranked by the search engine and your taste."}</p>
     <div class="search-tools">${MOODS.map((m) => `<button class="chip mood" data-mood="${esc(m)}">${esc(m)}</button>`).join("")}</div>
   </div>
-  <div id="search-embed"></div>`;
+  <div class="search-layout"><div id="search-embed"></div><aside class="search-side" aria-label="Suggestions"></aside></div>`;
 }
 function mountSearch(query) {
   ensureSearch();
   document.querySelector("#search-embed")?.append(searchEmbed.wrap);
+  paintSide();
+  loadInspired();
   if (query != null && query !== lastQuery) {
     lastQuery = query;
     searchView.search(query);
@@ -585,7 +779,7 @@ function pageList(tab) {
   const rows = () => `<div class="lib-rows">${items.slice(0, 400).map((show) => {
     const item = entry(show);
     const pct = item.status === "finished" ? 100 : item.episodes ? Math.round((item.progress / item.episodes) * 100) : 0;
-    return `<div class="lib-row" data-show="${esc(show.id)}">${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}</span></div>
+    return `<div class="lib-row" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}</span><span class="lib-badge">${statusBadge(show, { inline: true, focusable: true })}</span></div>
       <div class="lib-prog">${item.progress} of ${item.episodes || "?"} episodes<div class="meter"><i style="width:${pct}%"></i></div></div>
       <div class="lib-acts">${listTab === "watching" ? `<button class="btn sm" data-act="plus-one">+1 ep</button>` : ""}${onCrunchyroll(show) ? `<button class="btn sm accent" data-act="watch" aria-label="Play">${icon("play")}</button>` : ""}</div></div>`;
   }).join("")}</div>`;
@@ -747,9 +941,9 @@ function airItem({ show, at, episode }) {
   const mine = item?.status === "watching";
   const aired = at <= Date.now();
   const behind = mine && aired && item.progress < episode;
-  return `<a class="air ${mine ? "mine" : ""} ${aired ? "aired" : ""}" href="#show/${esc(show.id)}" data-show="${esc(show.id)}">
+  return `<a class="air ${mine ? "mine" : ""} ${aired ? "aired" : ""}" href="#show/${esc(show.id)}" data-show="${esc(show.id)}" data-crl-card>
     ${posterImg(show)}
-    <div><time>${clock(at)}</time><b>${esc(show.title)}</b><small>Ep ${episode}${behind ? ' · <em>New for you</em>' : aired ? " · Out now" : ""}</small></div>
+    <div><span class="air-top"><time>${clock(at)}</time>${statusBadge(show, { inline: true, focusable: false, always: false, look: { size: "small" } })}</span><b>${esc(show.title)}</b><small>Ep ${episode}${behind ? ' · <em>New for you</em>' : aired ? " · Out now" : ""}</small></div>
   </a>`;
 }
 function pageAiring() {
@@ -771,7 +965,7 @@ function pageAiring() {
     <div class="search-tools air-tools"><button class="chip ${airingMine ? "" : "on"}" data-airing-mine="false">Everything airing</button><button class="chip ${airingMine ? "on" : ""}" data-airing-mine="true">Only shows I'm watching</button></div>
     <div class="air-week">${columns}</div>
     ${returning.length ? `<div class="row-head air-later-head"><h2>Coming back later</h2><span class="muted">On a break or starting soon</span></div>
-      <div class="air-later">${returning.map(({ show, at, episode }) => `<a class="air" href="#show/${esc(show.id)}" data-show="${esc(show.id)}">${posterImg(show)}<div><time>${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}</time><b>${esc(show.title)}</b><small>${episode > 1 ? `Returns with episode ${episode}` : "Premieres"}</small></div></a>`).join("")}</div>` : ""}`;
+      <div class="air-later">${returning.map(({ show, at, episode }) => `<a class="air" href="#show/${esc(show.id)}" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><span class="air-top"><time>${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}</time>${statusBadge(show, { inline: true, focusable: false, always: false, look: { size: "small" } })}</span><b>${esc(show.title)}</b><small>${episode > 1 ? `Returns with episode ${episode}` : "Premieres"}</small></div></a>`).join("")}</div>` : ""}`;
 }
 
 function seasonStrip(show, selected) {
@@ -899,6 +1093,7 @@ function pageSettings() {
       <div class="set-row"><div class="grow"><b>Card size</b><small>How big title cards are on every page</small></div>
         <div class="seg"><button data-set-size="s">Small</button><button data-set-size="m">Medium</button><button data-set-size="l">Large</button></div></div>
       <div class="set-row"><div class="grow"><b>Trailer previews</b><small>Play a muted trailer when you rest on a card</small></div><button class="switch" data-pref="previews" aria-label="Trailer previews"></button></div>
+      <div class="set-row"><div class="grow"><b>English subtitles</b><small>Show English captions on trailers that have them, in card previews and the trailer window</small></div><button class="switch" data-pref="subs" aria-label="English subtitles on trailers"></button></div>
       <div class="set-row"><div class="grow"><b>Preview sound</b><small>One setting for every preview. The volume slider lives in the header</small></div><button class="switch" data-pref="sound" aria-label="Preview sound"></button></div>
       <div class="set-row"><div class="grow"><b>Performance mode</b><small>Turns off motion, blur and trailer autoplay here, and checks Crunchyroll pages less often</small></div><button class="switch" data-setting="liteMode" aria-label="Performance mode"></button></div>
     </div>
@@ -1207,7 +1402,7 @@ function startTips() {
 // Trailer previews
 let hoverTimer = 0;
 let playing = null;
-const ytUrl = (id, muted) => `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&mute=${muted ? 1 : 0}&controls=0&loop=1&playlist=${encodeURIComponent(id)}&modestbranding=1&rel=0&playsinline=1&iv_load_policy=3&cc_load_policy=0&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+const ytUrl = (id, muted, subs = prefs.subs) => `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&mute=${muted ? 1 : 0}&controls=0&loop=1&playlist=${encodeURIComponent(id)}&modestbranding=1&rel=0&playsinline=1&iv_load_policy=3&${subs ? "cc_load_policy=1&cc_lang_pref=en&hl=en" : "cc_load_policy=0"}&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
 
 // One global sound setting for every preview: muted or not, plus a volume.
 const soundOn = () => prefs.sound && prefs.volume > 0;
@@ -1252,6 +1447,7 @@ function onPlayerMessage(event) {
   let message;
   try { message = typeof event.data === "string" ? JSON.parse(event.data) : event.data; } catch { return; }
   const info = message?.info || {};
+  if (Array.isArray(info.captions?.tracklist)) player.pickTrack(info.captions.tracklist);
   if (info.playerState === 1 && player.paused) player.post({ event: "command", func: "pauseVideo", args: [] });
   if (info.playerState === 2 && !player.paused && player.unmutedEarly) {
     autoplayBlocked = true;
@@ -1260,7 +1456,7 @@ function onPlayerMessage(event) {
     player.post({ event: "command", func: "playVideo", args: [] });
   }
   if (typeof info.playerState === "number") {
-    if (info.playerState === 1 && player.state !== 1) { player.post({ event: "command", func: "unloadModule", args: ["captions"] }); player.applySound(); }
+    if (info.playerState === 1 && player.state !== 1) { player.applySubs(); player.applySound(); }
     player.state = info.playerState;
   }
   if (typeof info.currentTime === "number") player.time = info.currentTime;
@@ -1273,7 +1469,9 @@ function player(box, id) {
   const frame = document.createElement("iframe");
   frame.allow = "autoplay; encrypted-media";
   frame.tabIndex = -1;
-  frame.src = ytUrl(id, true);
+  // The banner frames its video to fill the screen, which puts captions out of view, so it never shows them.
+  const wantSubs = () => prefs.subs && !box.classList.contains("hero-video");
+  frame.src = ytUrl(id, true, wantSubs());
   const post = (message) => frame.contentWindow?.postMessage(JSON.stringify({ ...message, id: 1, channel: "widget" }), "https://www.youtube-nocookie.com");
   const applySound = () => {
     const loud = soundOn() && canUnmute();
@@ -1281,7 +1479,21 @@ function player(box, id) {
     post({ event: "command", func: "setVolume", args: [prefs.volume] });
     post({ event: "command", func: loud ? "unMute" : "mute", args: [] });
   };
-  const record = { frame, box, post, applySound, state: -1, time: 0, duration: 0 };
+  // Trailers without an English track stay plain: YouTube only shows a track the video has.
+  const applySubs = () => {
+    if (!wantSubs()) return post({ event: "command", func: "unloadModule", args: ["captions"] });
+    post({ event: "command", func: "loadModule", args: ["captions"] });
+    post({ event: "command", func: "setOption", args: ["captions", "track", { languageCode: "en" }] });
+    // Card previews are drawn small, so their captions are made larger to stay readable.
+    if (box.classList.contains("pv")) post({ event: "command", func: "setOption", args: ["captions", "fontSize", 3] });
+  };
+  const pickTrack = (tracks) => {
+    const track = wantSubs() && !record.translated ? translatedTrack(tracks) : null;
+    if (!track) return;
+    record.translated = true;
+    post({ event: "command", func: "setOption", args: ["captions", "track", track] });
+  };
+  const record = { frame, box, post, applySound, applySubs, pickTrack, state: -1, time: 0, duration: 0 };
   frame.addEventListener("load", () => {
     post({ event: "listening" });
     post({ event: "command", func: "addEventListener", args: ["onStateChange"] });
@@ -1375,6 +1587,30 @@ async function play(show, seasonArg, episodeArg) {
   toast(reply?.error || "Couldn't open Crunchyroll");
 }
 
+// Continue watching cards go straight to the next episode; every other card opens the show page.
+function openCard(el, show) {
+  if (el.matches(".wide") && onCrunchyroll(show)) return play(show);
+  location.hash = `show/${show.id}`;
+}
+
+// Lets the background look up the episodes the banner and Continue watching would open, so Play skips the show page.
+function warmPlay() {
+  const shows = [...inStatus("watching").slice(0, 10), ...shownBanner().map((row) => byId.get(row.id))];
+  const seen = new Set();
+  const requests = [];
+  for (const show of shows) {
+    if (!show || seen.has(show.id) || !onCrunchyroll(show)) continue;
+    seen.add(show.id);
+    const target = playTarget(show);
+    const { seriesId, season, episode } = playRequest(show, target.index, target.episode);
+    requests.push({ seriesId, season, episode });
+  }
+  const key = JSON.stringify(requests);
+  if (!requests.length || key === warmPlay.last) return;
+  warmPlay.last = key;
+  data.warm(requests);
+}
+
 function toast(text) {
   const el = document.querySelector(".toast");
   if (!el || !text) return;
@@ -1446,6 +1682,7 @@ function emptyHome() {
 let home = null;
 function route() {
   stopPreview();
+  closeBadgeMenu();
   if (!route.keep) fadeTip();
   gridObserver?.disconnect();
   const [path, arg, sub] = location.hash.replace(/^#/, "").split("/");
@@ -1462,6 +1699,7 @@ function route() {
     : page === "home" ? home.render(api) : pages[page]();
   document.querySelectorAll("[data-route]").forEach((el) => el.classList.toggle("on", el.dataset.route === page));
   if (page === "search") mountSearch(searchQuery);
+  if (page === "home") { loadHomeRows(); setTimeout(warmPlay, 1500); }
   if (page === "settings") mountSettings();
   if (page === "browse") paintBrowse();
   if (page === "list" && listView === "grid") {
@@ -1481,7 +1719,10 @@ function route() {
 const rerender = (force = false) => {
   // Typing in an embedded view shouldn't be interrupted by a background update.
   const page = document.body.dataset.page;
-  if (!force && (page === "search" || page === "settings")) return paintChrome();
+  if (!force && (page === "search" || page === "settings")) {
+    if (page === "search") paintSide();
+    return paintChrome();
+  }
   route.keep = true;
   route();
 };
@@ -1512,9 +1753,12 @@ function syncAi() {
   aiWasOn = on;
   Object.assign(banner, { rows: null, prev: null, seen: new Set() });
   if (on) { forYou.tried = false; autoRank(); }
-  if (document.body.dataset.page === "home") paintAi();
+  homeGen.checkedAt = 0;
+  if (document.body.dataset.page === "home") { paintAi(); loadHomeRows(); }
+  if (document.body.dataset.page === "search") loadInspired();
 }
 
+let badgeLook = "";
 function applyView(next) {
   if (!next) return;
   view = next;
@@ -1523,6 +1767,10 @@ function applyView(next) {
   tastePop?.sync();
   paintChrome();
   syncAi();
+  const look = JSON.stringify(badgeOptions(settings()));
+  const restyle = badgeLook && look !== badgeLook;
+  badgeLook = look;
+  if (restyle) rerender();
 }
 // After the taste popup closes with changes: For you is fetched again and the banner re-blends.
 function tasteChanged() {
@@ -1559,7 +1807,12 @@ async function reload({ first = false } = {}) {
 }
 
 function bind() {
+  matchMedia(SIDE_QUERY).addEventListener("change", () => loadInspired());
   document.addEventListener("click", (event) => {
+    const statusEl = event.target.closest("[data-status-badge]");
+    if (statusEl) { event.preventDefault(); return toggleStatusMenu(statusEl); }
+    const recentEl = event.target.closest("[data-recent]");
+    if (recentEl) { location.hash = `search?q=${encodeURIComponent(recentEl.dataset.recent)}`; return; }
     const target = event.target.closest("[data-act],[data-choice],[data-set-palette],[data-set-mode],[data-set-size],[data-pref],[data-setting],[data-mood],[data-status],[data-ep],[data-view],[data-genre],[data-bflag],[data-airing-mine],[data-tag-add],[data-tag-flip],[data-tag-remove],[data-tag],[data-note-act],[data-show],a");
     if (event.target.closest("[data-tip-next]")) return fadeTip(() => showTip(Number(event.target.closest("[data-tip-next]").dataset.tipNext)));
     if (event.target.classList.contains("trailer-modal")) { event.target.remove(); return announcePreview(); }
@@ -1581,7 +1834,12 @@ function bind() {
     if (target.dataset.setMode) { theme.mode = target.dataset.setMode; return applyTheme(); }
     if (target.dataset.setSize) { theme.size = target.dataset.setSize; return applyTheme(); }
     if (act === "sound" || target.dataset.pref === "sound") return toggleSound();
-    if (target.dataset.pref) { prefs[target.dataset.pref] = !prefs[target.dataset.pref]; stopPreview(); return applyTheme(); }
+    if (target.dataset.pref) {
+      prefs[target.dataset.pref] = !prefs[target.dataset.pref];
+      stopPreview();
+      if (target.dataset.pref === "subs") for (const p of players) p.applySubs();
+      return applyTheme();
+    }
     if (target.dataset.setting) {
       const key = target.dataset.setting;
       if (key === "showTips" && !settingOn(key)) localStorage.removeItem(TIPS_SEEN);
@@ -1590,6 +1848,12 @@ function bind() {
       return setSettings({ [key]: !settingOn(key) });
     }
     if (act === "ai-toggle") return toggleAi();
+    if (act === "inspired-refresh") return loadInspired({ fresh: true });
+    if (act === "recent-clear") {
+      recent = [];
+      localStorage.removeItem(RECENT_KEY);
+      return loadInspired();
+    }
     if (target.dataset.mood) { location.hash = `search?q=${encodeURIComponent(target.dataset.mood)}`; return; }
     if (target.dataset.view) { listView = target.dataset.view; return rerender(); }
     if (target.dataset.genre !== undefined) {
@@ -1669,6 +1933,7 @@ function bind() {
     }
     if (act === "ai-pick") return pickForYou(false);
     if (act === "ai-reroll") return pickForYou(true);
+    if (act === "gen-clear") return loadHomeRows({ nudge: "" });
     if (act === "ai-last") return lastForYouRoll();
     if (act === "hero-reroll") return rerollBanner();
     if (act === "hero-last") return lastBannerRoll();
@@ -1691,7 +1956,13 @@ function bind() {
       return setSettings({ [key]: value === "true" ? true : value === "false" ? false : value });
     }
     if (target.tagName === "A") return;
-    if (show && !target.closest("button")) location.hash = `show/${show.id}`;
+    if (show && !target.closest("button")) openCard(showEl, show);
+  });
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-gen-ask]");
+    if (!form) return;
+    event.preventDefault();
+    loadHomeRows({ fresh: true, nudge: form.elements.nudge.value });
   });
   document.addEventListener("input", (event) => {
     if (event.target.matches(".vol-range")) { prefs.volume = Number(event.target.value); prefs.sound = prefs.volume > 0; return applySound(); }
@@ -1726,6 +1997,10 @@ function bind() {
   // Keeps the tag input focused while picking from its menu.
   document.addEventListener("pointerdown", (event) => { if (event.target.closest(".tag-menu")) event.preventDefault(); });
   document.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches?.("[data-status-badge]")) {
+      event.preventDefault();
+      return toggleStatusMenu(event.target);
+    }
     if (event.target.id === "tag-q") {
       const options = [...document.querySelectorAll(".tag-opt")];
       const at = options.findIndex((el) => el.classList.contains("sel"));
@@ -1749,7 +2024,9 @@ function bind() {
     }
     if ((event.key === "Enter" || event.key === " ") && event.target.matches(".card[data-show], .wide[data-show]")) {
       event.preventDefault();
-      location.hash = `show/${event.target.dataset.show}`;
+      const show = byId.get(event.target.dataset.show);
+      if (show) openCard(event.target, show);
+      else location.hash = `show/${event.target.dataset.show}`;
     }
     if (event.key === "Escape") { document.body.classList.remove("drawer-open"); document.querySelector(".trailer-modal")?.remove(); announcePreview(); closeMenu("#theme-pop", '[data-act="theme"]'); closeMenu("#profile-pop", ".profile-btn"); tastePop?.close({ restoreFocus: true }); }
   });
@@ -1799,7 +2076,7 @@ export const api = {
   get byId() { return byId; },
   send: (...args) => send(...args),
   icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, seasonsOf, epLabel, seasonCount, nextSeason,
-  popular, rated, fresh, similar, lastFinished, forYouRail, bannerRows, bannerRoll, aiOn, matchBadge, STATUS, MOODS, artOf, posterImg,
+  popular, rated, fresh, similar, forYouRail, homeRowsHtml, bannerRows, bannerRoll, aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
   prefs: () => ({ ...prefs, reduce: lite() }), player, soundButton, onCrunchyroll, playLabel, crBadge,
 };
 
@@ -1808,6 +2085,9 @@ export function startPrism(source, design) {
   send = source.send;
   home = design;
   loadTheme();
+  const badgeStyle = document.createElement("style");
+  badgeStyle.textContent = `${BADGE_CSS}${BADGE_MENU_CSS}`;
+  document.head.append(badgeStyle);
   window.name = "crunchilist-app";
   document.body.innerHTML = `${nav()}<main></main>${drawer()}${themePop()}<div class="pop profile-pop" id="profile-pop" role="dialog" aria-label="Accounts"></div><div class="toast" role="status" aria-live="polite"></div>`;
   tastePop = createTastePop({ send, getView: () => view, icon, esc, onView: applyView, onChanged: tasteChanged });
