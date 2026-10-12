@@ -4,22 +4,13 @@ import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promi
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
+import { PACKAGE_FOLDERS as FOLDERS, PACKAGE_ROOT_FILES, contentFiles, storeManifest } from "../lib/update-files.js";
+
+export { contentFiles, storeManifest };
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DIST = path.join(ROOT, "dist");
 const OUT = path.join(DIST, "crunchilist");
-const FOLDERS = ["app", "background", "fonts", "icons", "lib", "options", "popup", "ui"];
-
-export function storeManifest(manifest) {
-  const out = structuredClone(manifest);
-  // The localhost bridge only serves the dev mockup.
-  delete out.externally_connectable;
-  return out;
-}
-
-export function contentFiles(manifest) {
-  return [...new Set((manifest.content_scripts || []).flatMap((entry) => [...(entry.js || []), ...(entry.css || [])]))];
-}
 
 async function walk(dir) {
   const out = [];
@@ -62,7 +53,7 @@ async function missingRefs(manifest) {
   return missing;
 }
 
-function zip(files) {
+export function zip(files) {
   const locals = [];
   const centrals = [];
   let offset = 0;
@@ -109,7 +100,7 @@ async function main() {
   await rm(OUT, { recursive: true, force: true });
   await mkdir(OUT, { recursive: true });
   for (const folder of FOLDERS) await cp(path.join(ROOT, folder), path.join(OUT, folder), { recursive: true });
-  for (const file of contentFiles(manifest)) await cp(path.join(ROOT, file), path.join(OUT, file));
+  for (const file of [...PACKAGE_ROOT_FILES, ...contentFiles(manifest)]) await cp(path.join(ROOT, file), path.join(OUT, file));
   await writeFile(path.join(OUT, "manifest.json"), `${JSON.stringify(storeManifest(manifest), null, 2)}\n`);
 
   const missing = await missingRefs(manifest);

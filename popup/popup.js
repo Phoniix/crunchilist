@@ -10,6 +10,8 @@ const POPUP_CSS = `
   .pp-open span { flex: 1; text-align: left; }
   .pp-row { padding: 12px; border-radius: 14px; background: var(--pane); border: 1px solid var(--line); }
   .pp-row.is-off .switch-label { color: var(--muted); }
+  .pp-update { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; background: var(--pane); border: 1px solid var(--line); color: var(--text); font-size: 13px; text-decoration: none; }
+  .pp-update b { color: var(--accent); }
 `;
 
 const style = document.createElement("style");
@@ -45,3 +47,12 @@ document.body.append(el("div", { class: "pp" }, [
 ]));
 
 chrome.storage.local.get(ENABLED_KEY).then((stored) => paint(stored[ENABLED_KEY] !== false));
+
+chrome.runtime.sendMessage({ type: "updateStatus" }).then((reply) => {
+  const latest = reply?.ok && reply.update?.available ? reply.update.latest : null;
+  if (!latest) return;
+  document.querySelector(".pp").append(el("a", { class: "pp-update", href: chrome.runtime.getURL("app/app.html#settings"), target: "_blank" }, [
+    el("b", { text: `Version ${latest.version} is out` }),
+    el("span", { text: "Update in Settings" }),
+  ]));
+}).catch(() => {});

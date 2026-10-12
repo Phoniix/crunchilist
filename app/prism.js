@@ -11,6 +11,8 @@ import { translatedTrack } from "../lib/captions.js";
 import { INSPIRED_SEARCHES, RECENT_LIMIT, cleanSearches, rememberSearch } from "../lib/inspired.js";
 import { CUSTOM_VARS, clamp, customVars, hexHsv, hsvHex } from "./prism-color.js";
 import { createTastePop } from "./prism-taste.js";
+import { canSelfUpdate, installUpdate } from "./updater.js";
+import { reloadForDisk } from "../lib/update-check.js";
 
 let SHOWS = [];
 let byId = new Map();
@@ -79,6 +81,7 @@ let library = {};
 let view = null;
 let tastePop = null;
 let shortcut = null;
+let update = null;
 let theme = {};
 let prefs = { previews: true, sound: false, volume: 60, subs: true };
 let loaded = false;
@@ -1115,8 +1118,65 @@ function pageSettings() {
         ? "AI ranks Picked for you and the banner, explains each pick with a match score, and re-orders search results for moods and descriptions"
         : "Off: nothing is sent to an AI model. Picked for you, the banner and search still work, ranked by your taste, what you've watched and what's trending"}</small></div><button class="switch" data-setting="useAi" aria-label="AI features"></button></div>
       <div id="settings-embed"></div></div>
-    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><span>Crunchilist ${esc(chrome.runtime.getManifest().version)}</span></p>
+    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><span>Crunchilist ${esc(chrome.runtime.getManifest().version)}</span>${updateHtml()}</p>
+    ${update?.available ? `<p class="set-foot set-update">${canSelfUpdate()
+      ? `Update now installs it into your Crunchilist folder and restarts Crunchilist. The first time, Chrome asks you to pick that folder: the one shown under Crunchilist on chrome://extensions.${manualUpdate ? " If it can't finish, double-click update.cmd in that folder." : ""} Your list and settings stay.`
+      : manualUpdate
+        ? "Double-click update.cmd in your Crunchilist folder (the one shown under Crunchilist on chrome://extensions), then come back here. Your list and settings stay."
+        : "Download it, unzip it over your Crunchilist folder, then press reload on Crunchilist in chrome://extensions. Your list and settings stay."}</p>` : ""}
   </div>`;
+}
+let updating = false;
+// update.cmd only exists on Windows, and only in copies from 1.0.112 on.
+const manualUpdate = /Windows/.test(navigator.userAgent);
+// update.cmd changes the folder while this page still runs the old code: restart onto the new version.
+async function finishManualUpdate() {
+  const onDisk = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" }).then((response) => response.json()).then((json) => json.version).catch(() => "");
+  const { crDiskReload } = await chrome.storage.local.get("crDiskReload");
+  if (updating || !reloadForDisk(chrome.runtime.getManifest().version, onDisk, crDiskReload)) return;
+  await chrome.storage.local.set({ crDiskReload: onDisk, crReopenApp: true });
+  toast(`Version ${onDisk} is installed. Restarting Crunchilist…`);
+  setTimeout(() => chrome.runtime.reload(), 900);
+}
+function updateHtml() {
+  if (!update || update.managed) return "";
+  if (update.available) {
+    const { version, download, page } = update.latest;
+    const link = `<a href="${esc(download || page)}" target="_blank" rel="noopener">${canSelfUpdate() ? "Download instead" : `Get version ${esc(version)}`}</a>`;
+    const button = canSelfUpdate() ? `<button type="button" data-act="install-update" ${updating ? "disabled" : ""}>${updating ? "Updating…" : `Update now to ${esc(version)}`}</button>` : "";
+    return `${button}${link}${download ? `<a href="${esc(page)}" target="_blank" rel="noopener">What's new</a>` : ""}`;
+  }
+  const note = update.error ? "Couldn't check for updates" : update.checkedAt ? "Up to date" : "";
+  return `${note ? `<span>${note}</span>` : ""}<button type="button" data-act="check-update">Check for updates</button>`;
+}
+async function checkUpdate(force = false) {
+  const reply = await send("updateStatus", { force });
+  if (!reply?.ok) return force ? toast("Couldn't check for updates") : undefined;
+  update = reply.update;
+  if (document.body.dataset.page === "settings") rerender(true);
+  if (update.announce) {
+    toast(`Crunchilist ${update.latest.version} is out. Update it from Settings`);
+    send("updateAnnounced", { version: update.latest.version });
+  } else if (force) {
+    toast(update.available ? `Version ${update.latest.version} is ready in Settings` : update.error ? "Couldn't reach GitHub. Try again later" : "You have the newest version");
+  }
+}
+// Runs straight from the click so Chrome allows its folder prompt.
+async function runUpdate() {
+  if (updating || !update?.latest) return;
+  updating = true;
+  const paint = () => { if (document.body.dataset.page === "settings") rerender(true); };
+  paint();
+  try {
+    const { version } = await installUpdate(update.latest, toast);
+    toast(`Version ${version} installed. Restarting Crunchilist…`);
+    await chrome.storage.local.set({ crReopenApp: true });
+    setTimeout(() => chrome.runtime.reload(), 900);
+  } catch (error) {
+    toast(error?.message || `The update didn't finish. Try again, ${manualUpdate ? "run update.cmd in your Crunchilist folder, " : ""}or use Download instead`);
+    updating = false;
+    paint();
+  }
 }
 function mountSettings() {
   ensureSettings();
@@ -1950,6 +2010,8 @@ function bind() {
       return saveSeasons(current, [{ index, status: n >= (season.episodes || Infinity) ? "finished" : "watching", progress: n }], `${current.title}:${seasonName(current, index)} episode ${n} watched`);
     }
     if (act === "shortcuts") return send("openShortcuts");
+    if (act === "check-update") return checkUpdate(true);
+    if (act === "install-update") return runUpdate();
     if (act === "watch" && show) return play(show, target.dataset.season != null ? Number(target.dataset.season) : undefined);
     if (target.dataset.choice) {
       const [key, value] = target.dataset.choice.split(":");
@@ -2043,7 +2105,10 @@ function bind() {
     if (cardEl && !cardEl.contains(event.relatedTarget)) { clearTimeout(hoverTimer); if (cardEl === playing) stopPreview(); }
   });
   window.addEventListener("message", onPlayerMessage);
-  document.addEventListener("visibilitychange", () => hush(document.hidden));
+  document.addEventListener("visibilitychange", () => {
+    hush(document.hidden);
+    if (!document.hidden) finishManualUpdate().catch(() => {});
+  });
   addEventListener("blur", () => setTimeout(() => { if (document.activeElement?.tagName !== "IFRAME") hush(true); }));
   addEventListener("focus", () => { if (!document.hidden) hush(false); });
   for (const type of ["pointerdown", "keydown"]) {
@@ -2097,5 +2162,12 @@ export function startPrism(source, design) {
   route();
   reload({ first: true }).finally(() => setTimeout(startTips, 800));
   send("getShortcut").then((reply) => { if (reply?.ok) { shortcut = reply.shortcut || ""; if (document.body.dataset.page === "settings") rerender(true); } });
+  setTimeout(() => checkUpdate().catch(() => {}), 3000);
+  finishManualUpdate().catch(() => {});
+  chrome.storage.local.get("crJustUpdated").then(({ crJustUpdated }) => {
+    if (!crJustUpdated) return;
+    chrome.storage.local.remove("crJustUpdated");
+    setTimeout(() => toast(`Crunchilist updated to version ${crJustUpdated}`), 600);
+  }).catch(() => {});
   source.watch((kind, next) => (kind === "view" ? applyView(next) : reload().finally(() => setTimeout(startTips, 800))));
 }

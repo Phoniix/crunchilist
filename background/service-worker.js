@@ -26,6 +26,7 @@ import { currentView, makeView, pageUpdate, showForSeries } from "./page.js";
 import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, tokenArrived, undoMove, warmEpisodes, watchPlayerTabs } from "./player.js";
 import { catalogRerank, catalogSearch, catalogSuggest, homeRows, searchInspired } from "./search.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
+import { checkForUpdate, markUpdateAnnounced } from "./updates.js";
 
 function seriesIdFrom(id) {
   return String(id || "").replace(/^sight:/, "");
@@ -222,6 +223,10 @@ async function handle(message, sender) {
       return appData();
     case "setSeasonState":
       return setSeasonState(message.showId, message.changes);
+    case "updateStatus":
+      return { update: await checkForUpdate({ force: message.force === true }) };
+    case "updateAnnounced":
+      return markUpdateAnnounced(message.version);
     case "getShortcut":
       return { shortcut: await switchShortcut() };
     case "openShortcuts":
@@ -291,8 +296,22 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   loadState().then(saveState).catch(() => {});
+  checkForUpdate({ force: true }).catch(() => {});
+  if (details?.reason === "update") reopenAfterUpdate().catch(() => {});
+});
+
+// The Update button reloads the extension, which closes Crunchilist's tab; open it again on the new version.
+async function reopenAfterUpdate() {
+  const { crReopenApp } = await chrome.storage.local.get("crReopenApp");
+  if (!crReopenApp) return;
+  await chrome.storage.local.remove("crReopenApp");
+  await chrome.storage.local.set({ crJustUpdated: chrome.runtime.getManifest().version });
+  await openApp();
+}
+chrome.runtime.onStartup.addListener(() => {
+  checkForUpdate().catch(() => {});
 });
 
 async function openApp() {

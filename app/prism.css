@@ -754,6 +754,13 @@ html[data-mode="light"] .embed { --p-scheme: light; }
 .set-embed { padding-bottom: 18px; }
 .set-foot { display: flex; gap: 16px; margin: 4px 4px 0; font-size: 13px; color: var(--muted); }
 .set-foot a { color: var(--accent); font-weight: 700; }
+.set-foot button { padding: 0; border: 0; background: none; color: var(--accent); font-weight: 700; font-size: inherit; cursor: pointer; }
+.set-foot button:hover, .set-foot a:hover { text-decoration: underline; }
+.set-foot button[data-act="install-update"] { padding: 6px 14px; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+.set-foot button[data-act="install-update"]:hover { text-decoration: none; filter: brightness(1.08); }
+.set-foot button:disabled { opacity: .6; cursor: default; }
+.set-update { margin-top: 6px; }
+.set-foot { align-items: center; flex-wrap: wrap; }
 
 /* Episodes: tap to play, or switch to marking what you've watched */
 .eps-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 0 0 12px; }
