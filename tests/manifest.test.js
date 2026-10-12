@@ -21,8 +21,10 @@ test("manifest points at files that exist", () => {
   for (const file of files) assert.equal(fs.existsSync(path.join(root, file)), true, file);
   assert.deepEqual(
     manifest.content_scripts.map((script) => script.js),
-    [["content/page-hook.js"], ["content/crunchilist.js"]],
+    [["content/page-hook.js"], ["content/crunchilist.js"], ["content/crunchilist-frame.js"]],
   );
+  assert.equal(manifest.content_scripts[2].all_frames, true);
+  assert.deepEqual(manifest.content_scripts[2].matches, ["https://static.crunchyroll.com/*"]);
   assert.equal(manifest.content_scripts[0].world, "MAIN");
   assert.ok(manifest.permissions.includes("webNavigation"));
   const legacy = fs.readFileSync(path.join(root, "content/content.js"), "utf8");

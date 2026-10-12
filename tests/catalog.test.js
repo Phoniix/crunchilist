@@ -7,13 +7,9 @@ import {
   catalogDue,
   displayPoster,
   filterCatalog,
-  promptMatchLabels,
   promptFallbackBrief,
-  rankCatalogSuggestions,
-  rankPromptCandidates,
-  promptFits,
-  scorePromptCandidates,
   mergeCatalogItems,
+  normalizeCatalog,
   retainSeenCatalog,
   stampCatalogCovers,
   parseBrowsePayload,
@@ -89,22 +85,6 @@ test("a finished daily catalog waits, and a failed attempt waits an hour", () =>
   assert.equal(catalogDue({ complete: false, attemptedAt: now - 2 * 60 * 60 * 1000 }, now), true);
 });
 
-test("suggestions put a title match first, then For you and liked tags", () => {
-  const items = [
-    { id: "plain", title: "Frieren" },
-    { id: "liked", title: "Frieren: Beyond" },
-    { id: "other", title: "Spy x Family" },
-    { id: "contains", title: "After Frieren" },
-  ];
-  const scoreFor = (item) => (item.id === "liked" ? 8 : 0);
-  const ranked = rankCatalogSuggestions(items, "frieren", {
-    scoreFor,
-    forYouIds: new Set(["plain"]),
-    limit: 4,
-  });
-  assert.deepEqual(ranked.map((item) => item.id), ["plain", "liked", "contains"]);
-  assert.equal(rankCatalogSuggestions(items, "", { scoreFor, forYouIds: new Set(["other"]), limit: 1 })[0].id, "other");
-});
 
 test("search prefers titles that start with the query and chips keep one meaning each", () => {
   const items = mergeCatalogItems(
@@ -118,7 +98,9 @@ test("search prefers titles that start with the query and chips keep one meaning
   ];
   const status = (id) => (id === "GMOVIE01" ? "finished" : id === "GSERIES1" ? "in_progress" : "unwatched");
   assert.equal(applyCatalogChip(movies, "movie", false, status)[0].id, "GMOVIE01");
-  assert.equal(applyCatalogChip(movies, "one-cour", false, status)[0].id, "GSERIES1");
+  assert.deepEqual(applyCatalogChip(movies, "one-cour", false, status).map((item) => item.id), ["GSERIES1"]);
+  const lengths = [...movies, { id: "GLONG001", title: "Long", type: "series", episodes: 50 }];
+  assert.deepEqual(applyCatalogChip(lengths, "long", false, () => "unwatched").map((item) => item.id), ["GLONG001"]);
   assert.equal(applyCatalogChip(movies, "unwatched", false, status).length, 0);
   const watching = [
     { id: "GAAAAAAA", title: "Watching", type: "series", episodes: 12 },
@@ -163,89 +145,19 @@ test("a later browse page keeps an anilist cover already saved on the title", ()
   assert.equal(stamped.newest[0].anilistId, 1);
 });
 
-test("a sentence search changes the first titles instead of repeating for you", () => {
-  const items = [
-    { id: "frieren", title: "Frieren", type: "series", episodes: 28 },
-    { id: "loafer", title: "Skip and Loafer", type: "series", episodes: 12 },
-    { id: "another", title: "Another", type: "series", episodes: 12 },
-    { id: "popular", title: "Popular Action", type: "series", episodes: 24 },
-  ];
-  const labels = {
-    frieren: ["Adventure", "Fantasy"],
-    loafer: ["Romance", "Slice of Life"],
-    another: ["Horror", "Mystery"],
-    popular: ["Action"],
-  };
-  const rank = (query) => rankPromptCandidates(items, query, {
-    labelsFor: (item) => labels[item.id],
-    statusFor: () => "unwatched",
-    scoreFor: (item) => (item.id === "frieren" || item.id === "popular" ? 40 : 0),
-    limit: 4,
-  });
-  const romance = rank("a short romance I have not seen");
-  const horror = rank("something scary");
-  assert.equal(romance[0].id, "loafer");
-  assert.equal(horror[0].id, "another");
-  assert.notEqual(romance[0].id, horror[0].id);
-  assert.equal(romance.some((item) => item.id === "popular"), false);
-  assert.equal(horror.some((item) => item.id === "frieren"), false);
-  assert.deepEqual(promptMatchLabels(items[1], "a short romance I have not seen", labels.loafer), ["Romance", "Short"]);
-  assert.equal(rank("frieren")[0].id, "frieren");
-  const story = rankPromptCandidates(
-    [
-      { id: "plain", title: "Plain Show", type: "series", episodes: 12 },
-      { id: "vampire", title: "Night Class", type: "series", episodes: 24 },
-    ],
-    "a vampire story",
-    {
-      labelsFor: () => [],
-      aboutFor: (item) => (item.id === "vampire" ? "Students hide a vampire in their class." : "A sports team trains for a tournament."),
-      statusFor: () => "unwatched",
-      scoreFor: (item) => (item.id === "plain" ? 40 : 0),
-    },
-  );
-  assert.equal(story[0].id, "vampire");
-  assert.equal(
-    promptFallbackBrief(items[1], "a short romance I have not seen", labels.loafer, "Mitsumi moves to Tokyo and starts again."),
-    "Mitsumi moves to Tokyo and starts again.",
-  );
-  assert.equal(promptFallbackBrief(items[1], "a short romance I have not seen", labels.loafer, ""), "Romance, Short");
+test("the fallback brief uses the first sentence, then the labels", () => {
+  const item = { id: "loafer", title: "Skip and Loafer" };
+  assert.equal(promptFallbackBrief(item, "", ["Romance"], "Mitsumi moves to Tokyo. She starts again."), "Mitsumi moves to Tokyo.");
+  assert.equal(promptFallbackBrief(item, "", ["Romance", "Slice of Life", "School", "Comedy"], ""), "Romance, Slice of Life, School");
+  const long = promptFallbackBrief(item, "", [], `${"word ".repeat(50)}ending.`);
+  assert.ok(long.length <= 180);
+  assert.match(long, /word…$/);
 });
 
-test("genre words in a sentence beat the same word in a title", () => {
-  const shows = [
-    { id: "dramatical", title: "DRAMAtical Murder", type: "series", episodes: 12 },
-    { id: "sad", title: "Clannad", type: "series", episodes: 23 },
-    { id: "kaya", title: "Kaya-chan Isn't Scary", type: "series", episodes: 12 },
-    { id: "another", title: "Another", type: "series", episodes: 12 },
-    { id: "moviename", title: "Movie", type: "series", episodes: null },
-    { id: "film", title: "A Silent Voice", type: "movie", episodes: 1 },
-    { id: "frieren", title: "Frieren", type: "series", episodes: 28 },
-  ];
-  const labels = {
-    dramatical: ["Action", "Boys' Love"],
-    sad: ["Drama", "Romance", "Tragedy"],
-    kaya: ["Comedy", "Slice of Life"],
-    another: ["Horror", "Mystery"],
-    moviename: [],
-    film: ["Drama"],
-    frieren: ["Adventure", "Fantasy"],
-  };
-  const rank = (query) => rankPromptCandidates(shows, query, {
-    labelsFor: (item) => labels[item.id],
-    statusFor: () => "unwatched",
-    limit: 7,
-  });
-  assert.equal(rank("a sad drama that will make me cry")[0].id, "sad");
-  assert.equal(rank("a sad drama that will make me cry").some((item) => item.id === "dramatical"), false);
-  assert.equal(rank("something scary")[0].id, "another");
-  assert.equal(rank("something scary").some((item) => item.id === "kaya"), false);
-  const movie = rank("a movie for tonight");
-  assert.equal(movie[0].id, "film");
-  assert.equal(movie.some((item) => item.id === "moviename"), false);
-  assert.equal(rank("frieren")[0].id, "frieren");
-  const scored = scorePromptCandidates(shows, "a sad drama that will make me cry", { labelsFor: (item) => labels[item.id] });
-  const fits = promptFits(scored);
-  assert.ok(fits.get("sad") > fits.get("film"));
-  assert.ok(fits.get("sad") <= 1 && fits.get("film") > 0);
+test("a saved catalog keeps episode counts and links when it loads again", () => {
+  const first = normalizeCatalog({ items: [series] });
+  const reloaded = normalizeCatalog(JSON.parse(JSON.stringify(first)));
+  assert.equal(reloaded.items[0].episodes, 28);
+  assert.equal(reloaded.items[0].url, "https://www.crunchyroll.com/series/G6NQ5DWZ6/frieren");
+  assert.equal(applyCatalogChip(reloaded.items, "long", false, () => "unwatched").length, 1);
 });

@@ -1,6 +1,8 @@
-import { applyBadges } from "./badges.js";
+import { applyBadges, clearBadges } from "./badges.js";
 import { createPanel } from "./panel.js";
+import { createPlayerBar, pauseVideos } from "./player-bar.js";
 import { scanDocument } from "./scan.js";
+import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { buildObservation, parseCmsObjects, parseCmsSeasons } from "../lib/page-model.js";
 
 if (!globalThis.__crCornerBooted) {
@@ -9,17 +11,25 @@ if (!globalThis.__crCornerBooted) {
 }
 
 function boot() {
-  const begin = () => start();
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "pauseVideo") pauseVideos(document);
+  });
+  const begin = async () => {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !(ENABLED_KEY in changes)) return;
+      if (changes[ENABLED_KEY].newValue === false) stop();
+      else start();
+    });
+    if (await isEnabled().catch(() => true)) start();
+  };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", begin, { once: true });
   else begin();
 }
 
+let active = false;
 let panel;
+let playerBar;
 let observer;
-let catalogPoll = 0;
-let gatherPoll = 0;
-let modelPoll = 0;
-let mode = { type: "auto" };
 let cmsEpisodes = [];
 let cmsSeasons = [];
 let lastPath = location.pathname;
@@ -27,196 +37,79 @@ let scanTimer = 0;
 let scanGeneration = 0;
 let lastSignature = "";
 let latestView = null;
-let hydrated = false;
+let offeredEpisode = "";
+const EPISODE_MIN_SECONDS = 240;
+const EPISODE_DONE_RATIO = 0.9;
 
 function send(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
     ok: false,
-    error: error?.message || "Extension unavailable",
+    error: /context invalidated/i.test(error?.message || "")
+      ? "Crunchilist was updated. Reload this tab to keep using it."
+      : error?.message || "Extension unavailable",
   }));
 }
 
-async function refreshModelStatus() {
-  const response = await send("modelStatus");
-  panel?.setModelStatus(response?.ok ? response.status : { state: "unknown", label: "Error", detail: response?.error || "" });
-}
-
 function start() {
-  panel = createPanel(document, {
-    onOpenChange: (panelOpen) => {
-      if (panelOpen) refreshModelStatus();
-      return send("setUi", { panelOpen });
-    },
-    onSearch: async (query, chip) => {
-      mode = { type: "search", query, chip: chip || "" };
-      if (query) panel.setNote("Searching…");
-      const response = await send("catalogSearch", { query, chip });
-      if (mode.type !== "search" || mode.query !== query || (mode.chip || "") !== (chip || "")) return;
-      if (!response?.ok) panel.setNote(response?.error || "Could not search.");
-      else panel.setResults(response);
-    },
-    onSuggest: async (query, chip) => send("catalogSuggest", { query, chip }),
-    onPrompt: async (text, chip) => {
-      mode = { type: "prompt", query: text, chip: chip || "" };
-      panel.setNote("Thinking…");
-      const response = await send("catalogPrompt", { text, chip });
-      refreshModelStatus();
-      if (mode.type !== "prompt" || mode.query !== text || (mode.chip || "") !== (chip || "")) return;
-      if (!response?.ok) panel.setNote(response?.error || "Could not answer that.");
-      else {
-        panel.setResults(response);
-        if (response.downloading) watchModelDownload(response.note);
-      }
-    },
-    onUseAi: (useAi) => send("setSettings", { patch: { useAi } }),
-    onCorner: (panelCorner) => send("setUi", { panelCorner }),
-    onHideWatched: async (hideWatched) => {
-      const response = await send("setUi", { hideWatched });
-      if (response?.view) renderView(response.view, { refreshQuery: mode.type === "chip" });
-      if (mode.type === "search") {
-        const again = await send("catalogSearch", { query: mode.query || "", chip: mode.chip || "" });
-        if (again?.ok) panel.setResults(again);
-      }
-    },
-    onChip: async (chip) => {
-      mode = { type: "chip", chip };
-      panel.setNote("Looking…");
-      const response = await send("recommend", { chip });
-      if (!response?.ok) panel.setNote(response?.error || "Could not rank this page.");
-      else panel.setResults(response);
-    },
-    onChat: async (text) => {
-      mode = { type: "chat" };
-      panel.setNote("Thinking…");
-      const response = await send("chat", { text });
-      refreshModelStatus();
-      if (!response?.ok) panel.setNote(response?.error || "Could not answer that.");
-      else {
-        panel.setResults(response);
-        if (response.downloading) watchModelDownload(response.note);
-      }
-    },
-    onStatus: async (id, status) => {
-      const response = await send("setStatus", { id, status });
-      if (!response?.ok) panel.setNote(response?.error || "Could not save that status.");
-      else if (response.view) await showView(response.view, response.syncNote);
-    },
-    onSyncProgress: async (offer) => {
-      const response = await send("syncAnilistProgress", { id: offer.id });
-      if (!response?.ok) panel.setNote(response?.error || "Could not update AniList.");
-      else if (response.view) await showView(response.view, response.syncNote);
-    },
-    onRefresh: async () => {
-      panel.setNote("Refreshing AniList…");
-      const response = await send("refreshAnilist");
-      if (!response?.ok) panel.setNote(response?.error || "Could not refresh AniList.");
-      else if (response.view) await showView(response.view, `Refreshed ${response.imported} anime from AniList.`);
-    },
-    onRefreshCovers: async () => {
-      window.clearInterval(catalogPoll);
-      panel.setNote("Updating the catalog…", { progress: 0 });
-      const response = await send("refreshCatalogCovers");
-      const note = response?.ok ? response.note : response?.error || "Could not update the catalog.";
-      if (!response?.running) {
-        panel.setNote(note);
-        return;
-      }
-      panel.setNote(note, { progress: response.progress || 0 });
-      catalogPoll = window.setInterval(async () => {
-        const progress = await send("catalogProgress");
-        if (!progress?.ok) {
-          window.clearInterval(catalogPoll);
-          return;
-        }
-        if (!progress.running) {
-          window.clearInterval(catalogPoll);
-          panel.setNote("");
-          return;
-        }
-        panel.setNote(progress.note || note, { progress: progress.progress || 0 });
-      }, 500);
-    },
-    onTaste: async (taste) => {
-      const response = await send("setTaste", { taste });
-      if (!response?.ok) panel.setNote(response?.error || "Could not save taste.");
-      else if (response.view) renderView(response.view, { refreshQuery: mode.type === "chip" });
-    },
-    onSaveSettings: async (patch) => {
-      const response = await send("setSettings", { patch });
-      if (!response?.ok) panel.setNote(response?.error || "Could not save settings.");
-      else {
-        panel.setNote(response.originOk ? "Key saved." : `Key saved. Allow ${response.origin} in extension settings before chat will call it.`);
-        if (response.view) panel.setView(response.view);
-      }
-    },
-    onClearKey: async () => {
-      const response = await send("clearKey");
-      panel.setNote(response?.ok ? "API key cleared." : response?.error || "Could not clear the key.");
-      if (response?.view) panel.setView(response.view);
-    },
-    onImport: async (username) => {
-      panel.setNote("Importing AniList list…");
-      const response = await send("importAnilist", { username });
-      if (!response?.ok) panel.setNote(response?.error || "Import failed.");
-      else {
-        panel.setNote(`Imported ${response.imported} anime.`);
-        if (response.view) renderView(response.view, { refreshQuery: true });
-      }
-    },
-    onRefine: async () => {
-      const response = await send("refine");
-      if (!response?.ok) panel.setNote(response?.error || "Could not refine that.");
-      else panel.setForMe(response.forMe, response.note || "");
-    },
-    onOpenOptions: () => send("openOptions"),
-  });
-  document.documentElement.append(panel.host);
-  window.addEventListener("message", onPageMessage);
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === "enriched" && message.view) renderView(message.view, { refreshQuery: true });
-  });
-  document.addEventListener("fullscreenchange", syncFullscreen);
-  document.addEventListener("webkitfullscreenchange", syncFullscreen);
-  window.addEventListener("resize", syncFullscreen);
-  observer = new MutationObserver(() => schedule());
+  if (active) return;
+  active = true;
+  if (!panel) {
+    panel = createPanel(document, {
+      send,
+      onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
+      onCorner: (panelCorner) => send("setUi", { panelCorner }),
+      onView: (view) => renderView(view),
+    });
+    playerBar = createPlayerBar(document, { send, tips: true });
+    window.addEventListener("message", onPageMessage);
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "enriched" && message.view) renderView(message.view);
+      if (message?.type === "activity") renderActivity(message.tasks);
+      if (message?.type === "tabRoleChanged" && active) playerBar.refresh(message.note);
+    });
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    document.addEventListener("webkitfullscreenchange", syncFullscreen);
+    document.addEventListener("timeupdate", onVideoTime, true);
+    document.addEventListener("ended", onVideoTime, true);
+    window.addEventListener("resize", syncFullscreen);
+    observer = new MutationObserver(() => schedule());
+  }
+  document.documentElement.append(panel.host, playerBar.host);
+  playerBar.refresh();
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  send("catalogProgress").then((progress) => {
-    if (progress?.gathering) beginGather(progress.phase);
+  lastSignature = "";
+  send("getActivity").then((response) => {
+    if (response?.ok) renderActivity(response.tasks);
   });
   schedule();
 }
 
-function watchModelDownload(note) {
-  window.clearInterval(modelPoll);
-  const message = note || "Chrome is downloading its model. Ask again when that finishes.";
-  modelPoll = window.setInterval(async () => {
-    const progress = await send("catalogProgress");
-    if (!progress?.ok || !progress.modelDownloading) {
-      window.clearInterval(modelPoll);
-      panel.setNote(progress?.modelStalled ? progress.modelNote : "");
-      refreshModelStatus();
-      return;
-    }
-    panel.setNote(message, { progress: progress.modelProgress || 0, under: true });
-  }, 500);
+function stop() {
+  if (!active) return;
+  active = false;
+  observer?.disconnect();
+  window.clearTimeout(scanTimer);
+  panel?.setActivity([]);
+  panel?.setGathering(false);
+  panel?.host.remove();
+  playerBar?.host.remove();
+  clearBadges(document);
 }
 
 function beginGather(phase) {
   panel.setGathering(true, phase || "Gathering the Crunchyroll list");
-  window.clearInterval(gatherPoll);
-  gatherPoll = window.setInterval(async () => {
-    const progress = await send("catalogProgress");
-    if (!progress?.ok || !progress.gathering) {
-      window.clearInterval(gatherPoll);
-      panel.setGathering(false);
-      return;
-    }
-    panel.setGathering(true, progress.phase || "Gathering the Crunchyroll list");
-  }, 500);
+}
+
+function renderActivity(tasks) {
+  if (!active || !panel) return;
+  const list = Array.isArray(tasks) ? tasks : [];
+  panel.setActivity(list);
+  const gathering = list.find((task) => task.gathering);
+  panel.setGathering(Boolean(gathering), gathering?.label);
 }
 
 function onPageMessage(event) {
-  if (event.source !== window || event.data?.source !== "cr-corner-hook") return;
+  if (!active || event.source !== window || event.data?.source !== "cr-corner-hook") return;
   const message = event.data;
   if (message.kind === "auth" && message.token) {
     const locale = document.documentElement.lang || navigator.language || "en-US";
@@ -230,7 +123,6 @@ function onPageMessage(event) {
       lastPath = location.pathname;
       cmsEpisodes = [];
       cmsSeasons = [];
-      mode = { type: "auto" };
     }
     schedule();
     return;
@@ -246,7 +138,7 @@ function onPageMessage(event) {
 
 function schedule() {
   window.clearTimeout(scanTimer);
-  scanTimer = window.setTimeout(runScan, 450);
+  scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 1200 : 450);
 }
 
 function observationSignature(observation) {
@@ -267,6 +159,7 @@ function observationSignature(observation) {
 }
 
 async function runScan() {
+  if (!active) return;
   const generation = ++scanGeneration;
   let observation;
   try {
@@ -285,42 +178,119 @@ async function runScan() {
     return;
   }
   const response = await send("pageUpdate", { observation });
-  if (generation !== scanGeneration || !response?.ok || !response.view) return;
+  if (!active || generation !== scanGeneration || !response?.ok || !response.view) return;
   lastSignature = signature;
   latestView = response.view;
-  renderView(response.view, { syncOpen: true, refreshQuery: mode.type === "chip" });
+  renderView(response.view, { syncOpen: true });
 }
 
 function paintMarks(view) {
+  if (!active) return;
   if (observer) observer.disconnect();
   try {
-    applyBadges(document, view.marks || {}, view.settings?.hideWatched);
+    applyBadges(document, view.marks || {}, view.settings || {}, { onPick: pickStatus });
   } finally {
     observer?.observe(document.documentElement, { childList: true, subtree: true });
   }
 }
 
-async function showView(view, note) {
-  renderView(view, { refreshQuery: false });
-  if (mode.type === "chip") {
-    const ranked = await send("recommend", { chip: mode.chip });
-    if (ranked?.ok) panel.setResults(ranked);
-  }
-  if (note) panel.setNote(note);
+function renderView(view, { syncOpen = false } = {}) {
+  latestView = view;
+  if (!active) return;
+  panel.setView(view, { syncOpen });
+  paintMarks(view);
 }
 
-function renderView(view, { syncOpen = false, refreshQuery = false } = {}) {
-  latestView = view;
-  const openFromStorage = syncOpen && !hydrated;
-  if (syncOpen) hydrated = true;
-  panel.setView(view, { syncOpen: openFromStorage });
-  paintMarks(view);
-  if (refreshQuery && mode.type === "chip") {
-    send("recommend", { chip: mode.chip }).then((response) => {
-      if (response?.ok) panel.setResults(response);
+const STATUS_WORDS = { in_progress: "In progress", finished: "Watched", plan: "Plan", dropped: "Dropped" };
+
+async function saveStatus(seriesId, status) {
+  const response = await send("setStatus", { id: seriesId, status: status === "unwatched" ? null : status });
+  if (response?.view) renderView(response.view);
+  return response;
+}
+
+async function pickStatus({ seriesId, status, previous, previousProgress }) {
+  const response = await saveStatus(seriesId, status);
+  if (!response?.ok) {
+    panel.showToast({ title: response?.error || "Could not change the status.", timeout: 6000 });
+    return;
+  }
+  const title = status === "unwatched" ? "Removed from your list." : `Changed to ${STATUS_WORDS[status] || status}.`;
+  panel.showToast({
+    title,
+    meta: response.syncNote && !/^Saved/i.test(response.syncNote) ? response.syncNote : "",
+    action: "Undo",
+    timeout: 8000,
+    onAction: async () => {
+      let undone = await saveStatus(seriesId, previous);
+      if (undone?.ok && previous === "in_progress" && previousProgress != null) {
+        undone = await send("syncAnilistProgress", { id: seriesId, episode: previousProgress, undo: true });
+        if (undone?.view) renderView(undone.view);
+      }
+      panel.showToast({ title: undone?.ok ? "Undone." : undone?.error || "Could not undo that.", timeout: 4000 });
+    },
+  });
+}
+
+function onVideoTime(event) {
+  const video = event.target;
+  if (!active || !(video instanceof HTMLVideoElement)) return;
+  const duration = video.duration;
+  if (!Number.isFinite(duration) || duration < EPISODE_MIN_SECONDS) return;
+  if (event.type !== "ended" && video.currentTime < duration * EPISODE_DONE_RATIO) return;
+  const offer = latestView?.progressOffer;
+  if (!offer) return;
+  const key = `${offer.id}:${offer.to}`;
+  if (key === offeredEpisode) return;
+  offeredEpisode = key;
+  send("episodeFinished", { id: offer.id, episode: offer.to }).then((response) => {
+    if (response?.view) renderView(response.view);
+    if (!response?.ok) {
+      if (!latestView?.settings?.muteNotifications) panel.showToast({ title: response?.error || "Could not save that.", timeout: 6000 });
+      return;
+    }
+    if (!response.toast || response.mode === "none") return;
+    showEpisodeToast(response);
+  });
+}
+
+function problemIn(note) {
+  return note && !/^Marked episode/.test(note) ? note : "";
+}
+
+function showEpisodeToast({ mode, offer, noticeId, syncNote }) {
+  const title = latestView?.currentTitle || "";
+  const optOut = {
+    label: "Don't show again (change in Settings)",
+    onChange: (checked) => send("setSettings", { patch: { episodeDialogs: !checked } }),
+  };
+  const done = offer.last ? `Marked ${title || "this show"} completed.` : `Marked episode ${offer.to} watched.`;
+  if (mode === "auto") {
+    panel.showToast({
+      title: done,
+      meta: problemIn(syncNote) || (offer.last ? "" : title),
+      action: "Undo",
+      optOut,
+      timeout: 8000,
+      onAction: async () => {
+        const undone = await send("syncAnilistProgress", { id: offer.id, episode: offer.from, undo: true });
+        if (undone?.view) renderView(undone.view);
+        panel.showToast({ title: undone?.ok ? "Undone." : undone?.error || "Could not undo that.", timeout: 4000 });
+      },
     });
     return;
   }
+  panel.showToast({
+    title: offer.last ? `Finished ${title || "the last episode"}?` : `Finished episode ${offer.to}?`,
+    meta: offer.last ? "That was the last episode. It stays in Notifications if you skip this." : `${title ? `${title} · ` : ""}It stays in Notifications if you skip this.`,
+    action: offer.last ? "Mark completed" : "Set to Watching",
+    optOut,
+    onAction: async () => {
+      const response = await send("resolveNotice", { id: noticeId, action: "update" });
+      if (response?.view) renderView(response.view);
+      panel.showToast({ title: response?.ok ? problemIn(response.syncNote) || done : response?.error || "Could not save that.", timeout: 4000 });
+    },
+  });
 }
 
 function syncFullscreen() {
@@ -329,4 +299,5 @@ function syncFullscreen() {
   const element = document.fullscreenElement || document.webkitFullscreenElement;
   const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
   panel.setFullscreen(Boolean(element || videoFullscreen));
+  playerBar?.setFullscreen(Boolean(element || videoFullscreen));
 }

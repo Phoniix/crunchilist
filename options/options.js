@@ -48,7 +48,7 @@ async function load() {
   const settings = response.view?.settings || {};
   userInput.value = settings.anilistUsername || "";
   clientInput.value = settings.anilistClientId || "";
-  keyInput.placeholder = settings.hasKey ? "Key saved on this device" : "API key";
+  keyInput.placeholder = settings.keys?.openai ? "Key saved on this device" : "API key";
   document.querySelector("#selected-model").textContent = `Selected model: ${settings.modelLabel || "Chrome"}`;
   secretInput.placeholder = settings.hasAnilistSecret ? "Secret saved on this device" : "Client secret";
   paintAccount(response.view);
@@ -67,12 +67,13 @@ document.querySelector("#settings").addEventListener("submit", async (event) => 
     say(response?.error || "Could not save settings.");
     return;
   }
-  document.querySelector("#selected-model").textContent = `Selected model: ${response.model || "gpt-4o-mini"}`;
-  say("Key saved.");
+  document.querySelector("#selected-model").textContent = `Selected model: ${response.view?.settings?.modelLabel || "gpt-4o-mini"}`;
+  keyInput.placeholder = "Key saved on this device";
+  say(response.keyNote || "Key saved.");
 });
 
 document.querySelector("#clear").addEventListener("click", async () => {
-  const response = await chrome.runtime.sendMessage({ type: "clearKey" });
+  const response = await chrome.runtime.sendMessage({ type: "clearKey", id: "openai" });
   keyInput.value = "";
   keyInput.placeholder = "API key";
   say(response?.ok ? "API key cleared." : response?.error || "Could not clear the key.");

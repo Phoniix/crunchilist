@@ -18,6 +18,7 @@ test("tag suggestions prefer the start of a saved genre and skip tags already ch
   assert.equal(filterTagSuggestions("ro", options, [])[0], "Romance");
   assert.equal(filterTagSuggestions("ro", options, ["Romance"]).includes("Romance"), false);
   assert.deepEqual(filterTagSuggestions("lov", options, []), ["Love Triangle"]);
+  assert.deepEqual(filterTagSuggestions("act", ["Acting", "Action", "Outdoor Activities"], []), ["Action", "Acting", "Outdoor Activities"]);
 });
 
 test("hard avoids drop a matched show and likes outrank dislikes", () => {

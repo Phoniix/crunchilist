@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildChromeMessages, pickChatModel, parseRecommendationJson, resolveModelResults } from "../lib/llm.js";
+import { buildChromeMessages, modelShowFacts, pickChatModel, parseRecommendationJson, resolveModelResults } from "../lib/llm.js";
+
+test("the model sees the synopsis sentence that matches the search, even late in a long synopsis", () => {
+  const about = `${"Soldiers pilot giant suits against invading aliens while the front line slowly falls back. ".repeat(5)}The squad is stationed in East Germany on the Oder-Neisse line.`;
+  const plain = modelShowFacts({ title: "Black Marks", about });
+  assert.equal(/Germany/.test(plain.about), false);
+  const focused = modelShowFacts({ title: "Black Marks", about, focus: ["germany", "german", "berlin"] });
+  assert.match(focused.about, /^Soldiers pilot/);
+  assert.match(focused.about, /stationed in East Germany/);
+  assert.ok(focused.about.length <= 260);
+});
 
 test("picks a small chat model and skips embeddings and dated snapshots", () => {
   const picked = pickChatModel([
@@ -243,7 +253,8 @@ test("evenly stepped confidence is replaced by our own fit score", () => {
       { n: 3, rank: 3, brief: "c", confidence: 52 },
     ],
   }));
-  assert.deepEqual(judged.results.map((item) => item.confidence), [88, 71, 52]);
+  assert.deepEqual(judged.results.map((item) => item.confidence), [89, 67, 57]);
+  assert.equal(judged.results.some((item) => item.confidenceEstimated), false);
 });
 
 test("a model reply that names nothing on the list is not used", () => {
@@ -258,13 +269,13 @@ test("chrome search asks for rank, confidence, a brief, and mentions", () => {
     candidates: [
       { id: "sight:G1", title: "Frieren", status: "unwatched", genres: ["Fantasy"], tags: ["Adventure"] },
       { id: "sight:G2", title: "Skip and Loafer", status: "plan", genres: ["Romance"], tags: ["School"] },
-      ...Array.from({ length: 12 }, (_, index) => ({ id: `sight:extra${index}`, title: `Extra ${index}` })),
+      ...Array.from({ length: 24 }, (_, index) => ({ id: `sight:extra${index}`, title: `Extra ${index}` })),
     ],
     userText: "a short romance I have not seen",
   });
   const user = JSON.parse(messages.user);
   assert.equal(user.request, "a short romance I have not seen");
-  assert.equal(user.list.length, 12);
+  assert.equal(user.list.length, 20);
   assert.deepEqual(user.list.slice(0, 2).map((item) => item.n), [1, 2]);
   assert.equal(user.list[1].title, "Skip and Loafer");
   assert.equal(JSON.stringify(user.list).includes("sight:"), false);

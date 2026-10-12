@@ -4,7 +4,6 @@ import {
   MISS_TTL_MS,
   anilistAuthUrl,
   anilistTokenBody,
-  applyCachedIdentity,
   franchiseKeyFromMedia,
   mapListStatus,
   catalogMatchQuery,
@@ -22,14 +21,22 @@ import {
   parseCodeRedirect,
   readCache,
   titlesNeedingAnilist,
-  saveEntryInput,
   toAnilistStatus,
+  listAvatar,
+  safeAvatar,
 } from "../lib/anilist.js";
 import { messageText, parseRecommendationJson } from "../lib/llm.js";
-import { applyObservations, progressOfferFor, seasonKey } from "../lib/season.js";
-import { publicSettings } from "../lib/settings.js";
-import { defaultState } from "../lib/state.js";
 
+test("profile pictures come from the list query and only from AniList's own image host", () => {
+  const url = "https://s4.anilist.co/file/anilistcdn/user/avatar/medium/b123-abc.png";
+  assert.equal(listAvatar({ data: { MediaListCollection: { user: { avatar: { medium: url } }, lists: [] } } }), url);
+  assert.equal(listAvatar({ data: { MediaListCollection: { lists: [] } } }), "");
+  assert.equal(safeAvatar("http://s4.anilist.co/a.png"), "");
+  assert.equal(safeAvatar("https://evil.example/anilist.co/a.png"), "");
+  assert.equal(safeAvatar("https://anilist.co.evil.example/a.png"), "");
+  assert.equal(safeAvatar("javascript:alert(1)"), "");
+});
+import { publicSettings } from "../lib/settings.js";
 test("maps public anilist list statuses onto season statuses", () => {
   assert.equal(mapListStatus("COMPLETED"), "finished");
   assert.equal(mapListStatus("CURRENT"), "in_progress");
@@ -63,12 +70,6 @@ test("authorization code redirect keeps the code and reports anilist errors", ()
   assert.equal(anilistTokenBody("123", "secret", "https://abc.chromiumapp.org/", "abc123").grant_type, "authorization_code");
   assert.equal(toAnilistStatus("finished"), "COMPLETED");
   assert.equal(toAnilistStatus("in_progress"), "CURRENT");
-  assert.deepEqual(saveEntryInput({ anilistId: 9, episodeCount: 12 }, "finished"), {
-    mediaId: 9,
-    status: "COMPLETED",
-    progress: 12,
-  });
-  assert.equal(saveEntryInput({ anilistId: 9 }, "dropped").progress, undefined);
 });
 
 test("public settings omit the anilist token", () => {
@@ -86,70 +87,14 @@ test("public settings omit the anilist token", () => {
   assert.equal("anilistToken" in view, false);
   assert.equal("anilistClientSecret" in view, false);
   assert.equal("apiKey" in view, false);
+  assert.equal(view.episodeDialogs, true);
+  assert.equal(view.askModelDownload, true);
+  assert.equal(view.favorNamed, true);
+  assert.equal(publicSettings({ episodeDialogs: false }).episodeDialogs, false);
   assert.equal(view.useAi, true);
   assert.equal(view.modelLabel, "gpt-4o-mini");
   assert.equal(publicSettings({}).modelLabel, "Chrome");
   assert.equal(publicSettings({ useAi: false }).useAi, false);
-});
-
-test("a connected list keeps its status when crunchyroll is further ahead", () => {
-  let state = defaultState();
-  state.importMeta = { username: "me", importedAt: 1, source: "account" };
-  state.imports = {
-    9: { anilistId: 9, listId: 3, status: "plan", progress: 0, media: { id: 9 } },
-  };
-  state.anilistCache = {
-    "season:S|s1": { kind: "hit", anilistId: 9, franchiseKey: "al:9", cachedAt: 1 },
-  };
-  state = applyObservations(state, {
-    kind: "watch",
-    seasons: [{
-      seriesId: "S",
-      seasonSlug: "s1",
-      seasonNumber: 1,
-      seriesTitle: "Show",
-      seasonTitle: "Season 1",
-      episodeCount: 12,
-      watchingEpisode: 4,
-    }],
-  }, 2);
-  state = applyCachedIdentity(state, 2);
-  const record = state.seasons[seasonKey("S", "s1")];
-  assert.equal(record.status, "plan");
-  assert.equal(record.statusSource, "anilist");
-  assert.equal(record.crEpisode, 4);
-  const offer = progressOfferFor(record);
-  assert.equal(offer.to, 4);
-  assert.equal(offer.from, 0);
-  assert.equal(offer.status, "in_progress");
-
-  state.imports[9].status = "dropped";
-  state.seasons[seasonKey("S", "s1")].statusSource = null;
-  state = applyCachedIdentity(state, 3);
-  assert.equal(state.seasons[seasonKey("S", "s1")].status, "dropped");
-  assert.equal(progressOfferFor(state.seasons[seasonKey("S", "s1")]), null);
-});
-
-test("an unsynced local mark is left in place until a forced refresh", () => {
-  const state = defaultState();
-  state.importMeta = { username: "me", importedAt: 1, source: "account" };
-  state.imports = { 9: { anilistId: 9, listId: 3, status: "finished", progress: 12, media: { id: 9 } } };
-  const key = seasonKey("S", "s1");
-  state.seasons[key] = {
-    key,
-    seriesId: "S",
-    seasonSlug: "s1",
-    seriesLevel: false,
-    anilistId: 9,
-    status: "dropped",
-    statusSource: "user",
-    statusSetByUser: true,
-  };
-  applyCachedIdentity(state, 1);
-  assert.equal(state.seasons[key].status, "dropped");
-  applyCachedIdentity(state, 1, { force: true });
-  assert.equal(state.seasons[key].status, "finished");
-  assert.equal(state.seasons[key].statusSource, "anilist");
 });
 
 test("llm results reject ids that were not candidates", () => {
@@ -260,4 +205,23 @@ test("show details keep the synopsis and cover, and leave out people and streams
   assert.equal(updates["series:G1"].detailed, true);
   assert.equal(updates["series:G1"].about, "Filled in.");
   assert.equal(updates["series:G1"].anilistId, 9);
+  const older = { "series:G1": { kind: "hit", anilistId: 9, detailed: true } };
+  assert.deepEqual(titlesNeedingDetail([{ id: "G1" }], older, 50), [{ id: "G1", anilistId: 9 }]);
+  assert.deepEqual(titlesNeedingDetail([{ id: "G1" }], updates, 70), []);
+});
+
+test("spoiler tags are kept apart for search with their ranks", () => {
+  const hit = mediaToCacheHit({
+    id: 5,
+    title: { english: "Your Lie in April" },
+    description: "",
+    tags: [
+      { name: "Classical Music", rank: 93 },
+      { name: "Tragedy", rank: 92, isGeneralSpoiler: true },
+      { name: "Minor Twist", rank: 30, isMediaSpoiler: true },
+    ],
+  }, 50);
+  assert.deepEqual(hit.tags, ["Classical Music"]);
+  assert.deepEqual(hit.hiddenTags, ["Tragedy"]);
+  assert.equal(hit.tagRanks.Tragedy, 92);
 });
