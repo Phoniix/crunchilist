@@ -2,7 +2,8 @@
 //   node scripts/youtube-catalog.mjs            (needs YOUTUBE_API_KEY; the weekly GitHub job runs this)
 //   node scripts/youtube-catalog.mjs --pages    (local run without a key: reads public YouTube pages, AniList links only)
 // Options: --floor=5000 (least AniList popularity), --out=feeds
-// Shows come from AniList's YouTube streaming links and from the official channels in feeds/youtube-channels.json.
+// Shows come from AniList's YouTube streaming links and from the official channels in feeds/youtube-channels.json,
+// whose playlists are matched against the local title index in feeds/anilist-titles.json (scripts/anilist-titles.mjs).
 // Rejected links and unmatched playlists go to feeds/youtube-review.json for a person to look over.
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -19,6 +20,7 @@ import {
   playableIn,
   videoFlags,
 } from "../lib/youtube-catalog.js";
+import { refreshTitles, titleIndex } from "./anilist-titles.mjs";
 import { apiSource, pageSource } from "./youtube-sources.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,8 +96,9 @@ export function playlistQuery(title) {
   return "";
 }
 
-// Official channel playlists matched to AniList by title. Unsure matches are left for review, never guessed.
-export async function channelCandidates(anilist, source, channels, { log = () => {}, known = new Set() } = {}) {
+// Official channel playlists matched to AniList by title: against the local title index first, then a live AniList
+// search for titles the index has never heard of. Unsure matches are left for review, never guessed.
+export async function channelCandidates(anilist, source, channels, { log = () => {}, known = new Set(), titles = null } = {}) {
   const lists = [];
   for (const handle of channels || []) {
     const found = await source.channelPlaylists(handle);
@@ -104,11 +107,22 @@ export async function channelCandidates(anilist, source, channels, { log = () =>
   }
   const unmatched = [];
   const matched = [];
-  const queries = lists.map((list) => ({ list, query: playlistQuery(list.title) })).filter((row) => {
+  const named = lists.map((list) => ({ list, query: playlistQuery(list.title) })).filter((row) => {
     if (row.query) return true;
     unmatched.push({ channel: row.list.channel, playlist: row.list.id, title: row.list.title, reason: "no show name in the playlist title" });
     return false;
   });
+  const queries = [];
+  for (const row of named) {
+    const local = titles?.match(row.query);
+    if (!local || !local.candidates) {
+      queries.push(row);
+      continue;
+    }
+    if (local.confidence === "high") matched.push({ list: row.list, anilistId: local.media.id });
+    else unmatched.push({ channel: row.list.channel, playlist: row.list.id, title: row.list.title, reason: `no sure AniList match for "${row.query}"` });
+  }
+  if (titles) log(`Playlists: ${named.length - queries.length} settled from the local title index, ${queries.length} need a live AniList search`);
   const BATCH = 4;
   for (let index = 0; index < queries.length; index += BATCH) {
     const batch = queries.slice(index, index + BATCH);
@@ -209,13 +223,13 @@ export async function verify(candidate, source, { regions = FEED_REGIONS } = {})
   };
 }
 
-export async function buildFeed({ anilist, source, channels = [], floor = 5000, maxPages = 100, log = () => {} }) {
+export async function buildFeed({ anilist, source, channels = [], titles = null, floor = 5000, maxPages = 100, log = () => {} }) {
   const media = await discover(anilist, { floor, maxPages, log });
   log(`AniList: ${media.length} shows with YouTube links`);
   const candidates = [];
   for (const row of media) for (const url of youtubeLinks(row)) candidates.push({ media: row, link: { url, ...classifyLink(url) } });
   const known = new Set(media.map((row) => row.id));
-  const fromChannels = channels.length ? await channelCandidates(anilist, source, channels, { log, known }) : { candidates: [], unmatched: [] };
+  const fromChannels = channels.length ? await channelCandidates(anilist, source, channels, { log, known, titles }) : { candidates: [], unmatched: [] };
   for (const extra of fromChannels.candidates) {
     if (candidates.some((row) => row.link.id === extra.link.id)) continue;
     candidates.push(extra);
@@ -297,10 +311,19 @@ async function main(argv) {
   const out = option("out", "feeds");
   const config = await readJson(`${out}/youtube-channels.json`);
   const source = pages ? pageSource() : apiSource(key);
+  const anilist = anilistClient({ log: console.log });
+  const channels = pages ? [] : config?.channels || [];
+  let titles = null;
+  if (channels.length) {
+    const { titles: rows } = await refreshTitles(anilist, { path: `${out}/anilist-titles.json`, log: console.log });
+    titles = titleIndex(rows);
+    console.log(`AniList titles: ${titles.size} in the local index`);
+  }
   const result = await buildFeed({
-    anilist: anilistClient({ log: console.log }),
+    anilist,
     source,
-    channels: pages ? [] : config?.channels || [],
+    titles,
+    channels,
     floor: Number(option("floor", 5000)),
     log: console.log,
   });
