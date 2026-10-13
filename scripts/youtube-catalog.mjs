@@ -1,8 +1,8 @@
 // Builds feeds/youtube.json: shows with free, official, full uploads on YouTube, with their AniList facts.
 //   node scripts/youtube-catalog.mjs            (needs YOUTUBE_API_KEY; the weekly GitHub job runs this)
 //   node scripts/youtube-catalog.mjs --pages    (local run without a key: reads public YouTube pages, AniList links only)
-// Options: --floor=5000 (least AniList popularity), --out=feeds, --recheck (look at every link again, ignoring
-// the rejections remembered in feeds/youtube-review.json)
+// Options: --floor=5000 (least AniList popularity), --out=feeds, --recheck (look at every link and playlist title
+// again, ignoring the rejections and failed title searches remembered in feeds/youtube-review.json)
 // Shows come from AniList's YouTube streaming links and from the official channels in feeds/youtube-channels.json,
 // whose playlists are matched against the local title index in feeds/anilist-titles.json (scripts/anilist-titles.mjs).
 // Rejected links and unmatched playlists go to feeds/youtube-review.json for a person to look over.
@@ -40,10 +40,20 @@ export function checkSignature(candidate) {
   return [media.status, media.format, media.episodes ?? "", media.duration ?? "", media.nextAiringEpisode?.episode ?? "", link.count ?? ""].join("|");
 }
 
+const recent = (checkedAt, spread, now) => {
+  const age = now.getTime() - Date.parse(checkedAt);
+  return age >= 0 && age < (RECHECK_DAYS + (spread % RECHECK_SPREAD)) * DAY_MS;
+};
+
 export function stillRejected(row, signature, now = new Date()) {
-  if (!row?.checkedAt || row.sig !== signature) return false;
-  const age = now.getTime() - Date.parse(row.checkedAt);
-  return age >= 0 && age < (RECHECK_DAYS + (row.anilistId % RECHECK_SPREAD)) * DAY_MS;
+  return Boolean(row?.checkedAt && row.sig === signature && recent(row.checkedAt, row.anilistId, now));
+}
+
+// A playlist title the live AniList search couldn't place, unchanged and searched for recently, isn't searched again.
+export function stillUnmatched(row, list, now = new Date()) {
+  if (!row?.checkedAt || row.title !== list.title) return false;
+  const spread = [...String(list.id)].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return recent(row.checkedAt, spread, now);
 }
 
 export function anilistClient({ fetchImpl = fetch, spacing = 2100, log = () => {} } = {}) {
@@ -115,7 +125,10 @@ export function playlistQuery(title) {
 
 // Official channel playlists matched to AniList by title: against the local title index first, then a live AniList
 // search for titles the index has never heard of. Unsure matches are left for review, never guessed.
-export async function channelCandidates(anilist, source, channels, { log = () => {}, known = new Set(), titles = null } = {}) {
+export async function channelCandidates(anilist, source, channels, { log = () => {}, known = new Set(), titles = null, searched = [], now = new Date() } = {}) {
+  const earlier = new Map(searched.map((row) => [row.playlist, row]));
+  const today = now.toISOString().slice(0, 10);
+  let skipped = 0;
   const lists = [];
   for (const handle of channels || []) {
     const found = await source.channelPlaylists(handle);
@@ -133,13 +146,17 @@ export async function channelCandidates(anilist, source, channels, { log = () =>
   for (const row of named) {
     const local = titles?.match(row.query);
     if (!local || !local.candidates) {
-      queries.push(row);
+      const before = earlier.get(row.list.id);
+      if (stillUnmatched(before, row.list, now)) {
+        skipped += 1;
+        unmatched.push(before);
+      } else queries.push(row);
       continue;
     }
     if (local.confidence === "high") matched.push({ list: row.list, anilistId: local.media.id });
     else unmatched.push({ channel: row.list.channel, playlist: row.list.id, title: row.list.title, reason: `no sure AniList match for "${row.query}"` });
   }
-  if (titles) log(`Playlists: ${named.length - queries.length} settled from the local title index, ${queries.length} need a live AniList search`);
+  if (titles) log(`Playlists: ${named.length - queries.length - skipped} settled from the local title index, ${skipped} unmatched in a recent live search, ${queries.length} need a live AniList search`);
   const BATCH = 4;
   for (let index = 0; index < queries.length; index += BATCH) {
     const batch = queries.slice(index, index + BATCH);
@@ -147,7 +164,7 @@ export async function channelCandidates(anilist, source, channels, { log = () =>
     batch.forEach((row, at) => {
       const media = body?.data?.[`p${at}`]?.media || [];
       const match = pickMatch(row.query, media);
-      if (match.confidence !== "high") unmatched.push({ channel: row.list.channel, playlist: row.list.id, title: row.list.title, reason: `no sure AniList match for "${row.query}"` });
+      if (match.confidence !== "high") unmatched.push({ channel: row.list.channel, playlist: row.list.id, title: row.list.title, reason: `no sure AniList match for "${row.query}"`, checkedAt: today });
       else matched.push({ list: row.list, anilistId: match.media.id });
     });
   }
@@ -240,7 +257,7 @@ export async function verify(candidate, source, { regions = FEED_REGIONS } = {})
   };
 }
 
-export async function buildFeed({ anilist, source, channels = [], titles = null, checked = [], floor = 5000, maxPages = 100, now = new Date(), log = () => {} }) {
+export async function buildFeed({ anilist, source, channels = [], titles = null, checked = [], searched = [], floor = 5000, maxPages = 100, now = new Date(), log = () => {} }) {
   const earlier = new Map(checked.map((row) => [`${row.anilistId} ${row.url}`, row]));
   const today = now.toISOString().slice(0, 10);
   let skipped = 0;
@@ -249,7 +266,7 @@ export async function buildFeed({ anilist, source, channels = [], titles = null,
   const candidates = [];
   for (const row of media) for (const url of youtubeLinks(row)) candidates.push({ media: row, link: { url, ...classifyLink(url) } });
   const known = new Set(media.map((row) => row.id));
-  const fromChannels = channels.length ? await channelCandidates(anilist, source, channels, { log, known, titles }) : { candidates: [], unmatched: [] };
+  const fromChannels = channels.length ? await channelCandidates(anilist, source, channels, { log, known, titles, searched, now }) : { candidates: [], unmatched: [] };
   for (const extra of fromChannels.candidates) {
     if (candidates.some((row) => row.link.id === extra.link.id)) continue;
     candidates.push(extra);
@@ -355,12 +372,14 @@ async function main(argv) {
     console.log(`AniList titles: ${titles.size} in the local index`);
   }
   const previous = argv.includes("--recheck") ? null : await readJson(`${out}/youtube-review.json`);
+  const sameSource = previous?.source === source.name;
   const result = await buildFeed({
     anilist,
     source,
     titles,
     channels,
-    checked: previous?.source === source.name ? previous.rejected || [] : [],
+    checked: sameSource ? previous.rejected || [] : [],
+    searched: sameSource ? previous.unmatched || [] : [],
     floor: Number(option("floor", 5000)),
     log: console.log,
   });

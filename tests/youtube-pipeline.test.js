@@ -216,6 +216,25 @@ test("buildFeed skips links it rejected recently unless their AniList facts chan
   assert.equal(late.rejected[0].checkedAt, "2026-11-30");
 });
 
+test("playlist titles a live AniList search couldn't place aren't searched again until renamed or due", async () => {
+  const channels = (title) => ({ "@Official": [{ id: "PLmystery02", title, count: 9 }] });
+  const searches = (queries) => queries.filter((text) => !text.includes("licensedById_in") && !text.includes("id_in")).length;
+  const run = async (title, searched, now) => {
+    const { source } = fakeYoutube({ channels: channels(title) });
+    const fake = fakeAnilist({ search: {} });
+    const result = await buildFeed({ anilist: fake.anilist, source, channels: ["@Official"], searched, now: new Date(now) });
+    return { result, searches: searches(fake.queries) };
+  };
+  const first = await run("Weekly Highlights", [], "2026-10-01T00:00:00Z");
+  assert.equal(first.searches, 1);
+  assert.equal(first.result.unmatched[0].checkedAt, "2026-10-01");
+  const week = await run("Weekly Highlights", first.result.unmatched, "2026-10-08T00:00:00Z");
+  assert.equal(week.searches, 0);
+  assert.deepEqual(week.result.unmatched, first.result.unmatched);
+  assert.equal((await run("Weekly Highlights Vol. 2", first.result.unmatched, "2026-10-08T00:00:00Z")).searches, 1);
+  assert.equal((await run("Weekly Highlights", first.result.unmatched, "2026-11-30T00:00:00Z")).searches, 1);
+});
+
 test("a link that failed for a passing reason isn't remembered as rejected", async () => {
   let down = true;
   const videos = episodes(3, "w");
