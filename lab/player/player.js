@@ -113,7 +113,7 @@ export function mountPlayer(container, { episodes = [], startId = null, storage 
       video.pause();
       video.removeAttribute("src");
       video.load();
-      embed.src = `https://www.youtube-nocookie.com/embed/${youtubeId(episode.src)}?autoplay=${autoplay ? 1 : 0}&rel=0&modestbranding=1`;
+      embed.src = `https://www.youtube-nocookie.com/embed/${youtubeId(episode.src)}?autoplay=${autoplay ? 1 : 0}&rel=0&modestbranding=1&cc_load_policy=1&cc_lang_pref=en&hl=en`;
       embed.hidden = false;
       stage.classList.add("embedded");
     } else {

@@ -1036,6 +1036,7 @@ async function runOne(name) {
       onMessage: { addListener: (fn) => listeners.push(fn) },
       onMessageExternal: event(),
       onInstalled: event(),
+      onStartup: event(),
       getManifest: () => ({ version: "0.0.0" }),
       getURL: (path) => `chrome-extension://scenario/${path}`,
       sendMessage: async () => undefined,

@@ -13,6 +13,7 @@ import { CUSTOM_VARS, clamp, customVars, hexHsv, hsvHex } from "./prism-color.js
 import { createTastePop } from "./prism-taste.js";
 import { canSelfUpdate, installUpdate } from "./updater.js";
 import { reloadForDisk } from "../lib/update-check.js";
+import { watchUrl } from "../lib/youtube-catalog.js";
 
 let SHOWS = [];
 let byId = new Map();
@@ -64,6 +65,12 @@ const esc = (text) => String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&am
 const cssUrl = (url) => esc(String(url || "").replace(/["'()\\\s]/g, (c) => encodeURIComponent(c)));
 const score = (show) => (show.score ? (show.score / 10).toFixed(1) : "–");
 const eps = (show) => (show.episodes ? `${show.episodes} eps` : show.status === "RELEASING" ? "Ongoing" : "–");
+const runtime = (seconds) => {
+  const pad = (n) => String(n).padStart(2, "0");
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h ? `${h}:${pad(m)}:${pad(seconds % 60)}` : `${m}:${pad(seconds % 60)}`;
+};
 const clip = (text, max) => {
   const value = String(text || "");
   if (value.length <= max) return value;
@@ -196,8 +203,11 @@ const settingOn = (key) => (["liteMode", "tabAuto", "miniPlayer"].includes(key) 
 
 const CR_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#f47521"/><path d="M9.6 7.6v8.8l7-4.4z" fill="#fff"/></svg>`;
 const OFF_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 19 19 5" stroke="currentColor" stroke-width="2"/></svg>`;
+const YT_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="4.5" width="22" height="15" rx="4.5" fill="#ff0033"/><path d="M10 8.6v6.8l5.6-3.4z" fill="#fff"/></svg>`;
 const onCrunchyroll = (show) => show.onCrunchyroll !== false;
+const onYoutube = (show) => Boolean(show.youtube?.videos?.length);
 function crBadge(show, cls = "") {
+  if (onYoutube(show)) return `<span class="avail yt ${cls}">${YT_MARK}Free on YouTube</span>`;
   return onCrunchyroll(show)
     ? `<span class="avail on ${cls}">${CR_MARK}On Crunchyroll</span>`
     : `<span class="avail off ${cls}">${OFF_MARK}Not on Crunchyroll</span>`;
@@ -258,7 +268,7 @@ function card(show, opts = {}) {
           <div class="peek-tags">${show.genres.slice(0, 3).map((g) => `<span>${esc(g)}</span>`).join("")}</div>
           <div class="peek-actions">
             ${!onCrunchyroll(show)
-              ? `<a class="btn sm" href="#show/${esc(show.id)}">Where to watch</a>`
+              ? `<a class="btn sm${onYoutube(show) ? " accent" : ""}" href="#show/${esc(show.id)}">${onYoutube(show) ? `${icon("play")} Episodes` : "Where to watch"}</a>`
               : `<button class="btn sm accent" data-act="watch">${icon("play")} ${entry(show)?.status === "watching" ? epLabel(show).replace(/ \/ \d+$/, "") : "Watch"}</button>`}
             ${listButton(show)}
             <a class="btn sm ghost" href="#show/${esc(show.id)}">Details</a>
@@ -798,7 +808,7 @@ function pageList(tab) {
 const SEASON_NAMES = ["WINTER", "SPRING", "SUMMER", "FALL"];
 const titleCase = (word) => `${word[0]}${word.slice(1).toLowerCase()}`;
 const nowSeason = () => ({ season: SEASON_NAMES[Math.floor(new Date().getMonth() / 3)], year: new Date().getFullYear() });
-const BROWSE_DEFAULT = { genre: "", when: "", status: "", length: "", sort: "popular", hideSeen: false, crOnly: false, tags: [], without: [] };
+const BROWSE_DEFAULT = { genre: "", when: "", status: "", length: "", sort: "popular", hideSeen: false, crOnly: false, ytOnly: false, tags: [], without: [] };
 const freshBrowse = (keep = {}) => ({ ...BROWSE_DEFAULT, tags: [], without: [], ...keep });
 let browse = freshBrowse();
 // Tags and genres together, so either can be required or ruled out.
@@ -836,6 +846,7 @@ function browseResults() {
     if (browse.length === "long" && !(show.episodes > 26)) return false;
     if (browse.hideSeen && entry(show)?.status === "finished") return false;
     if (browse.crOnly && !onCrunchyroll(show)) return false;
+    if (browse.ytOnly && !onYoutube(show)) return false;
     if (!browse.tags.length && !browse.without.length) return true;
     const labels = labelsOf(show);
     if (!browse.tags.every((tag) => labels.includes(tag))) return false;
@@ -885,6 +896,7 @@ function pageBrowse(genre) {
       ${browseSelect("length", "Length", [["", "Any length"], ["short", "Short (up to 13 eps)"], ["standard", "Standard (14 to 26 eps)"], ["long", "Long (27+ eps)"]])}
       <button class="chip ${browse.hideSeen ? "on" : ""}" data-bflag="hideSeen">Hide finished</button>
       ${SHOWS.some((show) => !onCrunchyroll(show)) ? `<button class="chip ${browse.crOnly ? "on" : ""}" data-bflag="crOnly">On Crunchyroll only</button>` : ""}
+      ${SHOWS.some(onYoutube) ? `<button class="chip ${browse.ytOnly ? "on" : ""}" data-bflag="ytOnly">Free on YouTube</button>` : ""}
       ${browseSelect("sort", "Sort", [["popular", "Most popular"], ["rated", "Highest rated"], ["newest", "Newest"], ["az", "A to Z"]])}
     </div>
     <div class="tag-filter">
@@ -1016,13 +1028,22 @@ function pageShow(id, seasonArg) {
     ? `<div class="eps ${markMode ? "marking" : "playing"}">${Array.from({ length: count }, (_, i) => `<button class="ep ${i < progress ? "seen" : ""} ${i === progress && item?.status !== "finished" ? "next" : ""}" data-ep="${i + 1}" data-season="${index}" title="${markMode ? `Watched through episode ${i + 1}` : `Play episode ${i + 1}`}">${i + 1}</button>`).join("")}</div>`
     : `<div class="set-row"><div class="grow"><b>Episode ${progress}</b><small>${season.episodes ? `of ${season.episodes}` : "Still airing, so the episode count isn't final"}</small></div>${playable ? `<button class="btn sm accent" data-act="watch" data-season="${index}">${icon("play")} Next episode</button>` : ""}<button class="btn sm" data-act="plus-one" data-season="${index}">+1 episode</button></div>`;
   const streams = show.streaming || [];
+  const yt = onYoutube(show) ? show.youtube : null;
+  const ytNext = yt && yt.videos[Math.min(item?.status === "finished" ? 0 : progress, yt.videos.length - 1)];
+  const ytEps = yt ? `<div class="eps-head"><h3>On YouTube</h3><span class="muted eps-hint">· ${yt.videos.length} ${yt.videos.length === 1 ? "upload" : "uploads"}${yt.channel ? ` from ${esc(yt.channel)}` : ""}, opens on YouTube</span></div>
+    <div class="yt-eps">${yt.videos.map((video, i) => `<a class="yt-ep ${i < progress ? "seen" : ""} ${i === progress && item?.status !== "finished" ? "next" : ""}" href="${esc(watchUrl(video.id, yt.playlist))}" target="_blank" rel="noopener noreferrer">
+      <div class="yt-ep-art"><img src="https://i.ytimg.com/vi/${esc(video.id)}/mqdefault.jpg" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">${video.seconds ? `<span class="yt-ep-time">${runtime(video.seconds)}</span>` : ""}</div>
+      <b>${esc(video.title || `Episode ${i + 1}`)}</b></a>`).join("")}</div>` : "";
+  const ytWhole = !yt ? "" : season.format === "MOVIE" ? "The full movie" : yt.airing ? `All ${yt.expected || yt.videos.length} episodes aired so far` : `All ${yt.expected || yt.videos.length} episodes`;
   const actions = !released(season) ? ""
     : onCr ? `<button class="btn accent" data-act="watch" data-show="${esc(show.id)}" data-season="${index}">${icon("play")} ${playLabel(show, index)}</button>`
+    : yt ? `<a class="btn accent" href="${esc(watchUrl(ytNext.id, yt.playlist))}" target="_blank" rel="noopener noreferrer">${icon("play")} ${progress && item?.status !== "finished" && season.format !== "MOVIE" ? `Episode ${progress + 1}` : "Watch"} on YouTube</a>`
     : streams.length ? streams.map((link) => `<a class="btn accent" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Watch on ${esc(link.site)} ${icon("right")}</a>`).join("")
     : `<button class="btn" disabled>Not on Crunchyroll</button>`;
   const where = settings().openIn === "window" ? "your Crunchyroll window" : settings().openIn === "new" ? "a new Crunchyroll tab" : "your Crunchyroll tab";
   const playHint = !released(season) ? ""
     : onCr ? `Opens ${esc(playTarget(show, index).label.toLowerCase())} in ${where}`
+    : yt ? `${ytWhole}, free and official${yt.channel ? ` from ${esc(yt.channel)}` : ""}. Opens on YouTube; tick off episodes below as you watch`
     : `Crunchyroll doesn't have this show, so it can't play here. Crunchilist still tracks it: mark episodes below as you watch${streams.length ? ` on ${streams.map((link) => esc(link.site)).join(" or ")}` : " elsewhere"}`;
   const seasonName = (season.title || "").replace(show.title, "").replace(/^[\s:–-]+/, "").trim();
   const lastYear = seasons.filter((s) => s.year).at(-1)?.year;
@@ -1057,7 +1078,7 @@ function pageShow(id, seasonArg) {
     <div>
       ${multi ? `<h3>Seasons <span class="muted" style="font-weight:600;font-size:14px">· ${seasons.length} on AniList, all in one place</span></h3>${seasonStrip(show, index)}` : ""}
       ${show.about ? `<h3>Story</h3><p class="show-about">${esc(show.about)}</p>` : ""}
-      <div class="eps-head"><h3>${multi ? `${esc(season.label)} episodes` : "Episodes"}</h3>${epsHead}</div>${epsGrid}
+      <div class="eps-head"><h3>${multi ? `${esc(season.label)} episodes` : "Episodes"}</h3>${epsHead}</div>${epsGrid}${ytEps}
     </div>
     <aside>
       <div class="side-card"><h3>Details</h3><dl class="facts">
@@ -1624,6 +1645,7 @@ function playTarget(show, seasonArg, episodeArg) {
   return { index, season, episode, label, multi };
 }
 function playLabel(show, seasonArg) {
+  if (onYoutube(show)) return "Episodes on YouTube";
   if (!onCrunchyroll(show)) return "Where to watch";
   const target = playTarget(show, seasonArg);
   const started = seasonState(show, target.index)?.status === "watching";
@@ -1632,6 +1654,7 @@ function playLabel(show, seasonArg) {
 async function play(show, seasonArg, episodeArg) {
   if (!onCrunchyroll(show)) {
     location.hash = `show/${show.id}`;
+    if (onYoutube(show)) return;
     return toast(`${show.title} isn't on Crunchyroll${show.streaming?.length ? `. It streams on ${show.streaming.map((link) => link.site).join(", ")}` : ""}`);
   }
   stopPreview();

@@ -1,0 +1,14 @@
+{
+  "about": "Official channels whose playlists scripts/youtube-catalog.mjs matches to AniList. Region-locked channels are fine: each upload's regions are kept and the extension filters by the viewer's country.",
+  "channels": [
+    "@GundamInfo",
+    "@RetroCrush",
+    "@MuseAsia",
+    "@AniOneAsia",
+    "@TOHOanimation",
+    "@ToeiAnimationOfficial",
+    "@TezukaProductions",
+    "@MoominOfficial",
+    "@pokemon"
+  ]
+}

@@ -1,5 +1,5 @@
 // The page's only door to the extension: every read and write is a background message.
-const WATCHED_KEYS = ["crCornerState", "crCatalog", "alMedia"];
+const WATCHED_KEYS = ["crCornerState", "crCatalog", "alMedia", "crYoutube"];
 
 export function send(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({ ok: false, error: error?.message || "Crunchilist isn't responding. Reload this page." }));

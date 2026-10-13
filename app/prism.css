@@ -277,7 +277,20 @@ img { display: block; }
 .avail.large svg { width: 20px; height: 20px; }
 .avail.mini { position: absolute; right: 6px; top: 6px; z-index: 2; padding: 3px 7px 3px 4px; font-size: 10.5px; background: rgba(12, 10, 9, .78); color: #e9dfd8; border: 1px dashed rgba(255, 255, 255, .35); backdrop-filter: blur(6px); }
 .avail.mini svg { width: 12px; height: 12px; }
-.card:has(.avail.mini) .poster img { filter: saturate(.55) brightness(.85); }
+.card:has(.avail.mini:not(.yt)) .poster img { filter: saturate(.55) brightness(.85); }
+.avail.yt { background: rgba(255, 0, 51, .14); color: #ff6b81; border: 1px solid rgba(255, 0, 51, .35); }
+[data-mode="light"] .avail.yt { color: #c4002a; }
+.avail.mini.yt { color: #fff; border: 1px solid rgba(255, 0, 51, .55); }
+.yt-eps { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 4px; }
+.yt-ep { display: flex; flex-direction: column; gap: 6px; color: inherit; text-decoration: none; border-radius: 12px; outline-offset: 3px; }
+.yt-ep-art { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.yt-ep-art img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .2s ease; }
+.yt-ep:hover .yt-ep-art img, .yt-ep:focus-visible .yt-ep-art img { transform: scale(1.04); }
+.yt-ep-art .yt-ep-time { position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 6px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 11px; font-weight: 700; }
+.yt-ep.seen .yt-ep-art img { filter: saturate(.4) brightness(.7); }
+.yt-ep.next .yt-ep-art { box-shadow: 0 0 0 2px var(--accent); }
+.yt-ep b { font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.yt-ep small { color: var(--muted); font-size: 12px; }
 .show-avail { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin: 14px 0 4px; }
 .play-hint { color: var(--muted); font-size: 13px; max-width: 520px; }
 .where { display: flex; align-items: center; gap: 12px; padding: 10px; margin: 0 -10px; border-radius: 12px; color: var(--text); text-decoration: none; }

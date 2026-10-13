@@ -4,11 +4,13 @@ import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable,
 import { changeLibrary } from "./anilist-sync.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
+import { refreshYoutube, youtubeFor } from "./youtube.js";
 
 async function loadShows(state) {
   const catalog = await loadCatalog();
   const media = await loadMedia();
-  return { catalog, shows: buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library }) };
+  const youtube = await youtubeFor(state, catalog, media);
+  return { catalog, shows: buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library, youtube }) };
 }
 
 // Everything the Crunchilist page shows. Secrets never leave the background: the view carries public settings only.
@@ -16,6 +18,7 @@ export async function appData() {
   const state = await loadState();
   const { catalog, shows } = await loadShows(state);
   refreshMediaExtras().catch(() => {});
+  refreshYoutube().catch(() => {});
   return { shows, library: libraryMirror(shows, state.library), view: makeView(state, catalog) };
 }
 

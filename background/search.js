@@ -17,6 +17,7 @@ import { allowedByTaste, buildWeights, compactProfile, scoreLabels } from "../li
 import { applyStoredCovers, currentToken, liveSearch, validBearer } from "./catalog-sync.js";
 import { askJson, pickWithModel } from "./model.js";
 import { loadCatalog, loadState } from "./store.js";
+import { youtubeFor } from "./youtube.js";
 
 const CATALOG_CHIPS = new Set(["unwatched", "one-cour", "long", "movie", "in-progress", "plan", "new"]);
 const PROMPT_CANDIDATES = 20;
@@ -25,9 +26,20 @@ const REROLL_POOL = 60;
 const RERANK_CACHE_LIMIT = 40;
 const PAGE_SIZE = 24;
 
-let cachedIndex = { key: "", index: null, docs: [] };
+const cachedIndexes = { all: { key: "", index: null, docs: [] }, crunchyroll: { key: "", index: null, docs: [] } };
+
+// The Crunchyroll catalog, plus free YouTube titles unless the search is limited to Crunchyroll.
+// YouTube items go after every Crunchyroll title, so Popular and New releases stay Crunchyroll's.
+async function searchCatalog(state, site = "all") {
+  const catalog = await loadCatalog();
+  if (site === "crunchyroll") return catalog;
+  const extra = await youtubeFor(state, catalog);
+  if (!extra.length) return catalog;
+  return { ...catalog, items: [...catalog.items, ...extra], youtubeKey: `${extra.length}:${extra[0].id}:${extra.at(-1).id}` };
+}
 
 function hitFor(state, item) {
+  if (item.hit) return item.hit;
   const hit = readCache(state.anilistCache, cacheKeyForSeries(item.id), Date.now());
   return hit?.kind === "hit" ? hit : null;
 }
@@ -74,7 +86,7 @@ function docFor(state, item) {
     year: hit?.year,
     score: hit?.score,
     popularity: hit?.popularity,
-    sources: ["crunchyroll"],
+    sources: [item.source === "youtube" ? "youtube" : "crunchyroll"],
     item,
   });
 }
@@ -90,8 +102,11 @@ function cacheStamp(cache) {
 }
 
 function indexFor(state, catalog, pool) {
-  const key = `${catalog.updatedAt}:${catalog.items.length}:${catalog.newest.length}:${cacheStamp(state.anilistCache)}`;
-  if (cachedIndex.key !== key) {
+  const key = `${catalog.updatedAt}:${catalog.items.length}:${catalog.newest.length}:${cacheStamp(state.anilistCache)}:${catalog.youtubeKey || ""}`;
+  // Crunchyroll-only searches keep an index without the YouTube titles, so their ranking is exactly as before.
+  const slot = catalog.youtubeKey ? "all" : "crunchyroll";
+  let cached = cachedIndexes[slot];
+  if (cached.key !== key) {
     const seen = new Set();
     const docs = [];
     for (const item of [...catalog.items, ...catalog.newest]) {
@@ -99,11 +114,11 @@ function indexFor(state, catalog, pool) {
       seen.add(item.id);
       docs.push(docFor(state, item));
     }
-    cachedIndex = { key, index: buildIndex(docs), docs };
+    cached = cachedIndexes[slot] = { key, index: buildIndex(docs), docs };
   }
-  const extras = (pool || []).filter((item) => item?.id && !cachedIndex.index.byId.has(item.id));
-  if (!extras.length) return cachedIndex.index;
-  return buildIndex([...cachedIndex.docs, ...extras.map((item) => docFor(state, item))]);
+  const extras = (pool || []).filter((item) => item?.id && !cached.index.byId.has(item.id));
+  if (!extras.length) return cached.index;
+  return buildIndex([...cached.docs, ...extras.map((item) => docFor(state, item))]);
 }
 
 function siteAllowed(doc, site) {
@@ -168,11 +183,14 @@ function presentCatalogItem(state, item) {
   const movie = item.type === "movie" || hitFor(state, item)?.format === "MOVIE";
   const tags = [movie ? "Movie" : "Series"];
   if (item.episodes && !movie) tags.push(`${item.episodes} eps`);
+  if (item.source === "youtube") tags.push("Free on YouTube");
   return {
     id: `sight:${item.id}`,
     title: item.title,
     url: item.url,
-    reason: item.type === "movie" ? "Movie on Crunchyroll." : item.episodes ? `${item.episodes} episodes on Crunchyroll.` : "On Crunchyroll.",
+    reason: item.source === "youtube"
+      ? `Free on YouTube${item.youtube?.channel ? ` from ${item.youtube.channel}` : ""}.`
+      : item.type === "movie" ? "Movie on Crunchyroll." : item.episodes ? `${item.episodes} episodes on Crunchyroll.` : "On Crunchyroll.",
     tags,
     status: status === "unwatched" ? null : status,
     poster: posterFor(state, item),
@@ -289,10 +307,13 @@ function presentResult(state, item, forYou, weights) {
   return presented;
 }
 
+const crunchyrollCount = (catalog) => catalog.items.filter((item) => !item.source).length;
+
 function homeNote(catalog, token) {
-  if (!catalog.items.length && !validBearer(token)) return "Open Crunchyroll while signed in so the catalog can load.";
-  if (!catalog.items.length) return "The catalog has not loaded yet. Stay on Crunchyroll for a moment.";
-  if (!catalog.complete) return `Catalog is still downloading. ${catalog.items.length} titles saved so far.`;
+  const count = crunchyrollCount(catalog);
+  if (!count && !validBearer(token)) return "Open Crunchyroll while signed in so the catalog can load.";
+  if (!count) return "The catalog has not loaded yet. Stay on Crunchyroll for a moment.";
+  if (!catalog.complete) return `Catalog is still downloading. ${count} titles saved so far.`;
   return "";
 }
 
@@ -328,7 +349,7 @@ let lastList = { key: "", at: 0, items: [], rerank: false };
 const LIST_TTL_MS = 120_000;
 
 async function orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor) {
-  const key = JSON.stringify([text, chip, site, sort, tags, without, catalog.updatedAt, state.settings.hideWatched, state.settings.favorNamed]);
+  const key = JSON.stringify([text, chip, site, sort, tags, without, catalog.updatedAt, catalog.youtubeKey || "", state.settings.hideWatched, state.settings.favorNamed]);
   if (offset > 0 && lastList.key === key && Date.now() - lastList.at < LIST_TTL_MS) return lastList;
   const forYou = forYouIdsFor(state, catalog, scoreFor);
   const skip = text ? [...new Set([...without, ...parseQuery(text).without])] : without;
@@ -350,7 +371,7 @@ async function orderedItems(state, catalog, { text, chip, site, sort, tags, with
 
 export async function catalogSearch(query, chip, site = "", options = {}) {
   const state = await loadState();
-  const catalog = await loadCatalog();
+  const catalog = await searchCatalog(state, site);
   const text = String(query || "").trim();
   const sort = ["popular", "score", "newest", "title", "shortest", "longest"].includes(options.sort) ? options.sort : "relevance";
   const tags = cleanTags(options.tags);
@@ -392,8 +413,8 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
   let note = "";
   if (offset === 0) {
     note = !total ? "No matches." : chip === "new" && !text ? "Newly added on Crunchyroll." : "";
-    if (!catalog.items.length) note = homeNote(catalog, await currentToken());
-    else if (!total && !catalog.complete) note = `No matches yet. The catalog is still loading (${catalog.items.length} titles so far).`;
+    if (!crunchyrollCount(catalog)) note = homeNote(catalog, await currentToken());
+    else if (!total && !catalog.complete) note = `No matches yet. The catalog is still loading (${crunchyrollCount(catalog)} titles so far).`;
     if (text) note = avoidedTitleNote(state, catalog, text, scoreFor) || note;
   }
   return {
@@ -411,7 +432,7 @@ export async function catalogSuggest(query, chip, site = "") {
   const text = String(query || "").trim();
   if (!text) return { suggestions: [] };
   const state = await loadState();
-  const catalog = await loadCatalog();
+  const catalog = await searchCatalog(state, site);
   const { weights, scoreFor } = tasteRank(state);
   const forYou = forYouIdsFor(state, catalog, scoreFor);
   const pool = await collectSearchItems(state, catalog, text, chip, false);
@@ -466,7 +487,7 @@ export async function catalogRerank(query, chip, site, ids, options = {}) {
   const request = String(query || "").trim();
   const state = await loadState();
   if (state.settings.useAi === false) return { results: [], off: true, note: "AI features are off." };
-  const catalog = await loadCatalog();
+  const catalog = await searchCatalog(state, site);
   const byId = new Map([...catalog.items, ...catalog.newest].map((item) => [item.id, item]));
   const rowItems = bareIds(ids).slice(0, PROMPT_CANDIDATES).map((id) => byId.get(id)).filter(Boolean);
   const { weights, scoreFor } = tasteRank(state);
@@ -549,7 +570,7 @@ const INSPIRED_SHOWN = 6;
 export async function searchInspired(searches, { ai = true, fresh = false } = {}) {
   const queries = cleanSearches(searches);
   const state = await loadState();
-  const catalog = await loadCatalog();
+  const catalog = await searchCatalog(state);
   const { scoreFor } = tasteRank(state);
   const pool = withoutAvoids(state, catalog.items || []).filter((item) => ["unwatched", "plan"].includes(statusFor(state, item)));
   const lists = queries.map((query) => rankPool(state, catalog, pool, query, { scoreFor, limit: INSPIRED_PER_SEARCH })
@@ -616,7 +637,7 @@ async function homeThemes(state, inputs, wantAi) {
 // nudge: text the viewer typed to steer the rows. undefined keeps the current one; "" clears it.
 export async function homeRows(searches, { ai = true, fresh = false, nudge } = {}) {
   const state = await loadState();
-  const catalog = await loadCatalog();
+  const catalog = await searchCatalog(state);
   const { weights, scoreFor } = tasteRank(state);
   const entries = activeEntries(state.library);
   const inputs = {

@@ -27,6 +27,7 @@ import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, 
 import { catalogRerank, catalogSearch, catalogSuggest, homeRows, searchInspired } from "./search.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
 import { checkForUpdate, markUpdateAnnounced } from "./updates.js";
+import { refreshYoutube } from "./youtube.js";
 
 function seriesIdFrom(id) {
   return String(id || "").replace(/^sight:/, "");
@@ -299,6 +300,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 chrome.runtime.onInstalled.addListener((details) => {
   loadState().then(saveState).catch(() => {});
   checkForUpdate({ force: true }).catch(() => {});
+  refreshYoutube({ force: true }).catch(() => {});
   if (details?.reason === "update") reopenAfterUpdate().catch(() => {});
 });
 
@@ -312,6 +314,7 @@ async function reopenAfterUpdate() {
 }
 chrome.runtime.onStartup.addListener(() => {
   checkForUpdate().catch(() => {});
+  refreshYoutube().catch(() => {});
 });
 
 async function openApp() {

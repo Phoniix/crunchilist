@@ -232,6 +232,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   const search = el("details", { class: "st-card" }, [
     el("summary", { text: "Search preferences" }),
     switchRow("favorNamed", "Favor the named show", "In searches like “like Frieren but sadder,” being close to the named show counts more than the other words."),
+    switchRow("youtubeTitles", "Include free YouTube shows", "Complete, official uploads of shows Crunchyroll doesn't carry. They appear in the Crunchilist app with a YouTube label, never on Crunchyroll pages."),
   ]);
 
   const liteBox = el("input", { type: "checkbox", role: "switch", "aria-label": "Performance mode" });
