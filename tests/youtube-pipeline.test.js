@@ -192,6 +192,43 @@ test("buildFeed: AniList links and channel playlists, shared playlists held back
   assert.match(result.unmatched[0].reason, /no sure AniList match/);
 });
 
+test("buildFeed skips links it rejected recently unless their AniList facts changed or the wait ran out", async () => {
+  const short = episodes(1, "k");
+  const { source, calls } = fakeYoutube({ playlists: { PLshort0001: Object.keys(short) }, videos: short });
+  const discovered = [media(20, { externalLinks: playlistLink("PLshort0001") }), media(21, { externalLinks: playlistLink("PLgone00001") })];
+  const first = await buildFeed({ anilist: fakeAnilist({ discovered }).anilist, source, now: new Date("2026-10-01T00:00:00Z") });
+  assert.equal(first.rejected.length, 2);
+  assert.ok(first.rejected.every((row) => row.checkedAt === "2026-10-01" && row.sig));
+  const used = calls.length;
+
+  const week = await buildFeed({ anilist: fakeAnilist({ discovered }).anilist, source, checked: first.rejected, now: new Date("2026-10-08T00:00:00Z") });
+  assert.equal(calls.length, used);
+  assert.equal(week.skipped, 2);
+  assert.deepEqual(week.rejected, first.rejected);
+
+  const moved = [media(20, { status: "RELEASING", nextAiringEpisode: { episode: 2 }, externalLinks: playlistLink("PLshort0001") }), discovered[1]];
+  const changed = await buildFeed({ anilist: fakeAnilist({ discovered: moved }).anilist, source, checked: first.rejected, now: new Date("2026-10-08T00:00:00Z") });
+  assert.equal(changed.skipped, 1);
+  assert.equal(changed.shows.map((show) => show.anilistId)[0], 20);
+
+  const late = await buildFeed({ anilist: fakeAnilist({ discovered }).anilist, source, checked: first.rejected, now: new Date("2026-11-30T00:00:00Z") });
+  assert.equal(late.skipped, 0);
+  assert.equal(late.rejected[0].checkedAt, "2026-11-30");
+});
+
+test("a link that failed for a passing reason isn't remembered as rejected", async () => {
+  let down = true;
+  const videos = episodes(3, "w");
+  const { source: real } = fakeYoutube({ playlists: { PLflaky0001: Object.keys(videos) }, videos });
+  const source = { ...real, playlist: async (id) => { if (down) throw new Error("YouTube API answered 503."); return real.playlist(id); } };
+  const discovered = [media(22, { externalLinks: playlistLink("PLflaky0001") })];
+  const first = await buildFeed({ anilist: fakeAnilist({ discovered }).anilist, source });
+  assert.equal(first.rejected[0].checkedAt, undefined);
+  down = false;
+  const second = await buildFeed({ anilist: fakeAnilist({ discovered }).anilist, source, checked: first.rejected });
+  assert.deepEqual(second.shows.map((show) => show.anilistId), [22]);
+});
+
 test("a used-up API quota stops the run instead of writing a half feed", async () => {
   const { source } = fakeYoutube({ quota: true });
   const { anilist } = fakeAnilist({ discovered: [media(16, { externalLinks: playlistLink("PLgood00001") })] });

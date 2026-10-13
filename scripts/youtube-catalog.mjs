@@ -1,7 +1,8 @@
 // Builds feeds/youtube.json: shows with free, official, full uploads on YouTube, with their AniList facts.
 //   node scripts/youtube-catalog.mjs            (needs YOUTUBE_API_KEY; the weekly GitHub job runs this)
 //   node scripts/youtube-catalog.mjs --pages    (local run without a key: reads public YouTube pages, AniList links only)
-// Options: --floor=5000 (least AniList popularity), --out=feeds
+// Options: --floor=5000 (least AniList popularity), --out=feeds, --recheck (look at every link again, ignoring
+// the rejections remembered in feeds/youtube-review.json)
 // Shows come from AniList's YouTube streaming links and from the official channels in feeds/youtube-channels.json,
 // whose playlists are matched against the local title index in feeds/anilist-titles.json (scripts/anilist-titles.mjs).
 // Rejected links and unmatched playlists go to feeds/youtube-review.json for a person to look over.
@@ -28,6 +29,22 @@ const YOUTUBE_SOURCE_ID = 13;
 const MEDIA_FIELDS = `${MEDIA_DETAIL_FIELDS.replace(/rankings \{[^}]*\}/, "")} externalLinks { site url type } nextAiringEpisode { episode }`;
 // A new feed this much smaller than the last one means something broke upstream, so the old one stays.
 const SHRINK_LIMIT = 0.6;
+// A rejected link is looked at again after 3 to 5 weeks (spread by AniList id so rechecks don't all land in one
+// week), or sooner when the AniList facts it was judged against or its channel playlist's size change.
+const RECHECK_DAYS = 21;
+const RECHECK_SPREAD = 14;
+const DAY_MS = 86400000;
+
+export function checkSignature(candidate) {
+  const { media, link } = candidate;
+  return [media.status, media.format, media.episodes ?? "", media.duration ?? "", media.nextAiringEpisode?.episode ?? "", link.count ?? ""].join("|");
+}
+
+export function stillRejected(row, signature, now = new Date()) {
+  if (!row?.checkedAt || row.sig !== signature) return false;
+  const age = now.getTime() - Date.parse(row.checkedAt);
+  return age >= 0 && age < (RECHECK_DAYS + (row.anilistId % RECHECK_SPREAD)) * DAY_MS;
+}
 
 export function anilistClient({ fetchImpl = fetch, spacing = 2100, log = () => {} } = {}) {
   let last = 0;
@@ -144,7 +161,7 @@ export async function channelCandidates(anilist, source, channels, { log = () =>
   for (const row of matched) {
     const media = details.get(row.anilistId);
     if (!media || media.isAdult) continue;
-    candidates.push({ media, link: { kind: "playlist", id: row.list.id, url: `https://www.youtube.com/playlist?list=${row.list.id}`, channel: row.list.channel } });
+    candidates.push({ media, link: { kind: "playlist", id: row.list.id, url: `https://www.youtube.com/playlist?list=${row.list.id}`, channel: row.list.channel, count: row.list.count } });
   }
   return { candidates, unmatched };
 }
@@ -223,7 +240,10 @@ export async function verify(candidate, source, { regions = FEED_REGIONS } = {})
   };
 }
 
-export async function buildFeed({ anilist, source, channels = [], titles = null, floor = 5000, maxPages = 100, log = () => {} }) {
+export async function buildFeed({ anilist, source, channels = [], titles = null, checked = [], floor = 5000, maxPages = 100, now = new Date(), log = () => {} }) {
+  const earlier = new Map(checked.map((row) => [`${row.anilistId} ${row.url}`, row]));
+  const today = now.toISOString().slice(0, 10);
+  let skipped = 0;
   const media = await discover(anilist, { floor, maxPages, log });
   log(`AniList: ${media.length} shows with YouTube links`);
   const candidates = [];
@@ -242,15 +262,29 @@ export async function buildFeed({ anilist, source, channels = [], titles = null,
     if (done % 50 === 0) log(`checked ${done}/${candidates.length} links`);
     const id = candidate.media.id;
     const title = candidate.media.title?.english || candidate.media.title?.romaji || "";
+    const sig = checkSignature(candidate);
+    const before = earlier.get(`${id} ${candidate.link.url}`);
+    if (stillRejected(before, sig, now)) {
+      skipped += 1;
+      rejected.push(before);
+      continue;
+    }
     let result;
     try {
       result = await verify(candidate, source);
     } catch (error) {
       if (error?.code === "quota" || error?.code === "key") throw error;
-      result = { ok: false, reason: error?.message || "check failed" };
+      result = { ok: false, reason: error?.message || "check failed", retry: true };
     }
     if (!result.ok) {
-      rejected.push({ anilistId: id, title, url: candidate.link.url, reason: result.reason, ...(result.missing?.length ? { missing: result.missing } : {}) });
+      rejected.push({
+        anilistId: id,
+        title,
+        url: candidate.link.url,
+        reason: result.reason,
+        ...(result.missing?.length ? { missing: result.missing } : {}),
+        ...(result.retry ? {} : { checkedAt: today, sig }),
+      });
       continue;
     }
     const previous = accepted.get(id);
@@ -268,7 +302,8 @@ export async function buildFeed({ anilist, source, channels = [], titles = null,
   }
   const shows = [...accepted.values()].sort((a, b) => (b.facts.popularity || 0) - (a.facts.popularity || 0) || a.anilistId - b.anilistId);
   rejected.sort((a, b) => a.anilistId - b.anilistId || a.url.localeCompare(b.url));
-  return { shows, rejected, unmatched: fromChannels.unmatched, links: candidates.length, units: source.units() };
+  if (skipped) log(`Skipped ${skipped} links rejected in the last few weeks with nothing changed since`);
+  return { shows, rejected, unmatched: fromChannels.unmatched, links: candidates.length, skipped, units: source.units() };
 }
 
 async function readJson(path) {
@@ -295,7 +330,7 @@ export async function writeFeed(result, { out = "feeds", source = "api", now = n
     const key = row.reason.replace(/\s*\(.*$/, "").replace(/"[^"]*"/g, "\"…\"").replace(/\d+(-\d+)?(, \d+(-\d+)?)*(, …)?/g, "N");
     reasons[key] = (reasons[key] || 0) + 1;
   }
-  const review = { shows: result.shows.length, links: result.links, reasons, rejected: result.rejected, unmatched: result.unmatched };
+  const review = { source, shows: result.shows.length, links: result.links, reasons, rejected: result.rejected, unmatched: result.unmatched };
   await writeFile(`${out}/youtube-review.json`, `${JSON.stringify(review, null, 1)}\n`);
   return { changed: !same, feed, review };
 }
@@ -319,16 +354,18 @@ async function main(argv) {
     titles = titleIndex(rows);
     console.log(`AniList titles: ${titles.size} in the local index`);
   }
+  const previous = argv.includes("--recheck") ? null : await readJson(`${out}/youtube-review.json`);
   const result = await buildFeed({
     anilist,
     source,
     titles,
     channels,
+    checked: previous?.source === source.name ? previous.rejected || [] : [],
     floor: Number(option("floor", 5000)),
     log: console.log,
   });
   const { changed, review } = await writeFeed(result, { out, source: source.name });
-  console.log(JSON.stringify({ shows: result.shows.length, episodes: result.shows.reduce((sum, show) => sum + show.videos.length, 0), links: result.links, apiUnits: result.units, changed, reasons: review.reasons }, null, 2));
+  console.log(JSON.stringify({ shows: result.shows.length, episodes: result.shows.reduce((sum, show) => sum + show.videos.length, 0), links: result.links, skipped: result.skipped, apiUnits: result.units, changed, reasons: review.reasons }, null, 2));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
