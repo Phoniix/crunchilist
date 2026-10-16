@@ -164,7 +164,8 @@ export async function buildWhereMap({ fetchImpl = fetch, maxPages = 80, probe = 
   }
   let dropped = 0;
   if (probe) ({ links, dropped } = await probeDead(links, { fetchImpl }));
-  const updated = new Date().toISOString().slice(0, 10);
+  // Include time so same-calendar-day rebuilds still change `updated` and clients re-download.
+  const updated = process.env.WHERE_MAP_UPDATED || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const feed = cleanWhereMap({
     version: WHERE_MAP_VERSION,
     updated,
@@ -175,7 +176,7 @@ export async function buildWhereMap({ fetchImpl = fetch, maxPages = 80, probe = 
 }
 
 async function main() {
-  // Default 80 (~4k popular anime) — still a partial gap fill, not full Netflix/Prime/Hulu catalogs.
+  // Default 80 — still a partial gap fill, not full Netflix/Prime/Hulu catalogs.
   const maxPages = Number(process.env.WHERE_MAP_PAGES || 80);
   const probe = process.env.WHERE_MAP_PROBE !== "0";
   console.log(`Harvesting AniList streaming links (up to ${maxPages} pages)${process.env.TMDB_API_KEY ? " + TMDB" : ""}…`);
@@ -185,10 +186,11 @@ async function main() {
   const meta = {
     version: WHERE_MAP_VERSION,
     updated: feed.updated,
-    stats: { total: count, dropped, source: feed.source },
+    stats: { total: count, dropped, source: feed.source, pages: maxPages },
   };
   await writeFile(path.join(FEEDS, "where-map-meta.json"), `${JSON.stringify(meta)}\n`);
   console.log(`where-map: ${count} shows, dropped ${dropped} dead URLs -> search/feeds/where-map.json`);
+  console.log(`where-map meta updated=${feed.updated}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
