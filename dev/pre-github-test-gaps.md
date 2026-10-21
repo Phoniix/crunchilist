@@ -55,5 +55,5 @@ Do these on **your** signed-in Chrome (Monitor 1 is fine). Agent browser cannot 
 - [x] Full `npm test` — 700 pass
 - [x] Fill high-priority root twins / importer / package
 - [x] Medium root tests + push (`02b55a4` on `origin/search`)
-- [ ] Manual smoke with you in Chrome (11–13 + packaged load in 14)
+- [ ] Manual smoke — you’re running 11–14 in your Chrome
 - [x] PR: https://github.com/Phoniix/crunchilist/pull/1 (`search` → `master`)
