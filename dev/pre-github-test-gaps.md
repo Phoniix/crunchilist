@@ -45,7 +45,7 @@ Do these on **your** signed-in Chrome (Monitor 1 is fine). Agent browser cannot 
 
 ### 14. Packaged extension load smoke
 
-- [ ] `npm run` / package zip (or Chrome “Pack extension”) produces a loadable build
+- [x] `npm run package` produces zip (`dist/crunchilist-1.0.115.zip`, 160 files)
 - [ ] Load packaged build once; popup/options open without console errors on blank start
 
 **Partner one-liner:** unpacked → AniList in → site connected → tracking on → finish one ep → wait 2–3 min (no open preview) → check Import sync + AniList. Continue watching stays put until list pull / local Watching mark.
@@ -55,5 +55,5 @@ Do these on **your** signed-in Chrome (Monitor 1 is fine). Agent browser cannot 
 - [x] Full `npm test` — 700 pass
 - [x] Fill high-priority root twins / importer / package
 - [x] Medium root tests + push (`02b55a4` on `origin/search`)
-- [ ] Manual smoke with you in Chrome (11–14 above)
-- [ ] PR: https://github.com/Phoniix/crunchilist/compare/master...search (`gh` not installed / no token here — open from that compare link)
+- [ ] Manual smoke with you in Chrome (11–13 + packaged load in 14)
+- [x] PR: https://github.com/Phoniix/crunchilist/pull/1 (`search` → `master`)
