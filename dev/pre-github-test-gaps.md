@@ -29,7 +29,7 @@ Discovery feed stays on hold. Track-while-watching does **not** live-update Cont
 
 ## Suggested order
 
-- [x] Full `npm test` (passing after gap tests)
+- [x] Full `npm test` — 684 pass
 - [x] Fill high-priority root twins / importer / package
 - [ ] Manual smoke with you in Chrome
-- [ ] Commit / PR
+- [x] Pushed to `origin/search` (`8c0f3f1`); `gh` CLI not installed — open a PR from GitHub UI if needed
