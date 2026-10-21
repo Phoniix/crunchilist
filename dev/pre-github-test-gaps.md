@@ -29,7 +29,8 @@ Discovery feed stays on hold. Track-while-watching does **not** live-update Cont
 
 ## Suggested order
 
-- [x] Full `npm test` — 684 pass
+- [x] Full `npm test` — 700 pass
 - [x] Fill high-priority root twins / importer / package
+- [x] Medium root tests + push (`02b55a4` on `origin/search`)
 - [ ] Manual smoke with you in Chrome
-- [x] Pushed to `origin/search` (`8c0f3f1`); `gh` CLI not installed — open a PR from GitHub UI if needed
+- [ ] PR: https://github.com/Phoniix/crunchilist/compare/main...search (no `gh` token in this environment)
