@@ -57,3 +57,4 @@ Do these on **your** signed-in Chrome (Monitor 1 is fine). Agent browser cannot 
 - [x] Medium root tests + push (`02b55a4` on `origin/search`)
 - [ ] Manual smoke — you’re running 11–14 in your Chrome
 - [x] PR: https://github.com/Phoniix/crunchilist/pull/1 (`search` → `master`)
+- [x] CI: `.github/workflows/test.yml` runs `npm test` on PRs / pushes to `master`+`search`
