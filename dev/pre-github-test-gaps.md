@@ -13,10 +13,10 @@ Discovery feed stays on hold. Track-while-watching does **not** live-update Cont
 
 ## Medium priority
 
-7. [ ] MAL / tracker-pull root coverage (still thin)
-8. [ ] Id-map / title-search store version gates
-9. [ ] Dead-links / catalog-reader activity tagging
-10. [ ] Notification style / paintSettingControls helpers
+7. [x] MAL / trackers root: `tests/trackers.test.js`
+8. [x] Id-map store gates: `tests/id-map-store.test.js`
+9. [x] Dead-links + catalog-reader activity: `tests/link-check.test.js`, `tests/notification-style.test.js`
+10. [x] Notification style helpers: `tests/notification-style.test.js`
 
 ## Manual smoke (needs your Chrome)
 
