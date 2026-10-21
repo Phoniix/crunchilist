@@ -1,5 +1,15 @@
+import { SERVICE_BRAND, SERVICE_SHORT } from "../lib/play-url.js";
 import { filterTagSuggestions } from "../lib/taste.js";
 import { ROUNDED, el, fillStatusSelect, icon } from "./dom.js";
+
+// Platform-only filters on the search page (and optional subsets for site panels).
+export const SEARCH_PLATFORMS = [
+  { id: "crunchyroll", label: "Crunchyroll", short: "CR", color: SERVICE_BRAND.crunchyroll },
+  { id: "netflix", label: "Netflix", short: "Netflix", color: SERVICE_BRAND.netflix },
+  { id: "hidive", label: "HIDIVE", short: "HIDIVE", color: SERVICE_BRAND.hidive },
+  { id: "tubi", label: "Tubi", short: "Tubi", color: SERVICE_BRAND.tubi },
+  { id: "prime", label: "Prime Video", short: "Prime", color: SERVICE_BRAND.prime },
+];
 
 export const SEARCH_CSS = `
   .sv { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -18,7 +28,10 @@ export const SEARCH_CSS = `
   }
   .sv-bar.is-busy::after { opacity: 1; animation: sv-sweep 1.1s var(--ease) infinite; }
   @keyframes sv-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
-  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; }
+  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; position: relative; width: 22px; height: 22px; }
+  .sv-lead .sv-loader-mark { position: absolute; inset: -2px; width: 26px; height: 26px; opacity: 0; pointer-events: none; }
+  .sv-bar.is-busy .sv-lead > svg:not(.sv-loader-mark) { opacity: 0; }
+  .sv-bar.is-busy .sv-lead .sv-loader-mark { opacity: 1; }
   .sv-input {
     flex: 1; min-width: 0; height: 52px; padding: 0 4px; border: 0; border-radius: 0; background: transparent;
     font: 700 17px/1.2 ${ROUNDED}; color: var(--text);
@@ -50,70 +63,169 @@ export const SEARCH_CSS = `
   .sv-drop-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .sv-drop-title { font: 700 14px/1.25 ${ROUNDED}; }
   .sv-drop-reason { color: var(--muted); font: 600 12px/1.3 ${ROUNDED}; }
-  .sv-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-  .sv-chips, .sv-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
-  .sv-chips { flex: 1; }
+  .sv-filters {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 14px; border-radius: 16px;
+    background: color-mix(in srgb, var(--pane) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sv-filter-label {
+    flex: none; min-width: 52px; color: var(--faint);
+    font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .sv-chips, .sv-toggles, .sv-sites { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .sv-chip, .sv-toggle {
     display: inline-flex; align-items: center; gap: 6px;
-    min-height: 30px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--pane); color: var(--muted);
-    font: 700 12.5px/1 ${ROUNDED};
-    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+    min-height: 28px; padding: 3px 11px; border-radius: 999px; cursor: pointer;
+    border: 1px solid transparent; background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--muted);
+    font: 700 12px/1 ${ROUNDED};
+    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease), box-shadow .16s var(--ease);
   }
-  .sv-chip:hover, .sv-toggle:hover { color: var(--text); border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-chip.is-on { color: #1a0d05; background: var(--accent); border-color: transparent; }
-  .sv-toggle svg { opacity: .35; }
-  .sv-toggle.is-on { color: var(--text); border-color: var(--line-strong); }
+  .sv-chip:hover, .sv-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+  .sv-chip.is-on {
+    color: var(--on-accent, #1a0d05); background: var(--accent); border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .sv-toggle svg { opacity: .4; }
+  .sv-toggle.is-on { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
   .sv-toggle.is-on svg { opacity: 1; color: var(--accent-text); }
-  .sv-refine { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 12px; padding-top: 12px; border-top: 1px solid rgba(255, 226, 196, .07); }
-  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; flex: 1 1 140px; max-width: 220px; }
+  .sv-site { --sv-site: var(--accent); gap: 7px; }
+  .sv-site-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--sv-site); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sv-site) 20%, transparent);
+  }
+  .sv-site:not(.is-on) {
+    color: color-mix(in srgb, var(--sv-site) 78%, var(--text));
+    background: color-mix(in srgb, var(--sv-site) 10%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 28%, transparent);
+  }
+  .sv-site:not(.is-on):hover {
+    background: color-mix(in srgb, var(--sv-site) 18%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 48%, transparent);
+  }
+  .sv-site.is-on {
+    color: #fff;
+    background: color-mix(in srgb, var(--sv-site) 90%, #111);
+    border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
+  .sv-site.is-on .sv-site-dot { background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .18); }
+  .sv-site.is-on svg { color: #fff; opacity: 1; }
+  .sv-refine {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 12px 14px; align-items: start;
+    padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  @media (max-width: 720px) {
+    .sv-refine { grid-template-columns: 1fr; }
+    .sv-refine-group.is-end { justify-self: stretch; align-items: stretch; }
+  }
+  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
   .sv-refine-group .sv-under { justify-content: flex-start; }
-  .sv-refine-group.is-end { align-items: flex-end; flex: 0 0 auto; max-width: none; }
+  .sv-refine-group.is-end { align-items: flex-end; }
+  .sv-refine-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    color: var(--faint); font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
   .sv-refine-group .sv-tag-input { flex: 1; width: auto; min-width: 0; }
-  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 340px; }
+  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .sv-clear {
     border: 0; background: transparent; padding: 2px 4px; border-radius: 6px; cursor: pointer;
-    color: var(--muted); font: 700 11.5px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
+    color: var(--muted); font: 700 11px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
   }
   .sv-clear:hover:not(:disabled) { color: var(--accent-text); }
   .sv-clear:disabled { opacity: .35; cursor: default; }
-  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .5); color: #ff8a80; }
-  .is-exclude .sv-tag-token { background: rgba(255, 69, 58, .12); color: #ff8a80; }
-  .is-exclude .sv-tag-token span { text-decoration: line-through; text-decoration-color: rgba(255, 138, 128, .55); }
-  .is-exclude .sv-tag-token:hover { background: rgba(255, 69, 58, .2); }
+  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .55); color: #ff8a80; box-shadow: 0 0 0 3px rgba(255, 105, 97, .12); }
+  .is-exclude .sv-tag-token {
+    background: color-mix(in srgb, #ff453a 16%, transparent); color: #ff8a80;
+    border: 1px solid color-mix(in srgb, #ff453a 28%, transparent);
+  }
+  .is-exclude .sv-tag-token .sv-tag-mark { background: color-mix(in srgb, #ff453a 28%, transparent); color: #ffb4ae; }
+  .is-exclude .sv-tag-token:hover { background: color-mix(in srgb, #ff453a 24%, transparent); }
   .sv-tag-pick {
-    position: relative; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 10px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--pane); color: var(--faint);
-    transition: border-color .16s var(--ease), background .16s var(--ease);
+    position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+    background: color-mix(in srgb, var(--pane) 88%, transparent); color: var(--faint);
+    transition: border-color .16s var(--ease), background .16s var(--ease), box-shadow .16s var(--ease);
   }
   .sv-tag-pick:hover { border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-tag-pick:focus-within { border-color: rgba(255, 154, 92, .5); color: var(--accent-text); }
-  .sv-tag-input { width: 130px; height: 30px; padding: 0 6px 0 0; border: 0; border-radius: 0; background: transparent; font: 700 12.5px/1 ${ROUNDED}; }
-  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
-  .sv-tag-input::placeholder { color: var(--faint); }
-  .sv-tag-list {
-    position: absolute; z-index: 6; left: 0; top: calc(100% + 6px); width: 220px; max-height: 240px; overflow: auto;
-    display: flex; flex-direction: column; gap: 2px; padding: 5px; border-radius: 14px; background: var(--glass-strong);
+  .sv-tag-pick:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent-text);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
   }
-  .sv-tag-list button { text-align: left; border: 0; border-radius: 9px; padding: 7px 9px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
-  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: rgba(255, 226, 196, .08); }
+  .sv-tag-input { width: 100%; min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 0; background: transparent; font: 700 13px/1 ${ROUNDED}; color: var(--text); }
+  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
+  .sv-tag-input::placeholder { color: var(--faint); font-weight: 600; }
+  .sv-tag-list {
+    position: absolute; z-index: 6; left: 0; right: 0; top: calc(100% + 6px); max-height: 240px; overflow: auto;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 14px;
+    background: var(--glass-strong); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-tag-list button { text-align: left; border: 0; border-radius: 10px; padding: 8px 10px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
+  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .sv-tag-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
   .sv-tag-token {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px 0 12px; border: 0; border-radius: 999px; cursor: pointer;
-    background: var(--accent-soft); color: var(--accent-text); font: 800 12px/1 ${ROUNDED};
-    transition: background .16s var(--ease);
+    display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 0 8px 0 6px; border-radius: 999px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-text);
+    font: 800 12px/1 ${ROUNDED};
+    transition: background .16s var(--ease), border-color .16s var(--ease);
   }
-  .sv-tag-token:hover { background: rgba(255, 122, 47, .24); }
-  .sv-refine-spacer { flex: 1; }
+  .sv-tag-mark {
+    display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 22%, transparent); font: 800 11px/1 ${ROUNDED};
+  }
+  .sv-tag-token:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sv-tag-token svg { opacity: .7; }
+  .sv-refine-spacer { display: none; }
   .sv-sort-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--faint); font: 700 12px/1 ${ROUNDED}; }
-  .sv-sort { height: 32px; padding: 0 10px; border-radius: 10px; font: 700 12.5px/1 ${ROUNDED}; background: rgba(255, 226, 196, .04); }
-  .sv-more { height: 1px; }
-  .sv-more.is-loading { height: 44px; display: grid; place-items: center; }
-  .sv-more.is-loading::after {
-    content: ""; width: 22px; height: 22px; border-radius: 50%;
-    border: 2px solid rgba(255, 226, 196, .14); border-top-color: var(--accent); animation: sv-spin .8s linear infinite;
+  .sv-sort {
+    height: 36px; padding: 0 12px; border-radius: 12px; font: 700 12.5px/1 ${ROUNDED};
+    background: color-mix(in srgb, var(--pane) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); color: var(--text);
   }
-  @keyframes sv-spin { to { transform: rotate(360deg); } }
+  .sv-more { height: 1px; }
+  .sv-more.is-loading { height: 56px; display: grid; place-items: center; }
+  .sv-more.is-loading .sv-loader { padding: 0; min-height: 0; }
+  .sv-more.is-loading .sv-loader-mark { width: 36px; height: 36px; }
+  .sv-loader {
+    display: grid; place-items: center; gap: 14px; padding: 48px 16px; min-height: 160px;
+    color: var(--muted); font: 600 13px/1.4 ${ROUNDED}; text-align: center;
+  }
+  .sv-loader-mark {
+    width: 64px; height: 64px; display: block;
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 28%, transparent));
+  }
+  .sv-loader-ring {
+    fill: none; stroke: color-mix(in srgb, var(--text) 14%, transparent); stroke-width: 2.5;
+  }
+  .sv-loader-arc {
+    fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round;
+    stroke-dasharray: 42 88; transform-origin: 34px 34px;
+    animation: sv-loader-spin 1.1s cubic-bezier(.45, .05, .55, .95) infinite;
+  }
+  .sv-loader-globe {
+    fill: none; stroke: color-mix(in srgb, var(--text) 78%, transparent); stroke-width: 2.2;
+  }
+  .sv-loader-meridian {
+    fill: none; stroke: color-mix(in srgb, var(--text) 42%, transparent); stroke-width: 1.6;
+  }
+  .sv-loader-slash {
+    transform-origin: 34px 34px;
+    animation: sv-loader-orbit 2.4s cubic-bezier(.4, .0, .2, 1) infinite;
+  }
+  .sv-loader-slash path { fill: none; stroke: #4fd1ff; stroke-width: 3.2; stroke-linecap: round; }
+  .sv-loader-slash circle { fill: #4fd1ff; }
+  .sv-loader.is-sm { padding: 18px 12px; min-height: 72px; gap: 8px; font-size: 12px; }
+  .sv-loader.is-sm .sv-loader-mark { width: 40px; height: 40px; }
+  .sv-drop .sv-loader { padding: 20px 12px; min-height: 88px; }
+  @keyframes sv-loader-spin { to { transform: rotate(360deg); } }
+  @keyframes sv-loader-orbit {
+    0% { transform: rotate(0deg); opacity: .85; }
+    50% { opacity: 1; }
+    100% { transform: rotate(360deg); opacity: .85; }
+  }
   .sv-note {
     position: relative; overflow: hidden; margin: 0; padding: 9px 12px; border-radius: 12px;
     background: var(--pane); border: 1px solid var(--line); color: var(--muted); font: 600 13px/1.4 ${ROUNDED};
@@ -161,6 +273,20 @@ export const SEARCH_CSS = `
   .sv-reason { margin: 0; color: var(--muted); font: 500 13.5px/1.45 ${ROUNDED}; }
   .sv-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sv-tag { padding: 3px 8px; border-radius: 8px; background: rgba(255, 226, 196, .06); color: var(--muted); font: 700 11.5px/1.3 ${ROUNDED}; }
+  .sv-svcs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .sv-svc {
+    --sv-svc: var(--accent);
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 7px 2px 4px; border-radius: 999px;
+    background: color-mix(in srgb, var(--sv-svc) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--sv-svc) 36%, transparent);
+    color: color-mix(in srgb, var(--sv-svc) 78%, #fff);
+    font: 800 10.5px/1.2 ${ROUNDED};
+  }
+  .sv-svc-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--sv-svc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sv-svc) 22%, transparent);
+  }
   .sv-foot-spacer { flex: 1; }
   .sv-status-select {
     height: 30px; padding: 0 10px; border-radius: 10px; font: 700 12px/1 ${ROUNDED};
@@ -213,6 +339,10 @@ export const SEARCH_CSS = `
   }
   .sv-empty { padding: 36px 12px; text-align: center; color: var(--muted); font: 600 14px/1.5 ${ROUNDED}; }
   .sv-empty strong { display: block; margin-bottom: 4px; color: var(--text); font: 800 16px/1.3 ${ROUNDED}; }
+  @media (prefers-reduced-motion: reduce) {
+    .sv-loader-arc, .sv-loader-slash { animation: none; }
+    .sv-loader-arc { stroke-dasharray: 70 60; }
+  }
 `;
 
 const CHIPS = [
@@ -241,6 +371,7 @@ export function createSearchView({
   send,
   site = "all",
   siteToggle = true,
+  platforms = SEARCH_PLATFORMS,
   newTab = false,
   onView = () => {},
   placeholder = "Search anime or describe a mood",
@@ -249,7 +380,11 @@ export function createSearchView({
 } = {}) {
   let chip = "";
   let currentSite = site;
+  const sitePlatforms = (Array.isArray(platforms) ? platforms : SEARCH_PLATFORMS)
+    .map((row) => (typeof row === "string" ? SEARCH_PLATFORMS.find((p) => p.id === row) : row))
+    .filter(Boolean);
   let useAi = true;
+  let liteMode = false;
   let hideWatched = false;
   let seq = 0;
   let suggestSeq = 0;
@@ -286,8 +421,9 @@ export function createSearchView({
     el("span", { class: "sv-ai-dot", "aria-hidden": "true" }),
   ]);
   const drop = el("div", { class: "sv-drop glass", role: "listbox", hidden: true });
+  const lead = el("span", { class: "sv-lead", "aria-hidden": "true" }, [icon("search", 19)]);
   const form = el("form", { class: "sv-bar", role: "search" }, [
-    el("span", { class: "sv-lead" }, [icon("search", 19)]),
+    lead,
     input,
     clearButton,
     aiButton,
@@ -305,32 +441,61 @@ export function createSearchView({
     chipButtons.set(id, button);
     chipRow.append(button);
   }
-  const siteButton = el("button", { class: "sv-toggle", type: "button", title: "Only shows you can watch on Crunchyroll" }, [
-    icon("check", 14),
-    el("span", { text: "Crunchyroll only" }),
-  ]);
-  siteButton.hidden = !siteToggle;
+  const siteButtons = new Map();
+  const siteRow = el("div", { class: "sv-toggles sv-sites" });
+  for (const platform of sitePlatforms) {
+    const button = el("button", {
+      class: "sv-toggle sv-site",
+      type: "button",
+      title: `Empty search: browse titles on ${platform.label}. With a search: keep only matches watchable there.`,
+      "aria-pressed": "false",
+      "data-site": platform.id,
+      text: platform.label,
+    });
+    button.style.setProperty("--sv-site", platform.color || SERVICE_BRAND[platform.id] || "#ff7a2f");
+    button.prepend(el("span", { class: "sv-site-dot", "aria-hidden": "true" }));
+    button.addEventListener("click", () => {
+      currentSite = currentSite === platform.id ? "all" : platform.id;
+      paintToggles();
+      // Remember the chip for site panels when Settings → Where uses “Remember last”.
+      send("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {});
+      // Empty bar → browse that platform; active query → filter results to that service.
+      run();
+    });
+    siteButtons.set(platform.id, button);
+    siteRow.append(button);
+  }
+  siteRow.hidden = !siteToggle || !sitePlatforms.length;
   const hideButton = el("button", { class: "sv-toggle", type: "button", title: "Leave out finished and dropped shows" }, [
     icon("eye", 14),
     el("span", { text: "Hide watched" }),
   ]);
-  const filters = el("div", { class: "sv-filters" }, [chipRow, el("div", { class: "sv-toggles" }, [siteButton, hideButton])]);
-  const include = tagPicker({ label: "Filter by tag", glyph: "tag", removeLabel: "Remove tag", others: () => exclude.values });
-  const exclude = tagPicker({ label: "Exclude tag", glyph: "tagOff", removeLabel: "Stop excluding", others: () => include.values, tone: "is-exclude" });
+  const filters = el("div", { class: "sv-filters" }, [
+    el("div", { class: "sv-filter-row" }, [
+      el("span", { class: "sv-filter-label", text: "Show" }),
+      chipRow,
+      el("div", { class: "sv-toggles" }, [hideButton]),
+    ]),
+    siteRow.hidden ? null : el("div", { class: "sv-filter-row" }, [
+      el("span", { class: "sv-filter-label", text: "Where" }),
+      siteRow,
+    ]),
+  ].filter(Boolean));
+  const include = tagPicker({ label: "Include tag", head: "Include", glyph: "tag", removeLabel: "Remove tag", mark: "+", others: () => exclude.values });
+  const exclude = tagPicker({ label: "Exclude tag", head: "Exclude", glyph: "tagOff", removeLabel: "Stop excluding", mark: "−", others: () => include.values, tone: "is-exclude" });
   const sortSelect = el("select", { class: "sv-sort", "aria-label": "Sort results" });
   for (const [value, label] of SORTS) sortSelect.append(el("option", { value, text: label }));
   const sortClear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: "Back to best match" });
   const refine = el("div", { class: "sv-refine" }, [
     include.root,
     exclude.root,
-    el("span", { class: "sv-refine-spacer" }),
     el("div", { class: "sv-refine-group is-end" }, [
-      el("label", { class: "sv-sort-wrap" }, [el("span", { text: "Sort" }), sortSelect]),
-      el("div", { class: "sv-under" }, [sortClear]),
+      el("div", { class: "sv-refine-head" }, [el("span", { text: "Sort" }), sortClear]),
+      el("label", { class: "sv-sort-wrap" }, [sortSelect]),
     ]),
   ]);
 
-  function tagPicker({ label, glyph, removeLabel, others, tone = "" }) {
+  function tagPicker({ label, head = label, glyph, removeLabel, mark = "+", others, tone = "" }) {
     const picker = { values: [] };
     let matches = [];
     let active = -1;
@@ -339,8 +504,9 @@ export function createSearchView({
     const tokens = el("div", { class: "sv-tag-tokens" });
     const clear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: `Clear ${label.toLowerCase()}` });
     picker.root = el("div", { class: `sv-refine-group ${tone}` }, [
+      el("div", { class: "sv-refine-head" }, [el("span", { text: head }), clear]),
       el("div", { class: "sv-tag-pick" }, [icon(glyph, 15), field, list]),
-      el("div", { class: "sv-under" }, [tokens, clear]),
+      el("div", { class: "sv-under" }, [tokens]),
     ]);
 
     const change = (next) => {
@@ -350,7 +516,11 @@ export function createSearchView({
     };
     function paintTokens() {
       tokens.replaceChildren(...picker.values.map((tag) => {
-        const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [el("span", { text: tag }), icon("close", 12)]);
+        const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [
+          el("span", { class: "sv-tag-mark", text: mark, "aria-hidden": "true" }),
+          el("span", { text: tag }),
+          icon("close", 12),
+        ]);
         token.addEventListener("click", () => change(picker.values.filter((value) => value !== tag)));
         return token;
       }));
@@ -444,9 +614,11 @@ export function createSearchView({
   }
 
   function paintToggles() {
-    const siteOn = currentSite === "crunchyroll";
-    siteButton.classList.toggle("is-on", siteOn);
-    siteButton.setAttribute("aria-pressed", siteOn ? "true" : "false");
+    for (const [id, button] of siteButtons) {
+      const on = currentSite === id;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    }
     hideButton.classList.toggle("is-on", hideWatched);
     hideButton.setAttribute("aria-pressed", hideWatched ? "true" : "false");
   }
@@ -510,6 +682,23 @@ export function createSearchView({
     return el("span", { class: "sv-status" }, [plan, select]);
   }
 
+  function servicePills(item) {
+    const ids = [...new Set(item.sources || [])].filter(Boolean);
+    if (!ids.length) return null;
+    const row = el("span", { class: "sv-svcs", "aria-label": "Available on" });
+    for (const id of ids.slice(0, 4)) {
+      const platform = SEARCH_PLATFORMS.find((row) => row.id === id);
+      const color = platform?.color || SERVICE_BRAND[id] || "#8a7b71";
+      const label = platform?.short || SERVICE_SHORT[id] || platform?.label || id;
+      const pill = el("span", { class: "sv-svc", title: platform?.label || label, text: label });
+      pill.style.setProperty("--sv-svc", color);
+      pill.prepend(el("span", { class: "sv-svc-dot", "aria-hidden": "true" }));
+      row.append(pill);
+    }
+    if (ids.length > 4) row.append(el("span", { class: "sv-tag", text: `+${ids.length - 4}` }));
+    return row;
+  }
+
   function card(item, kind = "result", index = 0) {
     const confidence = kind === "pick" && Number.isInteger(item.confidence) ? item.confidence : null;
     const head = el("div", { class: "sv-card-head" }, [
@@ -523,6 +712,8 @@ export function createSearchView({
         : null,
     ]);
     const foot = el("div", { class: "sv-foot" });
+    const services = kind !== "mention" ? servicePills(item) : null;
+    if (services) foot.append(services);
     if (kind !== "mention") for (const tag of (item.tags || []).slice(0, 5)) foot.append(el("span", { class: "sv-tag", text: tag }));
     foot.append(el("span", { class: "sv-foot-spacer" }), statusControl(item));
     const node = el("article", { class: `sv-card is-${kind}${index >= 0 ? " is-appear" : ""}` }, [
@@ -547,11 +738,13 @@ export function createSearchView({
 
   function poster(item) {
     const mark = STATUS_LABEL[item.status];
+    const services = servicePills(item);
     return el("article", { class: "sv-poster" }, [
       el("a", linkAttrs(item, { class: "sv-poster-link" }), [
         el("span", { class: "sv-poster-art" }, [art(item), mark ? el("span", { class: "sv-mark", text: mark }) : null]),
         el("span", { class: "sv-poster-title", text: item.title }),
       ]),
+      services,
       statusControl(item),
     ]);
   }
@@ -563,6 +756,40 @@ export function createSearchView({
   function empty(title, detail) {
     return el("div", { class: "sv-empty" }, [el("strong", { text: title }), el("span", { text: detail })]);
   }
+
+  // Meridian-globe loader (logo mark): orbiting arc + slash while results are empty / in flight.
+  function logoMark() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "sv-loader-mark");
+    svg.setAttribute("viewBox", "0 0 68 68");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = `
+      <circle class="sv-loader-ring" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-arc" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-globe" cx="34" cy="34" r="14"/>
+      <ellipse class="sv-loader-meridian" cx="34" cy="34" rx="6" ry="14"/>
+      <path class="sv-loader-meridian" d="M20 34h28"/>
+      <g class="sv-loader-slash">
+        <path d="M23 42L45 26"/>
+        <circle cx="45" cy="26" r="2.8"/>
+      </g>`;
+    return svg;
+  }
+
+  function logoLoader({ label = "Searching…", size = "" } = {}) {
+    return el("div", {
+      class: size ? `sv-loader ${size}` : "sv-loader",
+      role: "status",
+      "aria-live": "polite",
+      "aria-label": label,
+    }, [logoMark(), el("span", { text: label })]);
+  }
+
+  function showResultsLoader(label = "Searching…") {
+    results.replaceChildren(logoLoader({ label }));
+  }
+
+  lead.append(logoMark());
 
   function renderHome(payload, picked = null, by = "") {
     results.replaceChildren();
@@ -592,16 +819,26 @@ export function createSearchView({
     startPager(seq, { query: "", chip: "", site: currentSite, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
   }
 
+  function resultsTitle() {
+    const platform = sitePlatforms.find((row) => row.id === currentSite);
+    if (!platform) return "Results";
+    if (!input.value.trim()) return `On ${platform.label}`;
+    return `Results on ${platform.label}`;
+  }
+
   function renderInstant(items, { pending, note = "", total = items.length }) {
     results.replaceChildren();
     if (!items.length) {
-      const hint = currentSite === "crunchyroll" ? "Try fewer words, or turn off Crunchyroll only." : "Try fewer words, or turn off a filter.";
+      const platform = sitePlatforms.find((row) => row.id === currentSite);
+      const hint = platform
+        ? `Nothing matched on ${platform.label} yet. Read its catalog under Where to watch, or turn the filter off.`
+        : "Try fewer words, or turn off a filter.";
       results.append(empty("No matches", note && note !== "No matches." ? note : hint));
       return null;
     }
     const extra = pending ? aiState("Ranking with AI", true) : null;
     const list = el("div", { class: "sv-list" }, [cardPage(items)]);
-    results.append(section("Results", [list], { count: total, extra }));
+    results.append(section(resultsTitle(), [list], { count: total, extra }));
     return list;
   }
 
@@ -648,10 +885,12 @@ export function createSearchView({
     const current = pager;
     if (!current || current.loading || !current.hasMore || current.id !== seq || !current.target?.isConnected) return;
     current.loading = true;
+    sentinel.replaceChildren(logoLoader({ label: "Loading more…", size: "is-sm" }));
     sentinel.classList.add("is-loading");
     const response = await send("catalogSearch", { ...current.params, offset: current.offset });
     current.loading = false;
     sentinel.classList.remove("is-loading");
+    sentinel.replaceChildren();
     if (current !== pager || current.id !== seq || !response?.ok) return;
     const items = response.results || [];
     current.loaded.push(...items);
@@ -796,20 +1035,32 @@ export function createSearchView({
     aiFailed(answer);
   }
 
+  function browsingCatalog() {
+    // Mode 1: empty bar + platform (or other filters) → flat title list, no AI.
+    // Mode 2: typed search keeps browse false so results stay query-ranked, then site-filtered.
+    if (input.value.trim()) return false;
+    return currentSite !== "all" || Boolean(chip) || include.values.length > 0 || exclude.values.length > 0 || sort !== "relevance";
+  }
+
   async function run() {
     const id = ++seq;
     closeDrop();
     closeAsk(false);
     window.clearInterval(modelPoll);
     const query = input.value.trim();
+    const browse = browsingCatalog();
     pager = null;
+    sentinel.classList.remove("is-loading");
+    sentinel.replaceChildren();
     form.classList.add("is-busy");
-    const params = { query, chip, site: currentSite, sort, tags: include.values, without: exclude.values };
+    showResultsLoader(query ? "Searching…" : browse ? "Loading titles…" : "Loading…");
+    const params = { query, chip, site: currentSite, sort, tags: include.values, without: exclude.values, browse };
     const response = await send("catalogSearch", params);
     if (id !== seq) return;
     form.classList.remove("is-busy");
     if (!response?.ok) {
       writeNote(response?.error || "Could not search.");
+      results.replaceChildren(empty("Couldn't search", response?.error || "Try again in a moment."));
       return;
     }
     lastRun = { query, response };
@@ -819,9 +1070,20 @@ export function createSearchView({
       renderHome(response);
       return;
     }
-    writeNote(response.results?.length ? [response.notice, response.note].filter(Boolean).join(" ") : "");
+    const platform = sitePlatforms.find((row) => row.id === currentSite);
+    const fallbackNote = platform
+      ? query
+        ? `Only titles watchable on ${platform.label}.`
+        : `Titles watchable on ${platform.label}.`
+      : "";
+    const note = response.results?.length
+      ? [response.notice, response.note || fallbackNote].filter(Boolean).join(" ")
+      : "";
+    writeNote(note);
     const items = response.results || [];
-    const pending = Boolean(useAi && response.rerank);
+    // Mode 1 (browse): no AI. Mode 2 (search + platform): keep AI ranking on the filtered list.
+    // Performance mode keeps instant search results and skips the Chrome AI rerank pass.
+    const pending = Boolean(useAi && !liteMode && response.rerank && query && !browse);
     const list = renderInstant(items, { pending, note: response.note, total: response.total ?? items.length });
     if (list) startPager(id, params, list, items, Boolean(response.hasMore));
     if (!pending) return;
@@ -869,17 +1131,29 @@ export function createSearchView({
     clearButton.hidden = !input.value;
     window.clearTimeout(suggestTimer);
     if (!query) {
+      form.classList.remove("is-busy");
       closeDrop();
       return;
     }
     const token = ++suggestSeq;
+    form.classList.add("is-busy");
+    // Show the logo orbit while live suggestions are empty / in flight.
+    if (!suggestions.length) {
+      drop.replaceChildren(logoLoader({ label: "Looking up…", size: "is-sm" }));
+      drop.hidden = false;
+    }
+    // Empty results area: same logo loader while the search bar is working.
+    if (!results.querySelector(".sv-card, .sv-poster, .sv-section")) {
+      showResultsLoader("Looking up…");
+    }
     suggestTimer = window.setTimeout(async () => {
       const response = await send("catalogSuggest", { query, chip, site: currentSite });
       if (token !== suggestSeq || input.value.trim() !== query) return;
+      form.classList.remove("is-busy");
       suggestions = response?.suggestions || [];
       activeSuggestion = -1;
       paintDrop();
-    }, 130);
+    }, liteMode ? 450 : 130);
   }
 
   async function refreshModel() {
@@ -949,11 +1223,6 @@ export function createSearchView({
     send("setSettings", { patch: { useAi } });
     if (useAi && lastRun?.response?.rerank && lastRun.query === input.value.trim()) run();
   });
-  siteButton.addEventListener("click", () => {
-    currentSite = currentSite === "crunchyroll" ? "all" : "crunchyroll";
-    paintToggles();
-    run();
-  });
   hideButton.addEventListener("click", async () => {
     hideWatched = !hideWatched;
     paintToggles();
@@ -996,6 +1265,7 @@ export function createSearchView({
     setView(view) {
       const settings = view?.settings || {};
       if (typeof settings.useAi === "boolean") useAi = settings.useAi;
+      if (typeof settings.liteMode === "boolean") liteMode = settings.liteMode;
       if (typeof settings.hideWatched === "boolean") hideWatched = settings.hideWatched;
       if (typeof settings.askModelDownload === "boolean") askDownload = settings.askModelDownload;
       if (Array.isArray(view?.tagSuggestions)) tagOptions = view.tagSuggestions;

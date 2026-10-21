@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Crunchilist Search",
+  "name": "DO NOT LOAD — merged into Kivori SekAI",
   "version": "0.1.0",
   "minimum_chrome_version": "120",
   "description": "Find anime across your streaming services and keep your AniList in sync with what you watch.",
@@ -8,15 +8,19 @@
   "permissions": ["storage", "unlimitedStorage", "identity", "scripting", "alarms"],
   "host_permissions": [
     "https://graphql.anilist.co/*",
-    "https://raw.githubusercontent.com/*"
+    "https://raw.githubusercontent.com/*",
+    "https://api.myanimelist.net/*",
+    "https://myanimelist.net/*"
   ],
   "optional_host_permissions": [
     "https://www.crunchyroll.com/*",
     "https://www.netflix.com/*",
-    "https://openrouter.ai/*",
-    "https://api.openai.com/*",
-    "https://generativelanguage.googleapis.com/*",
-    "https://api.groq.com/*"
+    "https://www.primevideo.com/*",
+    "https://www.amazon.com/gp/video/*",
+    "https://www.hulu.com/*",
+    "https://tubitv.com/*",
+    "https://www.hidive.com/*",
+    "https://kitsu.app/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
@@ -24,6 +28,7 @@
   },
   "action": {
     "default_title": "Crunchilist Search",
+    "default_popup": "popup/popup.html",
     "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
   },
   "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }

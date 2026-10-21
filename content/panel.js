@@ -72,25 +72,36 @@ const SHELL_CSS = `
   .drawer.is-open { display: block; animation: shell-fade .18s var(--ease) both; }
   :host(.fullscreen) .launcher { width: 12px; height: 60px; border-radius: 8px 0 0 8px; opacity: .5; }
   :host(.fullscreen) .launcher svg { display: none; }
-  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer { display: none !important; }
+  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer, :host(.fullscreen) .gather { display: none !important; }
 `;
 
-export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () => {}, onView = () => {} }) {
+export function createPanel(doc, {
+  send,
+  site = "crunchyroll",
+  platforms = ["crunchyroll"],
+  accent = "",
+  gatherLabel = "Gathering the Crunchyroll list",
+  layout = null,
+  hostId = "cr-corner-host",
+  onOpenChange = () => {},
+  onCorner = () => {},
+  onView = () => {},
+} = {}) {
   const host = doc.createElement("div");
-  host.id = "cr-corner-host";
+  host.id = hostId;
   host.className = "cl-theme";
   const shadow = host.attachShadow({ mode: "open" });
   const style = doc.createElement("style");
   style.textContent = roundedFontFace() + THEME_CSS + SEARCH_CSS + SETTINGS_CSS + NOTICES_CSS + SHELL_CSS;
 
   const launcherBadge = noticeBadge();
-  const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Crunchilist search", title: "Search with Crunchilist" }, [icon("search", 22), launcherBadge]);
-  const gatherText = el("span", { text: "Gathering the Crunchyroll list" });
+  const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Kivori SekAI search", title: "Search with Kivori SekAI" }, [icon("search", 22), launcherBadge]);
+  const gatherText = el("span", { text: gatherLabel });
   const gatherMeter = progressMeter("Background progress");
   const gather = el("div", { class: "gather glass", role: "status", hidden: true }, [icon("sparkle", 15), el("div", { class: "gather-copy" }, [gatherText, gatherMeter.root])]);
-  const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Crunchilist", tabindex: "-1" });
-  const panel = el("section", { class: "panel glass", role: "dialog", "aria-label": "Crunchilist search", hidden: true });
-  const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Crunchilist settings", hidden: true });
+  const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Kivori SekAI", tabindex: "-1" });
+  const panel = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
+  const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Kivori SekAI settings", hidden: true });
   const toastTitle = el("p", { class: "toast-title" });
   const toastMeta = el("p", { class: "toast-meta" });
   const toastAction = el("button", { class: "btn primary", type: "button" });
@@ -109,7 +120,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
   let corner = "bottom-right";
   let hydrated = false;
 
-  const search = createSearchView({ send, site: "crunchyroll", onView });
+  const search = createSearchView({ send, site, platforms, onView });
   const moveButton = el("button", { class: "btn", type: "button", title: "Move the search button to the next corner" }, [icon("corner", 15), el("span", { text: "Move button" })]);
   const settings = createSettingsView({ send, onView, pageContext: true, extras: [moveButton] });
   const notices = createNoticesView({ send, onView });
@@ -120,16 +131,23 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
   const closeButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Close", title: "Close" }, [icon("close")]);
   const body = el("div", { class: "body" }, [search.root]);
   panel.append(
-    el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Crunchilist" }), fullButton, bellButton, settingsButton, closeButton]),
+    el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Kivori SekAI" }), fullButton, bellButton, settingsButton, closeButton]),
     body,
   );
   search.setScrollRoot(body);
   drawer.append(settings.root, notices.root);
   let drawerPane = "settings";
 
+  function applyAccent() {
+    if (!accent) return;
+    host.style.setProperty("--accent", accent);
+    host.style.setProperty("--accent-text", accent);
+    host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
+  }
+
   function place() {
     const edge = {
-      "bottom-right": "right:18px;bottom:18px;",
+      "bottom-right": layout?.edge || "right:18px;bottom:18px;",
       "bottom-left": "left:18px;bottom:18px;",
       "top-left": "left:18px;top:18px;",
       "top-right": "right:18px;top:18px;",
@@ -139,7 +157,9 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     const base = `all:initial;position:fixed;z-index:2147483646;display:flex;flex-direction:${column};align-items:${align};pointer-events:none;`;
     host.classList.toggle("fullscreen", fullscreen);
     host.classList.toggle("at-top", !fullscreen && corner.startsWith("top"));
+    // Fullscreen: collapse to a thin mid-right strip so the popup never covers player chrome.
     host.style.cssText = fullscreen ? `${base}top:40%;right:0;` : `${base}${edge[corner] || edge["bottom-right"]}`;
+    applyAccent();
     placeDrawer();
   }
 
@@ -170,7 +190,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     drawer.classList.toggle("is-open", drawerOpen);
     settings.root.hidden = pane !== "settings";
     notices.root.hidden = pane !== "notices";
-    drawer.setAttribute("aria-label", pane === "notices" ? "Crunchilist notifications" : "Crunchilist settings");
+    drawer.setAttribute("aria-label", pane === "notices" ? "Kivori SekAI notifications" : "Kivori SekAI settings");
     for (const [button, name] of [[settingsButton, "settings"], [bellButton, "notices"]]) {
       const on = drawerOpen && pane === name;
       button.classList.toggle("is-on", on);
@@ -194,7 +214,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     gather.hidden = !showGather;
     launcher.classList.toggle("is-locked", gathering);
     launcher.disabled = fullscreen || gathering;
-    launcher.title = gathering ? gatherText.textContent : shown ? "Close Crunchilist" : "Search with Crunchilist";
+    launcher.title = gathering ? gatherText.textContent : shown ? "Close Kivori SekAI" : "Search with Kivori SekAI";
   }
 
   function setOpen(next, { silent = false } = {}) {
@@ -225,8 +245,11 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     onCorner(corner);
   });
   window.addEventListener("resize", placeDrawer);
+  // Bubble-phase: stop site listeners that don't use capture. Capture-phase player
+  // shortcuts (HIDIVE etc.) are filtered in content/sites/key-guard.js (MAIN world).
+  const stopKeys = (event) => event.stopPropagation();
   host.addEventListener("keydown", (event) => {
-    event.stopPropagation();
+    stopKeys(event);
     if (event.key !== "Escape" || !open || fullscreen) return;
     if (drawerOpen) setDrawer(false);
     else {
@@ -234,6 +257,8 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
       launcher.focus();
     }
   });
+  host.addEventListener("keyup", stopKeys);
+  host.addEventListener("keypress", stopKeys);
   host.addEventListener("click", (event) => event.stopPropagation());
 
   let toastTimer = 0;
@@ -287,7 +312,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
       const count = view.notices?.length || 0;
       paintBadge(bellBadge, count);
       paintBadge(launcherBadge, view.settings?.muteNotifications ? 0 : count);
-      launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Crunchilist search, ${count} notifications` : "Open Crunchilist search");
+      launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Kivori SekAI search, ${count} notifications` : "Open Kivori SekAI search");
       if (syncOpen && !hydrated) {
         hydrated = true;
         corner = view.settings?.panelCorner || corner;

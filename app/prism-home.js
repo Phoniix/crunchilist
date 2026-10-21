@@ -68,14 +68,15 @@ function paintRoll() {
 function render(api) {
   m = api;
   const spots = heroSpots();
+  const pool = m.homePool;
   return `${spots.length ? heroHtml(spots) : ""}
-    ${m.rail("Continue watching", m.inStatus("watching"), { render: m.wide, href: "#list/watching" })}
+    ${m.rail("Continue watching", pool(m.inStatus("watching")), { render: m.wide, href: "#list/watching" })}
     ${m.forYouRail()}
     ${m.homeRowsHtml()}
-    ${m.rail("Top 10 on Crunchyroll", m.popular().slice(0, 10), { ranked: true, sub: "Most popular right now" })}
-    ${m.rail("New and airing", m.fresh().slice(0, 14), { href: "#airing" })}
-    ${m.rail("Your plan to watch", m.inStatus("plan"), { href: "#list/plan" })}
-    ${m.rail("Highest rated", m.rated().filter((s) => !m.entry(s)).slice(0, 14), { href: "#browse" })}`;
+    ${m.rail("Top 10 on Crunchyroll", pool(m.popular()).slice(0, 10), { ranked: true, sub: "Most popular right now" })}
+    ${m.rail("New and airing", pool(m.fresh()).slice(0, 14), { href: "#airing" })}
+    ${m.rail("Your plan to watch", pool(m.inStatus("plan")), { href: "#list/plan" })}
+    ${m.rail("Highest rated", pool(m.rated().filter((s) => !m.entry(s))).slice(0, 14), { href: "#browse" })}`;
 }
 
 function setAmbient(url) {
@@ -90,6 +91,7 @@ function setAmbient(url) {
 }
 
 function heroTag(s, row) {
+  if (row.exclusive || row.service) return row.reason || `Only on ${row.service}`;
   if (row.ai) return "Picked for you by AI";
   if (row.trend === 0) return "Most popular on Crunchyroll";
   if (s.fresh) return "New on Crunchyroll";
@@ -154,6 +156,16 @@ function heroCopy(s) {
 // The next slide's art fades in on its own layer over the last one, which fades out and is then removed.
 const FADE_MS = 1200;
 function crossfade(hero, url) {
+  // Performance mode: one layer, no stacked fades.
+  if (m.prefs().reduce) {
+    for (const layer of hero.querySelectorAll(".hero-bg.out")) layer.remove();
+    const layer = hero.querySelector(".hero-bg:not(.out)") || hero.querySelector(".hero-bg");
+    if (layer) {
+      layer.style.backgroundImage = bgUrl(url);
+      layer.classList.add("on");
+    }
+    return;
+  }
   const old = [...hero.querySelectorAll(".hero-bg:not(.out)")];
   const next = document.createElement("div");
   next.className = "hero-bg";
@@ -175,10 +187,10 @@ function showSlide(i) {
   if (!s) return;
   const prefs = m.prefs();
   const withVideo = Boolean(prefs.previews && !prefs.reduce && s.trailer);
-  heroPlayer?.destroy({ fade: FADE_MS }); heroPlayer = null;
+  heroPlayer?.destroy({ fade: prefs.reduce ? 0 : FADE_MS }); heroPlayer = null;
   crossfade(hero, m.artOf(s));
   const copy = hero.querySelector(".hero-copy");
-  copy.style.animation = "none"; void copy.offsetWidth; copy.style.animation = "";
+  if (!prefs.reduce) { copy.style.animation = "none"; void copy.offsetWidth; copy.style.animation = ""; }
   copy.innerHTML = heroCopy(s);
   fitHeroCopy(hero);
   showPage(hero, pageOf(slide));
@@ -239,8 +251,9 @@ function palette(open) {
     box.addEventListener("click", (e) => { if (e.target === box) palette(false); });
     box.querySelector("input").addEventListener("input", () => {
       clearTimeout(suggestTimer);
-      paintPalette(null);
-      suggestTimer = setTimeout(suggest, 120);
+      const q = box.querySelector("input").value.trim();
+      paintPalette(q ? null : []);
+      if (q) suggestTimer = setTimeout(suggest, 120);
     });
     box.querySelector("input").addEventListener("keydown", (e) => {
       if (e.key === "Enter") box.querySelector(".kpal-item.sel")?.click();
@@ -266,21 +279,39 @@ async function suggest() {
   const ids = reply?.ok ? (reply.suggestions || []).map((row) => String(row.id).replace(/^sight:/, "")) : [];
   paintPalette(ids.map((id) => m.byId.get(id)).filter(Boolean));
 }
+const kpalLoaderHtml = (label = "Looking up…") => `<div class="kpal-loader" role="status" aria-live="polite" aria-label="${m.esc(label)}">
+  <svg class="kpal-loader-mark" viewBox="0 0 68 68" aria-hidden="true">
+    <circle class="kpal-loader-ring" cx="34" cy="34" r="22"/>
+    <circle class="kpal-loader-arc" cx="34" cy="34" r="22"/>
+    <circle class="kpal-loader-globe" cx="34" cy="34" r="14"/>
+    <ellipse class="kpal-loader-meridian" cx="34" cy="34" rx="6" ry="14"/>
+    <path class="kpal-loader-meridian" d="M20 34h28"/>
+    <g class="kpal-loader-slash"><path d="M23 42L45 26"/><circle cx="45" cy="26" r="2.8"/></g>
+  </svg>
+  <span>${m.esc(label)}</span>
+</div>`;
+
 // hits: shows to list, or null while the title lookup is still running.
 function paintPalette(hits) {
   const box = document.querySelector(".kpal");
   const q = box.querySelector("input").value.trim();
   const list = box.querySelector(".kpal-list");
-  if (hits === null && list.dataset.q === q) return;
+  if (hits === null && list.dataset.q === q && list.querySelector(".kpal-loader")) return;
   list.dataset.q = q;
   const shows = q ? hits || [] : m.inStatus("watching").slice(0, 6);
   const ai = m.aiOn();
   const sub = (s) => `${m.entry(s) ? m.STATUS[m.entry(s).status] : m.esc(s.genres.slice(0, 2).join(" · ")) || (s.type === "movie" ? "Movie" : "Series")} · ★ ${m.score(s)}`;
+  if (q && hits === null) {
+    list.innerHTML = `
+      <h6>${ai ? "Ask AI" : "Search"}</h6><div class="kpal-item kpal-ask sel" data-go="#search?q=${encodeURIComponent(q)}"><span>${m.icon(ai ? "sparkle" : "search")}</span><div><b>Find shows like “${m.esc(q)}”</b><small>${ai ? "Search with AI ranking and a short “why” for each pick" : "Search by mood, tags and description. AI is off"}</small></div></div>
+      <h6>Titles</h6>${kpalLoaderHtml("Looking up…")}`;
+    return;
+  }
   list.innerHTML = `
     ${q ? `<h6>${ai ? "Ask AI" : "Search"}</h6><div class="kpal-item kpal-ask sel" data-go="#search?q=${encodeURIComponent(q)}"><span>${m.icon(ai ? "sparkle" : "search")}</span><div><b>Find shows like “${m.esc(q)}”</b><small>${ai ? "Search with AI ranking and a short “why” for each pick" : "Search by mood, tags and description. AI is off"}</small></div></div>` : ""}
     ${!q && !shows.length ? "" : `<h6>${q ? "Titles" : "Continue watching"}</h6>`}
     ${shows.map((s, i) => `<div class="kpal-item ${!q && i === 0 ? "sel" : ""}" data-go="#show/${encodeURIComponent(s.id)}">${m.posterImg(s)}<div><b>${m.esc(s.title)}</b><small>${sub(s)}</small></div>${m.icon("right")}</div>`).join("")
-      || (q ? `<p class="muted kpal-note">${hits === null ? "Looking…" : `No titles match. Press Enter to ${ai ? "ask AI" : "search by description"}.`}</p>` : "")}
+      || (q ? `<p class="muted kpal-note">No titles match. Press Enter to ${ai ? "ask AI" : "search by description"}.</p>` : "")}
     ${q ? "" : `<h6>Go to</h6>${[["#search", ai ? "Search and AI picks" : "Search", ai ? "sparkle" : "search"], ["#browse", "Browse by genre", "compass"], ["#airing", "Airing this week", "calendar"], ["#list", "My list", "list"], ["#settings", "Appearance and settings", "palette"]].map(([h, t, ic]) => `<div class="kpal-item kpal-ask kpal-go ${!shows.length && h === "#search" ? "sel" : ""}" data-go="${h}"><span>${m.icon(ic)}</span><div><b>${t}</b></div></div>`).join("")}`}`;
 }
 

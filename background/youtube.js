@@ -59,7 +59,8 @@ function catalogLinks(state, catalog, media) {
 
 // The viewer's YouTube titles: playable in their country, and not a show (or a season of one) Crunchyroll has.
 export async function youtubeFor(state, catalog, media = null) {
-  if (state.settings?.youtubeTitles === false) return [];
+  // Opt-in only; no Settings control yet, so this stays off.
+  if (state.settings?.youtubeTitles !== true) return [];
   const stored = (await chrome.storage.local.get(YOUTUBE_KEY))[YOUTUBE_KEY];
   if (!stored?.feed?.shows?.length) return [];
   const country = countryOf(catalog.locale);

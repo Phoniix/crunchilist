@@ -5,7 +5,11 @@ import {
   displayPoster,
   promptFallbackBrief,
 } from "../lib/catalog.js";
-import { tasteMatches } from "../lib/banner.js";
+import { availability } from "../lib/catalogs.js";
+import { catalogOnlyShows } from "../lib/catalog-shows.js";
+import { pickPlayLink } from "../lib/play-url.js";
+import { serviceById } from "../lib/services.js";
+import { FOR_YOU_PICKS_TTL_MS, tasteMatches } from "../lib/banner.js";
 import { activitySignature, buildHomeRowsPrompt, cleanNudge, expiryFor, fallbackThemes, fillThemes, HOME_ROWS_SCHEMA, HOME_ROWS_TTL_MS, needsRefresh, parseHomeRows } from "../lib/home-rows.js";
 import { cleanSearches, inspiredRequest, interleave, recentlyWatched } from "../lib/inspired.js";
 import { activeEntries, statusForSeries } from "../lib/library.js";
@@ -15,9 +19,11 @@ import { remoteSignature } from "../lib/settings.js";
 import { buildIndex, docFromShow, searchIndex } from "../lib/search-index.js";
 import { allowedByTaste, buildWeights, compactProfile, scoreLabels } from "../lib/taste.js";
 import { applyStoredCovers, currentToken, liveSearch, validBearer } from "./catalog-sync.js";
+import { loadServiceCatalogs } from "./catalog-store.js";
+import { loadDead } from "./dead-links.js";
 import { askJson, pickWithModel } from "./model.js";
-import { loadCatalog, loadState } from "./store.js";
-import { youtubeFor } from "./youtube.js";
+import { loadCatalog, loadMedia, loadState } from "./store.js";
+import { loadGaps } from "./where-map-store.js";
 
 const CATALOG_CHIPS = new Set(["unwatched", "one-cour", "long", "movie", "in-progress", "plan", "new"]);
 const PROMPT_CANDIDATES = 20;
@@ -27,30 +33,48 @@ const RERANK_CACHE_LIMIT = 40;
 const PAGE_SIZE = 24;
 
 const cachedIndexes = { all: { key: "", index: null, docs: [] }, crunchyroll: { key: "", index: null, docs: [] } };
+let extrasCache = { key: "", items: [] };
 
-// The Crunchyroll catalog, plus free YouTube titles unless the search is limited to Crunchyroll.
-// YouTube items go after every Crunchyroll title, so Popular and New releases stay Crunchyroll's.
-async function searchCatalog(state, site = "all") {
-  const catalog = await loadCatalog();
-  if (site === "crunchyroll") return catalog;
-  const extra = await youtubeFor(state, catalog);
-  if (!extra.length) return catalog;
-  return { ...catalog, items: [...catalog.items, ...extra], youtubeKey: `${extra.length}:${extra[0].id}:${extra.at(-1).id}` };
+async function searchCatalog(_state, _site = "all") {
+  return loadCatalog();
+}
+
+// Non-CR catalog/gap titles with enough AniList text to mood-search, keyed like Browse (`al-{id}`).
+async function catalogExtras(state) {
+  await loadSourceMap();
+  const [media, catalog] = await Promise.all([loadMedia(), loadCatalog()]);
+  // Bust when availability or media enrichment changes so al-* docs pick up genres/about.
+  const stamp = `${sourcesCache.key}:m${Object.keys(media).length}`;
+  if (extrasCache.key === stamp) return extrasCache.items;
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = [...new Set(["crunchyroll", ...Object.keys(catalogs).filter((id) => catalogs[id]?.links)])];
+  const found = availability(catalogs, connected, { gaps, dead });
+  const already = new Set();
+  for (const item of [...(catalog.items || []), ...(catalog.newest || [])]) {
+    const hit = item?.id ? readCache(state.anilistCache, cacheKeyForSeries(item.id), Date.now()) : null;
+    const id = hit?.kind === "hit" ? hit.anilistId : item?.anilistId;
+    if (id) already.add(Number(id));
+  }
+  const items = catalogOnlyShows(found, media, already, { enrich: true });
+  extrasCache = { key: stamp, items };
+  return items;
 }
 
 function hitFor(state, item) {
   if (item.hit) return item.hit;
+  if (String(item?.id || "").startsWith("al-")) return null;
   const hit = readCache(state.anilistCache, cacheKeyForSeries(item.id), Date.now());
   return hit?.kind === "hit" ? hit : null;
 }
 
 function labelsFor(state, item) {
   const hit = hitFor(state, item);
-  return hit ? [...(hit.genres || []), ...(hit.tags || [])] : [];
+  if (hit) return [...(hit.genres || []), ...(hit.tags || [])];
+  return [...(item.genres || []), ...(item.tags || [])];
 }
 
 function posterFor(state, item) {
-  return displayPoster(item) || hitFor(state, item)?.cover || "";
+  return displayPoster(item) || hitFor(state, item)?.cover || item.cover || "";
 }
 
 function withShowFacts(state, item) {
@@ -67,27 +91,58 @@ function statusFor(state, item) {
   return statusForSeries(state.library, item.id, hitFor(state, item)?.anilistId || item.anilistId);
 }
 
-function docFor(state, item) {
+let sourcesCache = { key: "", map: new Map() };
+
+async function loadSourceMap() {
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = [...new Set(["crunchyroll", ...Object.keys(catalogs).filter((id) => catalogs[id]?.links)])];
+  const stamp = `${Object.keys(gaps || {}).length}:${connected.map((id) => `${id}${catalogs[id]?.at || 0}`).join(",")}:${Object.keys(dead || {}).length}`;
+  if (sourcesCache.key === stamp) return sourcesCache.map;
+  const found = availability(catalogs, connected, { gaps, dead });
+  const map = new Map();
+  for (const [anilistId, links] of Object.entries(found)) {
+    const id = Number(anilistId);
+    if (!Number.isInteger(id) || !links?.length) continue;
+    map.set(id, [...new Set(links.map((link) => link.service).filter(Boolean))]);
+  }
+  sourcesCache = { key: stamp, map };
+  return map;
+}
+
+function sourcesFor(state, item, sourceMap) {
   const hit = hitFor(state, item);
+  const anilistId = hit?.anilistId || item.anilistId || null;
+  const fromMap = anilistId ? sourceMap.get(Number(anilistId)) || [] : [];
+  const base = item.sources?.length
+    ? item.sources
+    : String(item?.id || "").startsWith("al-")
+      ? []
+      : ["crunchyroll"];
+  return [...new Set([...base, ...fromMap])];
+}
+
+function docFor(state, item, sourceMap = sourcesCache.map) {
+  const hit = hitFor(state, item);
+  const sources = sourcesFor(state, item, sourceMap);
   return docFromShow({
     id: item.id,
     title: item.title,
     type: item.type,
     episodes: hit?.episodes || item.episodes || null,
     anilistId: hit?.anilistId || item.anilistId || null,
-    titles: hit?.titles,
+    titles: hit?.titles || (item.romaji || item.native ? { romaji: item.romaji, native: item.native, english: item.title } : undefined),
     synonyms: hit?.synonyms,
-    genres: hit?.genres,
-    tags: hit?.tags,
+    genres: hit?.genres || item.genres,
+    tags: hit?.tags || item.tags,
     hiddenTags: hit?.hiddenTags,
     tagRanks: hit?.tagRanks,
-    about: hit?.about || "",
-    format: hit?.format,
-    year: hit?.year,
-    score: hit?.score,
-    popularity: hit?.popularity,
-    sources: [item.source === "youtube" ? "youtube" : "crunchyroll"],
-    item,
+    about: hit?.about || item.about || "",
+    format: hit?.format || item.format,
+    year: hit?.year || item.year,
+    score: hit?.score ?? item.score,
+    popularity: hit?.popularity ?? item.popularity,
+    sources,
+    item: { ...item, sources },
   });
 }
 
@@ -101,32 +156,30 @@ function cacheStamp(cache) {
   return `${count}:${latest}`;
 }
 
-function indexFor(state, catalog, pool) {
-  const key = `${catalog.updatedAt}:${catalog.items.length}:${catalog.newest.length}:${cacheStamp(state.anilistCache)}:${catalog.youtubeKey || ""}`;
-  // Crunchyroll-only searches keep an index without the YouTube titles, so their ranking is exactly as before.
-  const slot = catalog.youtubeKey ? "all" : "crunchyroll";
-  let cached = cachedIndexes[slot];
+function indexFor(state, catalog, pool, sourceMap = sourcesCache.map) {
+  const key = `${catalog.updatedAt}:${catalog.items.length}:${catalog.newest.length}:${cacheStamp(state.anilistCache)}:${sourcesCache.key}`;
+  let cached = cachedIndexes.crunchyroll;
   if (cached.key !== key) {
     const seen = new Set();
     const docs = [];
     for (const item of [...catalog.items, ...catalog.newest]) {
       if (!item?.id || seen.has(item.id)) continue;
       seen.add(item.id);
-      docs.push(docFor(state, item));
+      docs.push(docFor(state, item, sourceMap));
     }
-    cached = cachedIndexes[slot] = { key, index: buildIndex(docs), docs };
+    cached = cachedIndexes.crunchyroll = { key, index: buildIndex(docs), docs };
   }
   const extras = (pool || []).filter((item) => item?.id && !cached.index.byId.has(item.id));
   if (!extras.length) return cached.index;
-  return buildIndex([...cached.docs, ...extras.map((item) => docFor(state, item))]);
+  return buildIndex([...cached.docs, ...extras.map((item) => docFor(state, item, sourceMap))]);
 }
 
 function siteAllowed(doc, site) {
   return !site || site === "all" || (doc.sources || []).includes(site);
 }
 
-function rankPool(state, catalog, pool, text, { scoreFor, mode = "full", limit = 24, site = "" } = {}) {
-  const index = indexFor(state, catalog, pool);
+function rankPool(state, catalog, pool, text, { scoreFor, mode = "full", limit = 24, site = "", sourceMap } = {}) {
+  const index = indexFor(state, catalog, pool, sourceMap);
   const allowedIds = new Set(pool.map((item) => item.id));
   return searchIndex(index, parseQuery(text), {
     scoreFor: (doc) => scoreFor(doc.item),
@@ -136,6 +189,11 @@ function rankPool(state, catalog, pool, text, { scoreFor, mode = "full", limit =
     mode,
     limit,
   }).results;
+}
+
+function filterPoolBySite(state, pool, site, sourceMap) {
+  if (!site || site === "all") return pool;
+  return pool.filter((item) => sourcesFor(state, item, sourceMap).includes(site));
 }
 
 function withoutAvoids(state, items) {
@@ -180,20 +238,23 @@ function rerollItems(state, catalog, scoreFor, seen, last) {
 
 function presentCatalogItem(state, item) {
   const status = statusFor(state, item);
-  const movie = item.type === "movie" || hitFor(state, item)?.format === "MOVIE";
+  const movie = item.type === "movie" || hitFor(state, item)?.format === "MOVIE" || item.format === "MOVIE";
   const tags = [movie ? "Movie" : "Series"];
   if (item.episodes && !movie) tags.push(`${item.episodes} eps`);
-  if (item.source === "youtube") tags.push("Free on YouTube");
+  const sources = sourcesFor(state, item, sourcesCache.map);
+  const names = sources.map((id) => serviceById(id)?.name || (id[0].toUpperCase() + id.slice(1)));
+  const where = names.length ? names.join(" · ") : "Crunchyroll";
+  // Prefer ranked catalog/gap play URL (same as Prism) when streaming rows exist.
+  const play = item.streaming?.length ? pickPlayLink(item) : null;
   return {
     id: `sight:${item.id}`,
     title: item.title,
-    url: item.url,
-    reason: item.source === "youtube"
-      ? `Free on YouTube${item.youtube?.channel ? ` from ${item.youtube.channel}` : ""}.`
-      : item.type === "movie" ? "Movie on Crunchyroll." : item.episodes ? `${item.episodes} episodes on Crunchyroll.` : "On Crunchyroll.",
+    url: play?.url || item.url || "",
+    reason: item.type === "movie" || movie ? `Movie on ${where}.` : item.episodes ? `${item.episodes} episodes on ${where}.` : `On ${where}.`,
     tags,
+    sources,
     status: status === "unwatched" ? null : status,
-    poster: posterFor(state, item),
+    poster: posterFor(state, item) || item.cover || "",
   };
 }
 
@@ -210,10 +271,11 @@ function presentSuggestion(state, item, forYou, weights) {
 
 function candidateFromCatalogItem(state, item) {
   const matched = hitFor(state, item);
+  const play = item.streaming?.length ? pickPlayLink(item) : null;
   return {
     id: `sight:${item.id}`,
     title: item.title,
-    url: item.url,
+    url: play?.url || item.url || "",
     status: statusFor(state, item),
     episodes: matched?.episodes ?? item.episodes ?? null,
     format: matched?.format || (item.type === "movie" ? "MOVIE" : null),
@@ -255,7 +317,7 @@ function mergePreferCatalog(savedItems, liveItems) {
   return [...map.values()];
 }
 
-async function collectSearchItems(state, catalog, text, chip, live) {
+async function collectSearchItems(state, catalog, text, chip, live, { includeExtras = true } = {}) {
   const catalogChip = CATALOG_CHIPS.has(chip) ? chip : "";
   let base = chip === "new" ? (catalog.newest || []) : (catalog.items || []);
   if (live && String(text || "").trim().length >= 2) {
@@ -272,6 +334,11 @@ async function collectSearchItems(state, catalog, text, chip, live) {
     }
   }
   base = base.map((item) => withShowFacts(state, item));
+  // Mood / browse / platform chips: fold in enriched non-CR catalog titles.
+  if (includeExtras && chip !== "new") {
+    const extras = await catalogExtras(state);
+    base = mergePreferCatalog(base, extras);
+  }
   const byId = new Map(base.map((item) => [item.id, item]));
   return withoutAvoids(state, applyCatalogChip(
     base,
@@ -301,9 +368,10 @@ function continueFromCatalog(state, catalog) {
 function presentResult(state, item, forYou, weights) {
   const presented = presentSuggestion(state, item, forYou, weights);
   const hit = hitFor(state, item);
-  const snippet = promptFallbackBrief(item, "", [], hit?.about || "");
+  const about = hit?.about || item.about || "";
+  const snippet = promptFallbackBrief(item, "", [], about);
   if (snippet) presented.reason = snippet;
-  presented.tags = [...presented.tags, ...(hit?.genres || []).slice(0, 3)];
+  presented.tags = [...presented.tags, ...(hit?.genres || item.genres || []).slice(0, 3)];
   return presented;
 }
 
@@ -348,16 +416,21 @@ function sortItems(state, items, sort) {
 let lastList = { key: "", at: 0, items: [], rerank: false };
 const LIST_TTL_MS = 120_000;
 
-async function orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor) {
-  const key = JSON.stringify([text, chip, site, sort, tags, without, catalog.updatedAt, catalog.youtubeKey || "", state.settings.hideWatched, state.settings.favorNamed]);
+async function orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor, sourceMap) {
+  const key = JSON.stringify([text, chip, site, sort, tags, without, catalog.updatedAt, state.settings.hideWatched, state.settings.favorNamed, sourcesCache.key]);
   if (offset > 0 && lastList.key === key && Date.now() - lastList.at < LIST_TTL_MS) return lastList;
   const forYou = forYouIdsFor(state, catalog, scoreFor);
   const skip = text ? [...new Set([...without, ...parseQuery(text).without])] : without;
-  const pool = (await collectSearchItems(state, catalog, text, chip, offset === 0)).filter((item) => hasTags(state, item, tags, skip));
+  const pool = filterPoolBySite(
+    state,
+    (await collectSearchItems(state, catalog, text, chip, offset === 0)).filter((item) => hasTags(state, item, tags, skip)),
+    site,
+    sourceMap,
+  );
   let items;
   let rerank = false;
   if (text) {
-    const ranked = rankPool(state, catalog, pool, text, { scoreFor, limit: 2000, site });
+    const ranked = rankPool(state, catalog, pool, text, { scoreFor, limit: 2000, site, sourceMap });
     items = ranked.map((entry) => entry.doc.item);
     const parsed = parseQuery(text);
     const words = text.split(/\s+/).filter(Boolean).length;
@@ -371,6 +444,7 @@ async function orderedItems(state, catalog, { text, chip, site, sort, tags, with
 
 export async function catalogSearch(query, chip, site = "", options = {}) {
   const state = await loadState();
+  const sourceMap = await loadSourceMap();
   const catalog = await searchCatalog(state, site);
   const text = String(query || "").trim();
   const sort = ["popular", "score", "newest", "title", "shortest", "longest"].includes(options.sort) ? options.sort : "relevance";
@@ -407,7 +481,7 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
     };
   }
   const forYou = forYouIdsFor(state, catalog, scoreFor);
-  const list = await orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor);
+  const list = await orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor, sourceMap);
   const chosen = list.items.slice(offset, offset + limit);
   const total = list.items.length;
   let note = "";
@@ -422,7 +496,8 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
     total,
     offset,
     hasMore: offset + chosen.length < total,
-    rerank: offset === 0 && list.rerank,
+    // Empty-query browse (platform chips, etc.) never asks AI to rerank.
+    rerank: offset === 0 && list.rerank && Boolean(text),
     note,
     notice: "",
   };
@@ -432,11 +507,12 @@ export async function catalogSuggest(query, chip, site = "") {
   const text = String(query || "").trim();
   if (!text) return { suggestions: [] };
   const state = await loadState();
+  const sourceMap = await loadSourceMap();
   const catalog = await searchCatalog(state, site);
   const { weights, scoreFor } = tasteRank(state);
   const forYou = forYouIdsFor(state, catalog, scoreFor);
-  const pool = await collectSearchItems(state, catalog, text, chip, false);
-  const chosen = rankPool(state, catalog, pool, text, { scoreFor, mode: "title", limit: 6, site }).map((entry) => entry.doc.item);
+  const pool = filterPoolBySite(state, await collectSearchItems(state, catalog, text, chip, false), site, sourceMap);
+  const chosen = rankPool(state, catalog, pool, text, { scoreFor, mode: "title", limit: 6, site, sourceMap }).map((entry) => entry.doc.item);
   return { suggestions: chosen.map((item) => presentSuggestion(state, item, forYou, weights)) };
 }
 
@@ -488,7 +564,8 @@ export async function catalogRerank(query, chip, site, ids, options = {}) {
   const state = await loadState();
   if (state.settings.useAi === false) return { results: [], off: true, note: "AI features are off." };
   const catalog = await searchCatalog(state, site);
-  const byId = new Map([...catalog.items, ...catalog.newest].map((item) => [item.id, item]));
+  const extras = await catalogExtras(state);
+  const byId = new Map([...catalog.items, ...catalog.newest, ...extras].map((item) => [item.id, item]));
   const rowItems = bareIds(ids).slice(0, PROMPT_CANDIDATES).map((id) => byId.get(id)).filter(Boolean);
   const { weights, scoreFor } = tasteRank(state);
   const reroll = Boolean(options.reroll) && !request;
@@ -680,7 +757,6 @@ export async function homeRows(searches, { ai = true, fresh = false, nudge } = {
 
 const rerankInFlight = new Map();
 const FOR_YOU_PICKS_KEY = "crForYouPicks";
-const FOR_YOU_PICKS_TTL_MS = 12 * 60 * 60_000;
 
 async function readForYouPicks(key) {
   try {
@@ -689,6 +765,26 @@ async function readForYouPicks(key) {
     return Array.isArray(saved.results) ? saved : null;
   } catch {
     return null;
+  }
+}
+
+// Latest Picked for you ranking for Home to paint before catalogSearch finishes.
+// fresh: within the weekly TTL; expired picks are still returned so the row isn’t blank while refreshing.
+export async function forYouPicksCache() {
+  try {
+    const saved = (await chrome.storage.local.get(FOR_YOU_PICKS_KEY))[FOR_YOU_PICKS_KEY];
+    if (!saved || !Array.isArray(saved.results) || !saved.results.length) return { ok: true, picks: null };
+    const age = Date.now() - Number(saved.savedAt || 0);
+    return {
+      ok: true,
+      picks: saved.results,
+      by: saved.by || "",
+      savedAt: saved.savedAt || 0,
+      fresh: age >= 0 && age <= FOR_YOU_PICKS_TTL_MS,
+      expired: age > FOR_YOU_PICKS_TTL_MS,
+    };
+  } catch {
+    return { ok: true, picks: null };
   }
 }
 

@@ -13,9 +13,25 @@ import {
   toAnilistStatus,
 } from "../lib/anilist.js";
 import { applySynced, linkCatalog, mergeAnilistList, pendingSync, setEntryProgress, setEntryStatus } from "../lib/library.js";
+import { KEYS } from "../lib/keys.js";
 import { anilistSession, applySettingsPatch, validateClientId, validateClientSecret } from "../lib/settings.js";
 import { catalogPairs } from "./catalog-sync.js";
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
+
+function mirrorAnilistSession({ token, expiresAt, viewer }) {
+  return chrome.storage.local.set({
+    [KEYS.session]: {
+      token,
+      expiresAt,
+      viewer: {
+        id: viewer.id,
+        name: viewer.name || "",
+        avatar: viewer.avatar?.medium || viewer.avatar?.large || "",
+      },
+      connectedAt: Date.now(),
+    },
+  });
+}
 
 async function saveListEntry(token, input) {
   const variables = { mediaId: input.mediaId, status: input.status };
@@ -124,6 +140,9 @@ export function syncActivity() {
     id: "sync",
     label: "Syncing changes to AniList",
     progress: backgroundProgress.done / backgroundProgress.total,
+    done: backgroundProgress.done,
+    total: backgroundProgress.total,
+    service: "global",
   };
 }
 
@@ -367,6 +386,8 @@ export async function connectAnilist({ token, expiresIn, clientId }) {
   };
   const imported = await pullAccountList(state);
   await saveState(state);
+  // Keep importer / Search-style helpers on the same token as main settings.
+  await mirrorAnilistSession({ token, expiresAt, viewer });
   return { state, imported, viewerName: viewer.name };
 }
 
@@ -380,6 +401,7 @@ export async function disconnectAnilist() {
     anilistViewerName: "",
   };
   await saveState(state);
+  await chrome.storage.local.remove(KEYS.session);
   return { state };
 }
 

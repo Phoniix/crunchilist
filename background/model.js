@@ -311,7 +311,8 @@ async function modelRecentlyStalled(span = MODEL_STALL_RETRY_MS) {
 }
 
 async function preloadChromeModel(state) {
-  if (hasRemote(state.settings) || state.settings.useAi === false) return "";
+  // Performance mode skips background model downloads; the user can still opt in by turning AI on after.
+  if (hasRemote(state.settings) || state.settings.useAi === false || state.settings.liteMode) return "";
   const status = await chromeModelStatus();
   if (status !== "downloadable" && status !== "downloading") return status;
   if (chromeModelDownload || await modelRecentlyStalled(MODEL_PRELOAD_RETRY_MS)) return status;

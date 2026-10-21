@@ -14,13 +14,23 @@ const esbuild = (args) => execSync(["npx --yes esbuild", ...args, "--bundle --ta
 export async function build() {
   await rm(BUILD, { recursive: true, force: true });
   await mkdir(BUILD, { recursive: true });
-  esbuild(["src/background/service-worker.js", "src/app/app.js", "--format=esm", "--outbase=src", `--outdir=${path.relative(SEARCH, BUILD)}`]);
+  esbuild(["src/background/service-worker.js", "src/app/app.js", "src/popup/popup.js", "--format=esm", "--outbase=src", `--outdir=${path.relative(SEARCH, BUILD)}`]);
   const content = (await readdir(path.join(SRC, "content"))).filter((file) => file.endsWith(".js")).map((file) => `src/content/${file}`);
   if (content.length) esbuild([...content, "--format=iife", "--outbase=src", `--outdir=${path.relative(SEARCH, BUILD)}`]);
-  for (const file of ["app/app.html", "app/app.css"]) await cp(path.join(SRC, file), path.join(BUILD, file));
+  for (const file of ["app/app.html", "app/app.css", "app/prism.css", "app/privacy.html", "popup/popup.html", "popup/popup.css"]) {
+    await cp(path.join(SRC, file), path.join(BUILD, file)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
+  await cp(path.join(SRC, "app", "guide"), path.join(BUILD, "app", "guide"), { recursive: true, force: true }).catch((error) => { if (error.code !== "ENOENT") throw error; });
   await mkdir(path.join(BUILD, "icons"), { recursive: true });
-  for (const size of [16, 32, 48, 128]) await cp(path.join(ROOT, "icons", `icon${size}.png`), path.join(BUILD, "icons", `icon${size}.png`));
+  for (const name of [16, 32, 48, 128].map((size) => `icon${size}.png`).concat("crunchilist-logo.svg")) await cp(path.join(ROOT, "icons", name), path.join(BUILD, "icons", name));
+  await mkdir(path.join(BUILD, "fonts"), { recursive: true });
+  for (const name of ["inter-latin.woff2", "sora-latin.woff2", "nunito-latin.woff2", "OFL.txt"]) await cp(path.join(ROOT, "fonts", name), path.join(BUILD, "fonts", name));
+  await mkdir(path.join(BUILD, "feeds"), { recursive: true });
+  for (const name of ["where-map.json", "where-map-meta.json"]) {
+    await cp(path.join(SEARCH, "feeds", name), path.join(BUILD, "feeds", name)).catch((error) => { if (error.code !== "ENOENT") throw error; });
+  }
   const manifest = JSON.parse(await readFile(path.join(SEARCH, "manifest.json"), "utf8"));
+  // Packaged gap map is read with chrome.runtime.getURL — web_accessible not required for extension pages / SW.
   await writeFile(path.join(BUILD, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }

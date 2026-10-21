@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanSearches, inspiredRequest, interleave, recentlyWatched, rememberSearch } from "../lib/inspired.js";
+import { INSPIRED_SEARCHES, RECENT_LIMIT, SEARCH_HISTORY_LIMIT, VISIBLE_SEARCHES, cleanSearches, inspiredRequest, interleave, recentlyWatched, rememberSearch } from "../lib/inspired.js";
+
+test("visible recent searches and Inspired AI share a cap of 5", () => {
+  assert.equal(VISIBLE_SEARCHES, 5);
+  assert.equal(RECENT_LIMIT, 5);
+  assert.equal(INSPIRED_SEARCHES, 5);
+  assert.ok(SEARCH_HISTORY_LIMIT > VISIBLE_SEARCHES);
+});
 
 test("remembering a search puts it first, drops repeats ignoring case and caps the list", () => {
   let list = [];

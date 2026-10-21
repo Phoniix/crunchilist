@@ -1,0 +1,28 @@
+html, body { margin: 0; background: #100e0c; color: #f7efe9; }
+body { width: 360px; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+button, input { font: inherit; }
+.pp { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: radial-gradient(280px 160px at 0% 0%, rgba(255,122,47,.16), transparent 70%), #100e0c; }
+.pp-head { display: flex; align-items: center; gap: 10px; }
+.pp-head img { width: 28px; height: 28px; }
+.pp-head .grow { flex: 1; min-width: 0; }
+.pp-head b { display: block; font-size: 14px; }
+.pp-head small, .muted { color: #ab9a8f; }
+.pp-link { border: 0; border-radius: 8px; background: #271f1b; color: #f7efe9; padding: 6px 10px; cursor: pointer; }
+.pp-link:hover { background: #342a25; }
+.pp-search input { width: 100%; box-sizing: border-box; height: 38px; border-radius: 10px; border: 1px solid #342a25; background: #1c1714; color: #f7efe9; padding: 0 12px; }
+.pp-search input:focus { outline: 2px solid rgba(255,122,47,.45); border-color: #ff7a2f; }
+.pp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pp-chip { border: 1px solid #342a25; background: #1c1714; color: #f7efe9; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+.pp-chip.on { border-color: transparent; color: #1a0d05; font-weight: 700; }
+.pp-only { display: flex; align-items: center; gap: 8px; color: #ab9a8f; }
+.pp-block h6, .pp-results h6 { margin: 0 0 6px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #ab9a8f; }
+.pp-item { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; border-radius: 10px; background: #1c1714; color: inherit; padding: 8px; cursor: pointer; text-decoration: none; box-sizing: border-box; margin-bottom: 6px; }
+.pp-item:hover { background: #271f1b; }
+.pp-item img { width: 40px; height: 56px; object-fit: cover; border-radius: 6px; background: #271f1b; }
+.pp-item b { display: block; font-size: 13px; }
+.pp-item small { color: #ab9a8f; }
+.pp-go { border: 0; border-radius: 8px; padding: 6px 8px; background: #ff7a2f; color: #1a0d05; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.pp-line { margin: 0; padding: 8px 10px; border-radius: 10px; background: #1c1714; border: 1px solid #342a25; color: #d9cfc6; font-size: 12px; line-height: 1.45; }
+.pp-line b { color: #ff7a2f; margin-right: 6px; }
+.pp-foot { margin: 0; font-size: 12px; }
+.pp-results { max-height: 320px; overflow: auto; }

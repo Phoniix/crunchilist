@@ -1,23 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-palette="ember" data-mode="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Crunchilist Search</title>
   <link rel="icon" href="../icons/icon32.png">
+  <link rel="stylesheet" href="prism.css">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header class="top">
-    <a class="brand" href="#search"><img src="../icons/icon32.png" alt=""><span>Crunchilist Search</span></a>
-    <nav class="nav" aria-label="Main">
-      <a href="#search" data-page="search">Search</a>
-      <a href="#import" data-page="import">Import</a>
-      <a href="#settings" data-page="settings">Settings</a>
-    </nav>
-  </header>
+  <div id="nav"></div>
   <main id="main" tabindex="-1"></main>
-  <div class="toast" role="status" aria-live="polite" hidden></div>
+  <div class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

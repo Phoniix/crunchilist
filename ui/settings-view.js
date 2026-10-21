@@ -85,9 +85,24 @@ export const SETTINGS_CSS = `
   .st-link { margin-left: auto; color: var(--accent-text); font: 700 12.5px/1.2 ${ROUNDED}; text-decoration: none; }
   .st-link:hover { text-decoration: underline; }
   .st-provider + .switch, .st-actions + .switch { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .st-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .st-seg button {
+    border: 0; border-radius: 9px; padding: 7px 12px; cursor: pointer;
+    background: transparent; color: var(--muted); font: 700 12.5px/1.2 ${ROUNDED};
+    position: relative; z-index: 0;
+  }
+  .st-seg button.is-on {
+    background: var(--accent);
+    /* Contrast on the fill — not --accent-text (that tracks the accent hue in Prism embeds). */
+    color: var(--on-accent, var(--p-on-accent, #1a0d05));
+    z-index: 1;
+  }
+  .st-seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .st-card.is-soon { opacity: .55; pointer-events: none; }
+  .st-soon { margin: 0; color: var(--faint); font: 700 11.5px/1.3 ${ROUNDED}; letter-spacing: .06em; text-transform: uppercase; }
 `;
 
-export function createSettingsView({ send, onView = () => {}, pageContext = false, extras = [] } = {}) {
+export function createSettingsView({ send, onView = () => {}, pageContext = false, extras = [], section = null } = {}) {
   let view = null;
   let catalogPoll = 0;
   const focused = () => root.getRootNode()?.activeElement || document.activeElement;
@@ -162,7 +177,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
     return { provider, input, remove, state, row };
   });
   service.addEventListener("change", () => act("setSettings", { patch: { aiService: service.value } }, "Saved."));
-  const ai = el("details", { class: "st-card" }, [
+  const ai = el("details", { class: "st-card", "data-st": "ai", open: true }, [
     el("summary", { text: "AI preferences" }),
     modelLine,
     el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "AI service" }), service, serviceHint]),
@@ -179,11 +194,19 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       el("span", { class: "switch-copy" }, [el("span", { class: "switch-label", text: label }), el("span", { class: "switch-hint", text: hint })]),
     ]);
   }
-  ai.append(switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB."));
-  const tracking = el("details", { class: "st-card" }, [
+  const askDownloadRow = switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB.");
+  ai.append(askDownloadRow);
+
+  const notifySeg = el("div", { class: "st-seg", role: "group", "aria-label": "Notification style" });
+  for (const [value, label] of [["ask", "Ask"], ["silent", "Silent"], ["off", "Off toasts"]]) {
+    const button = el("button", { type: "button", text: label, "data-notify": value });
+    button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
+    notifySeg.append(button);
+  }
+  const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups and the Find badge count." });
+  const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
     el("summary", { text: "Notification preferences" }),
-    switchRow("episodeDialogs", "Episode update dialogs", "Ask before updating your list when you finish an episode, and confirm automatic updates. When off, updates happen without a dialog and show up in Notifications."),
-    switchRow("muteNotifications", "Mute notifications", "No pop-ups on Crunchyroll and no count on the Find button. Notifications still collect under the bell."),
+    el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint]),
   ]);
   const badgeSelect = (key, label, choices) => {
     const select = el("select", { "aria-label": label });
@@ -196,7 +219,9 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   const badgeSize = badgeSelect("badgeSize", "Badge size", [["normal", "Normal"], ["small", "Small"]]);
   const badgeUnwatched = badgeSelect("badgeUnwatched", "Unwatched shows", [["hover", "Show on hover"], ["always", "Always show"], ["never", "Never show"]]);
   const badgeMotion = badgeSelect("badgeMotion", "Badge animation", [["animated", "Animated"], ["static", "Static"]]);
+  const badgeMotionField = el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion]);
   const cornerHint = el("span", { class: "st-hint", text: "The glass footer always sits along the bottom.", hidden: true });
+  const liteMotionHint = el("span", { class: "st-hint", text: "Performance mode forces static badges.", hidden: true });
   const previewPosters = PREVIEW_SHOWS.map((show) => {
     const badge = el("span");
     badge.addEventListener("click", (event) => event.preventDefault());
@@ -214,7 +239,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       badge.title = "";
     }
   }
-  const badges = el("details", { class: "st-card" }, [
+  const badges = el("details", { class: "st-card", "data-st": "badges", open: true }, [
     el("summary", { text: "Status badge preferences" }),
     el("span", { class: "st-hint", text: "Hover a poster to preview. On Crunchyroll, click a badge to change the show's status." }),
     el("div", { class: "st-preview" }, previewPosters.map((item) => item.poster)),
@@ -223,30 +248,36 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Corner" }), badgeCorner]),
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Size" }), badgeSize]),
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Unwatched shows" }), badgeUnwatched]),
-      el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion]),
+      badgeMotionField,
     ]),
     cornerHint,
+    liteMotionHint,
     switchRow("badgeProgress", "Show episode progress", "Adds the episode you're on, like 7/24, to in-progress and dropped shows."),
   ]);
 
-  const search = el("details", { class: "st-card" }, [
+  const search = el("details", { class: "st-card", "data-st": "account", open: true }, [
     el("summary", { text: "Search preferences" }),
     switchRow("favorNamed", "Favor the named show", "In searches like “like Frieren but sadder,” being close to the named show counts more than the other words."),
-    switchRow("youtubeTitles", "Include free YouTube shows", "Complete, official uploads of shows Crunchyroll doesn't carry. They appear in the Crunchilist app with a YouTube label, never on Crunchyroll pages."),
   ]);
 
   const liteBox = el("input", { type: "checkbox", role: "switch", "aria-label": "Performance mode" });
   liteBox.addEventListener("change", () => act("setSettings", { patch: { liteMode: liteBox.checked } }, liteBox.checked ? "Performance mode on." : "Performance mode off."));
   const liteSwitch = el("label", {
     class: "switch",
-    title: "Turns off blur, glow animations, and transitions, and checks Crunchyroll pages less often. Try it if things feel slow.",
+    title: "Cuts blur, glow, and transitions; skips AI ranking and model downloads; slows Crunchyroll page scans; holds background AniList cover matching. Try it if things feel slow.",
   }, [liteBox, el("span", { class: "switch-label", text: "Performance mode" })]);
 
   const refreshCatalog = el("button", { class: "btn", type: "button", title: "Update Crunchyroll titles and AniList details" }, [icon("refresh", 15), el("span", { text: "Refresh catalog" })]);
-  const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "" });
+  const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "", "data-st": "account" });
+  const catalogActions = el("div", { class: "st-actions", "data-st": "account" }, [refreshCatalog, ...extras]);
   const statusMeter = progressMeter("Catalog progress");
   const statusBar = statusMeter.root;
+  statusBar.setAttribute("data-st", "account");
   const status = el("p", { class: "st-status", role: "status" });
+  account.setAttribute("data-st", "account");
+  context.setAttribute("data-st", "account");
+  taste.setAttribute("data-st", "account");
+  taste.open = true;
   const root = el("div", { class: "st" }, [
     el("div", { class: "st-head" }, [el("h2", { class: "st-title", text: "Settings" }), liteSwitch]),
     account,
@@ -257,10 +288,11 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
     badges,
     ai,
     refreshedLine,
-    el("div", { class: "st-actions" }, [refreshCatalog, ...extras]),
+    catalogActions,
     statusBar,
     status,
   ]);
+  let activeSection = section;
   const history = createHistoryView({ send, onView, onClose: () => checkHistory() });
   root.append(history.root);
 
@@ -449,8 +481,23 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   }
   ai.addEventListener("toggle", () => ai.open && refreshModel());
 
+  function applySection(nextSection) {
+    activeSection = nextSection || null;
+    const showAll = !activeSection;
+    for (const node of root.querySelectorAll("[data-st]")) {
+      node.hidden = !(showAll || node.getAttribute("data-st") === activeSection);
+    }
+    if (activeSection) {
+      for (const card of root.querySelectorAll(`details.st-card[data-st="${activeSection}"]`)) card.open = true;
+    }
+  }
+  applySection(activeSection);
+
   return {
     root,
+    focus(nextSection) {
+      applySection(nextSection);
+    },
     setView(next) {
       view = next || view;
       if (!view) return;
@@ -510,13 +557,21 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       liteBox.checked = Boolean(settings.liteMode);
       const themeHost = root.closest(".cl-theme") || root.getRootNode()?.host;
       themeHost?.classList.toggle("cl-lite", Boolean(settings.liteMode));
+      const style = settings.notificationStyle || (settings.muteNotifications ? "off" : settings.episodeDialogs === false ? "silent" : "ask");
+      for (const button of notifySeg.querySelectorAll("button")) button.classList.toggle("is-on", button.dataset.notify === style);
+      // Remote keys mean Chrome Nano download prompts rarely matter.
+      askDownloadRow.hidden = Boolean(settings.hasKey);
       const badgeChoices = badgeOptions(settings);
       for (const [select, value] of [[badgeStyle, badgeChoices.style], [badgeCorner, badgeChoices.corner], [badgeSize, badgeChoices.size], [badgeUnwatched, badgeChoices.unwatched], [badgeMotion, badgeChoices.motion]]) {
         if (focused() !== select) select.value = value;
       }
       badgeCorner.disabled = badgeChoices.style === "footer";
       cornerHint.hidden = badgeChoices.style !== "footer";
+      badgeMotionField.hidden = Boolean(settings.liteMode);
+      liteMotionHint.hidden = !settings.liteMode;
+      if (settings.liteMode) badgeMotion.value = "static";
       paintPreview(settings);
+      applySection(activeSection);
       for (const [field, tokens] of Object.entries(fields)) tokenList(tokens, view.taste?.[field], field);
       if (focused() !== audio) audio.value = view.taste?.subDub || "any";
       const keys = settings.keys || {};

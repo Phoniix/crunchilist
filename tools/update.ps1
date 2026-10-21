@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 # Same lists as PACKAGE_FOLDERS and PACKAGE_ROOT_FILES in lib/update-files.js (tests/manual-update.test.js checks).
-$Folders = @("app", "background", "fonts", "icons", "lib", "options", "popup", "tools", "ui")
+$Folders = @("app", "background", "feeds", "fonts", "icons", "lib", "options", "popup", "tools", "ui")
 $RootFiles = @("update.cmd")
 $Latin1 = [Text.Encoding]::GetEncoding(28591)
 $Utf8 = New-Object Text.UTF8Encoding $false
@@ -34,6 +34,21 @@ function ContentFiles($manifest) {
   foreach ($entry in @($manifest.content_scripts)) {
     if ($entry) { $out += @($entry.js) + @($entry.css) }
   }
+  # Same site scripts as contentFiles() in lib/update-files.js (injected, not listed in content_scripts).
+  $out += @(
+    "content/site-panel.js",
+    "content/site/key-guard.js",
+    "content/site/return.js",
+    "content/site/crunchyroll.js",
+    "content/site/crunchyroll-page.js",
+    "content/site/netflix.js",
+    "content/site/netflix-page.js",
+    "content/site/prime.js",
+    "content/site/hidive.js",
+    "content/site/hidive-page.js",
+    "content/site/tubi.js",
+    "content/site/tubi-page.js"
+  )
   @($out | Where-Object { $_ } | Select-Object -Unique)
 }
 

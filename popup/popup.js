@@ -18,8 +18,8 @@ const style = document.createElement("style");
 style.textContent = roundedFontFace() + THEME_CSS + POPUP_CSS;
 document.head.append(style);
 
-const open = el("button", { class: "btn primary pp-open", type: "button" }, [icon("home", 17), el("span", { text: "Open Crunchilist" }), icon("external", 15)]);
-const toggle = el("input", { type: "checkbox", role: "switch", "aria-label": "Turn Crunchilist on Crunchyroll on or off" });
+const open = el("button", { class: "btn primary pp-open", type: "button" }, [icon("home", 17), el("span", { text: "Open Kivori SekAI" }), icon("external", 15)]);
+const toggle = el("input", { type: "checkbox", role: "switch", "aria-label": "Turn Kivori SekAI on Crunchyroll on or off" });
 const hint = el("span", { class: "switch-hint" });
 const row = el("label", { class: "switch pp-row" }, [toggle, el("span", { class: "switch-copy" }, [el("span", { class: "switch-label", text: "On Crunchyroll" }), hint])]);
 
@@ -41,7 +41,7 @@ toggle.addEventListener("change", () => {
 });
 
 document.body.append(el("div", { class: "pp" }, [
-  el("div", { class: "pp-brand" }, [el("img", { src: "../icons/icon48.png", alt: "" }), el("span", { text: "Crunchilist" })]),
+  el("div", { class: "pp-brand" }, [el("img", { src: "../icons/icon48.png", alt: "" }), el("span", { text: "Kivori SekAI" })]),
   open,
   row,
 ]));
