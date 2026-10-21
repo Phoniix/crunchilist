@@ -11,6 +11,9 @@
     "anilist-dump": "node scripts/anilist-dump.mjs",
     "package": "node scripts/package.mjs",
     "lab": "node lab/serve.mjs",
-    "bundle": "npx --yes esbuild content/main.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist.js && npx --yes esbuild content/frame.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist-frame.js"
+    "bundle": "npx --yes esbuild content/main.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist.js && npx --yes esbuild content/frame.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist-frame.js",
+    "bundle:panel": "npx --yes esbuild content/site-boot.js --bundle --format=iife --target=chrome114 --outfile=content/site-panel.js",
+    "bundle:sites": "npx --yes esbuild content/sites/netflix.js content/sites/netflix-page.js content/sites/hidive.js content/sites/hidive-page.js content/sites/tubi.js content/sites/tubi-page.js content/sites/prime.js content/sites/return.js content/sites/crunchyroll.js content/sites/crunchyroll-page.js content/sites/key-guard.js --bundle --format=iife --target=chrome114 --outdir=content/site",
+    "where-map": "node scripts/where-map.mjs"
   }
 }

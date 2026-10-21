@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { galleryBanner, orderForYou, rankBanner, tasteMatches } from "../lib/banner.js";
+import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, FOR_YOU_PICKS_TTL_MS, galleryBanner, noveltyOf, orderForYou, pickExclusiveBanner, rankBanner, tasteMatches } from "../lib/banner.js";
 
 const shows = "abcdefghijklmnop".split("").map((id) => ({ id }));
 const trending = shows.map((show) => show.id);
@@ -36,6 +36,26 @@ test("For you puts AI picks first in rank order, then mentions, then the taste o
 test("For you without AI keeps the taste order and taste matches", () => {
   const rows = orderForYou({ tasteIds: ["b", "a"], picks: null, tasteMatch: new Map([["a", 60]]) });
   assert.deepEqual(rows.map((row) => [row.id, row.match, row.ai]), [["b", null, false], ["a", 60, false]]);
+});
+
+test("For you prefers titles that have not shown recently", () => {
+  const now = 1_000_000;
+  const recentShown = new Map([["c", now - 1000], ["a", now - FOR_YOU_HISTORY_MS / 2]]);
+  const rows = orderForYou({
+    tasteIds: ["a", "b", "c"],
+    picks: [
+      { id: "c", rank: 1, confidence: 90 },
+      { id: "b", rank: 2, confidence: 80 },
+      { id: "a", rank: 3, confidence: 70 },
+    ],
+    recentShown,
+    now,
+  });
+  assert.deepEqual(rows.map((row) => row.id), ["b", "a", "c"], "fresher titles lead even if AI ranked them lower");
+});
+
+test("Picked for you cache lasts a week", () => {
+  assert.equal(FOR_YOU_PICKS_TTL_MS, 7 * 24 * 60 * 60 * 1000);
 });
 
 test("banner skips finished, dropped and art-less shows", () => {
@@ -129,4 +149,76 @@ test("without AI the paged banner is the plain blend", () => {
   const rows = galleryBanner({ shows: many, trending: manyTrending, extraPicks: [{ id: "s39" }], count: 18 });
   assert.equal(rows.length, 18);
   assert.ok(rows.every((row) => !row.ai));
+});
+
+test("novelty fades over a few days", () => {
+  const now = 1_000_000_000_000;
+  const recent = new Map([["a", now], ["b", now - BANNER_HISTORY_MS / 2], ["c", now - BANNER_HISTORY_MS]]);
+  assert.equal(noveltyOf("a", recent, now), 0);
+  assert.ok(Math.abs(noveltyOf("b", recent, now) - 0.5) < 1e-9);
+  assert.equal(noveltyOf("c", recent, now), 1);
+  assert.equal(noveltyOf("d", recent, now), 1);
+});
+
+test("recently featured banner titles yield the lead for fresher AI picks", () => {
+  const now = Date.now();
+  const picks = ["s30", "s31", "s32"].map((id, index) => ({ id, rank: index + 1, confidence: 90 - index }));
+  const extraPicks = ["s20", "s21", "s22"].map((id) => ({ id, reason: `fresh ${id}` }));
+  const recentShown = new Map([["s30", now], ["s31", now], ["s32", now]]);
+  const rows = galleryBanner({
+    shows: many,
+    trending: manyTrending,
+    picks,
+    extraPicks,
+    recentShown,
+    count: 18,
+  });
+  const lead = rows.filter((row) => row.ai).slice(0, 3).map((row) => row.id);
+  assert.deepEqual(lead, ["s20", "s21", "s22"], "stale ranked picks step aside for fresher extras");
+  assert.ok(rows.some((row) => row.id === "s30"), "stale picks can still appear later");
+});
+
+test("blend scoring also prefers titles that have not led the banner lately", () => {
+  const now = Date.now();
+  const recentShown = new Map(manyTrending.slice(0, 12).map((id) => [id, now]));
+  const rows = rankBanner({ shows: many, trending: manyTrending, recentShown, count: 6 });
+  const fresh = rows.filter((row) => !recentShown.has(row.id));
+  assert.ok(fresh.length >= 4, "most slots go to titles that have not featured lately");
+});
+
+test("exclusive banner picks are single-service titles and rotate by novelty", () => {
+  const exclusives = many.map((show, i) => ({
+    ...show,
+    onCrunchyroll: false,
+    streaming: i % 5 === 0 ? [{ service: "netflix" }] : i % 5 === 1 ? [{ service: "hidive" }] : [{ service: "netflix" }, { service: "hidive" }],
+    banner: "x",
+  }));
+  const picks = pickExclusiveBanner(exclusives, { hasArt: () => true, limit: 3 });
+  assert.equal(picks.length, 3);
+  assert.ok(picks.every((pick) => pick.exclusive && pick.service));
+  const now = Date.now();
+  const recentShown = new Map(picks.slice(0, 2).map((pick) => [pick.id, now]));
+  const next = pickExclusiveBanner(exclusives, { recentShown, hasArt: () => true, limit: 3 });
+  assert.ok(next[0].id !== picks[0].id || next.some((pick) => !recentShown.has(pick.id)));
+});
+
+test("gallery reserves exclusive slots without dropping AI leads", () => {
+  const picks = ["s30", "s31", "s32", "s33", "s34"].map((id, index) => ({ id, rank: index + 1, confidence: 90 - index }));
+  const exclusivePicks = [
+    { id: "s10", service: "netflix", reason: "Only on Netflix", exclusive: true },
+    { id: "s11", service: "hidive", reason: "Only on HIDIVE", exclusive: true },
+    { id: "s12", service: "tubi", reason: "Only on Tubi", exclusive: true },
+  ];
+  const rows = galleryBanner({
+    shows: many,
+    trending: manyTrending,
+    picks,
+    exclusivePicks,
+    count: 18,
+  });
+  assert.equal(rows.length, 18);
+  assert.equal(rows[0].id, "s30");
+  const exclusives = rows.filter((row) => row.exclusive);
+  assert.ok(exclusives.length >= 2 && exclusives.length <= 3);
+  assert.ok(exclusives.every((row) => row.reason.startsWith("Only on")));
 });

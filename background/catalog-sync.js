@@ -267,10 +267,18 @@ function catalogActivity() {
       label: gathering ? catalogUi.phase || "Gathering the Crunchyroll list" : "Refreshing the catalog",
       progress: catalogUi.progress || 0,
       gathering,
+      service: "crunchyroll",
     });
   }
   const model = modelProgress();
-  if (model.modelDownloading) tasks.push({ id: "model", label: "Downloading Chrome's AI model", progress: model.modelProgress || 0 });
+  if (model.modelDownloading) {
+    tasks.push({
+      id: "model",
+      label: "Downloading Chrome's AI model",
+      progress: model.modelProgress || 0,
+      service: "global",
+    });
+  }
   return tasks;
 }
 
@@ -430,7 +438,9 @@ async function catalogSession(token, locale) {
       finishCatalogUi();
     });
   } else if (catalog.items.length && !catalogJob) {
-    startAnilistCatalogMatch();
+    const state = await loadState();
+    // Cover matching walks AniList in the background — hold it while performance mode is on.
+    if (!state.settings?.liteMode) startAnilistCatalogMatch();
   }
   return {
     catalog: { count: catalog.items.length, updatedAt: catalog.updatedAt, updating: Boolean(catalogJob) },

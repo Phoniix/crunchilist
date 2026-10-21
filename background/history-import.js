@@ -42,6 +42,7 @@ export function historyActivity() {
     id: "history",
     label: job.phase === "saving" ? "Sending history to AniList" : "Importing Crunchyroll history",
     progress: job.progress,
+    service: "crunchyroll",
   };
 }
 

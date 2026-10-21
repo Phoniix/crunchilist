@@ -56,6 +56,11 @@ test("the prompt carries taste, top tags, recent watching and recent searches", 
   assert.deepEqual(user, { profile: { liked: ["Action"] }, topTags: ["action", "drama"], recentlyWatched: ["Frieren"], recentSearches: ["space opera"] });
   assert.match(prompt.system, /5 to 6 rows/);
   assert.match(prompt.system, /hardAvoids/);
+  const many = JSON.parse(buildHomeRowsPrompt({
+    profile: {},
+    searches: ["one", "two", "three", "four", "five", "six"],
+  }).user);
+  assert.deepEqual(many.recentSearches, ["one", "two", "three", "four", "five"]);
 });
 
 test("fallback themes come from history, tags and searches, and always fill at least five rows", () => {

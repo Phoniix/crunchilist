@@ -26,7 +26,7 @@ const BRIDGE_CSS = `
   input:hover, select:hover, .sv-bar:hover { border-color: color-mix(in srgb, var(--p-accent) 40%, var(--line-strong)); }
   input:focus, select:focus, .sv-tag-pick:focus-within { border-color: var(--p-accent); }
   button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible, label:has(:focus-visible) { outline-color: var(--p-accent); }
-  .btn.primary, .sv-chip.is-on { color: var(--p-on-accent); }
+  .btn.primary, .sv-chip.is-on, .st-seg button.is-on { color: var(--p-on-accent); }
   .btn.primary:hover { background: color-mix(in srgb, var(--p-accent) 86%, var(--p-text)); }
   .switch input { background: var(--fill); }
   .switch input:checked::after { background: var(--p-on-accent); }

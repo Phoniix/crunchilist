@@ -1,19 +1,23 @@
 // Prism: the Crunchilist page. Pages, cards, theme, trailers and the library, drawn from the extension's own data.
 // The data layer (prism-data.js) is the only part that talks to the background.
 import { applySeasonChanges, playRequest } from "../lib/app-shows.js";
-import { galleryBanner, orderForYou } from "../lib/banner.js";
+import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, galleryBanner, orderForYou, pickExclusiveBanner } from "../lib/banner.js";
 import { closeBadgeMenu, openBadgeMenu } from "../ui/badge-menu.js";
 import { BADGE_CSS, BADGE_MENU_CSS, badgeHtml, badgeOptions } from "../ui/badge-style.js";
 import { SEARCH_CSS, createSearchView } from "../ui/search-view.js";
 import { SETTINGS_CSS, createSettingsView } from "../ui/settings-view.js";
 import { embed } from "./embed.js";
 import { translatedTrack } from "../lib/captions.js";
-import { INSPIRED_SEARCHES, RECENT_LIMIT, cleanSearches, rememberSearch } from "../lib/inspired.js";
+import { INSPIRED_SEARCHES, RECENT_LIMIT, SEARCH_HISTORY_LIMIT, cleanSearches, rememberSearch } from "../lib/inspired.js";
 import { CUSTOM_VARS, clamp, customVars, hexHsv, hsvHex } from "./prism-color.js";
 import { createTastePop } from "./prism-taste.js";
 import { canSelfUpdate, installUpdate } from "./updater.js";
 import { reloadForDisk } from "../lib/update-check.js";
-import { watchUrl } from "../lib/youtube-catalog.js";
+import { KEYS } from "../lib/keys.js";
+import { SERVICE_BRAND, SERVICE_SHORT, pickPlayLink } from "../lib/play-url.js";
+import { serviceById, serviceForSite, visibleLink } from "../lib/services.js";
+import { handleImportAct, noteImportState, onImportPick, onImportToggle, renderImportPane, renderImportsHistory } from "./import-pane.js";
+import { DEFAULT_CHARACTER_ID, characterById, composeLine } from "../lib/characters.js";
 
 let SHOWS = [];
 let byId = new Map();
@@ -194,23 +198,149 @@ function applyTheme() {
   document.querySelectorAll("[data-set-mode]").forEach((el) => el.classList.toggle("on", el.dataset.setMode === theme.mode));
   document.querySelectorAll("[data-set-size]").forEach((el) => el.classList.toggle("on", el.dataset.setSize === theme.size));
   document.querySelectorAll("[data-pref]").forEach((el) => el.classList.toggle("on", prefOn(el.dataset.pref)));
-  document.querySelectorAll("[data-setting]").forEach((el) => el.classList.toggle("on", settingOn(el.dataset.setting)));
+  paintSettingControls();
   document.querySelectorAll(".theme-tile").forEach((el) => { el.dataset.mode = root.dataset.mode; });
 }
 const prefOn = (key) => Boolean(prefs[key]);
 // Playback switches default to on, like the extension's own settings.
-const settingOn = (key) => (["liteMode", "tabAuto", "miniPlayer"].includes(key) ? Boolean(settings()[key]) : settings()[key] !== false);
+const OFF_DEFAULT = new Set(["liteMode", "tabAuto", "miniPlayer", "dailySync", "syncApply", "trackNetflix", "trackTubi", "trackHidive", "trackWhileWatching"]);
+const settingOn = (key) => {
+  if (key === "trackWhileWatching") {
+    const s = settings();
+    return Boolean(s.trackWhileWatching || s.trackNetflix || s.trackTubi || s.trackHidive);
+  }
+  return OFF_DEFAULT.has(key) ? Boolean(settings()[key]) : settings()[key] !== false;
+};
+
+const CHOICE_ABOUT = {
+  whereFilterMode: {
+    host: "Site panels open filtered to that streaming site; you can still switch chips",
+    remember: "Site panels and search reopen on the last Where chip you used",
+  },
+  openEpisodes: {
+    "tab-ask": "One Crunchyroll tab, reused every time. Extra Crunchyroll tabs ask before moving in",
+    "tab-auto": "One Crunchyroll tab, reused every time. Extra Crunchyroll tabs move in automatically with Undo",
+    window: "One pop-out Crunchyroll window with no tabs or address bar, reused every time",
+    new: "A new Crunchyroll tab every time you press Play",
+  },
+  dailySyncMode: {
+    off: "Daily catch-up is off",
+    preview: "Once a day, catches up and leaves a preview to apply",
+    apply: "Once a day, catches up and sends changes straight to AniList",
+  },
+};
+
+function choiceValue(raw) {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return raw;
+}
+
+function choiceCurrent(key) {
+  const s = settings();
+  if (key === "openEpisodes") return s.openEpisodes || (s.openIn === "window" ? "window" : s.openIn === "new" ? "new" : s.tabAuto ? "tab-auto" : "tab-ask");
+  if (key === "dailySyncMode") return s.dailySyncMode || (s.dailySync ? (s.syncApply ? "apply" : "preview") : "off");
+  if (key === "whereFilterMode") return s.whereFilterMode || "host";
+  if (key === "notificationStyle") return s.notificationStyle || (s.muteNotifications ? "off" : s.episodeDialogs === false ? "silent" : "ask");
+  return s[key];
+}
+
+// Switches and segment choices live in the light DOM; keep their .on state in sync without a full remount.
+function paintSettingControls() {
+  document.querySelectorAll("[data-setting]").forEach((el) => {
+    const on = settingOn(el.dataset.setting);
+    el.classList.toggle("on", on);
+    if (el.getAttribute("role") === "switch") el.setAttribute("aria-checked", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-choice]").forEach((el) => {
+    const [key, raw] = el.dataset.choice.split(":");
+    const value = choiceValue(raw);
+    const current = choiceCurrent(key);
+    el.classList.toggle("on", current === value || String(current) === String(value));
+  });
+  document.querySelectorAll("[data-choice-about]").forEach((el) => {
+    const key = el.dataset.choiceAbout;
+    const current = choiceCurrent(key);
+    const text = CHOICE_ABOUT[key]?.[current];
+    if (text) el.textContent = text;
+  });
+  const rows = document.querySelector("#catalog-rows");
+  if (rows) rows.hidden = settings().readCatalogs === false;
+}
 
 const CR_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#f47521"/><path d="M9.6 7.6v8.8l7-4.4z" fill="#fff"/></svg>`;
 const OFF_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 19 19 5" stroke="currentColor" stroke-width="2"/></svg>`;
-const YT_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="4.5" width="22" height="15" rx="4.5" fill="#ff0033"/><path d="M10 8.6v6.8l5.6-3.4z" fill="#fff"/></svg>`;
 const onCrunchyroll = (show) => show.onCrunchyroll !== false;
-const onYoutube = (show) => Boolean(show.youtube?.videos?.length);
+
+// Visible streaming rows for a show: AniList / catalog links, plus Crunchyroll when the catalog carries it.
+function streamLinks(show) {
+  const hidden = settings().hiddenSites || [];
+  const seen = new Set();
+  const out = [];
+  const add = (site, { url = "", color = "", checked = false, seen: watched = false } = {}) => {
+    if (!site || !visibleLink(site, hidden)) return;
+    const id = serviceForSite(site)?.id || String(site).toLowerCase();
+    const known = serviceById(id);
+    if (seen.has(id)) {
+      const row = out.find((item) => item.id === id);
+      if (!row) return;
+      if (url && (!row.url || /\/search/i.test(row.url))) row.url = url;
+      if (checked) row.checked = true;
+      if (watched) row.seen = true;
+      if (color) row.color = color;
+      return;
+    }
+    seen.add(id);
+    out.push({
+      id,
+      site: known?.name || site,
+      name: known?.name || site,
+      short: SERVICE_SHORT[id] || String(known?.name || site).slice(0, 4),
+      url,
+      color: color || SERVICE_BRAND[id] || "#8a7b71",
+      checked: Boolean(checked),
+      seen: Boolean(watched),
+    });
+  };
+  if (onCrunchyroll(show)) add("Crunchyroll", { url: show.url || "", color: SERVICE_BRAND.crunchyroll, checked: true });
+  for (const link of show.streaming || []) add(link.site, link);
+  for (const id of show.onServices || []) {
+    const known = serviceById(id);
+    if (known) add(known.name, { color: SERVICE_BRAND[id] });
+  }
+  return out.sort((a, b) => (a.id === "crunchyroll" ? -1 : 0) - (b.id === "crunchyroll" ? -1 : 0)
+    || Number(b.checked) - Number(a.checked) || Number(b.seen) - Number(a.seen)
+    || a.name.localeCompare(b.name));
+}
+
+function svcMark(link) {
+  if (link.id === "crunchyroll") return CR_MARK;
+  return `<span class="svc-dot" aria-hidden="true">${esc((link.short || link.name || "?")[0])}</span>`;
+}
+
+// Availability pills: every known service when we have them; otherwise the old on/off Crunchyroll mark.
 function crBadge(show, cls = "") {
-  if (onYoutube(show)) return `<span class="avail yt ${cls}">${YT_MARK}Free on YouTube</span>`;
-  return onCrunchyroll(show)
-    ? `<span class="avail on ${cls}">${CR_MARK}On Crunchyroll</span>`
-    : `<span class="avail off ${cls}">${OFF_MARK}Not on Crunchyroll</span>`;
+  const links = streamLinks(show);
+  const mini = /\bmini\b/.test(cls);
+  if (!links.length) {
+    return onCrunchyroll(show)
+      ? `<span class="avail on ${cls}">${CR_MARK}${mini ? "CR" : "On Crunchyroll"}</span>`
+      : `<span class="avail off ${cls}">${OFF_MARK}${mini ? "Off CR" : "Not on Crunchyroll"}</span>`;
+  }
+  // Poster stays clean when Crunchyroll is the only place.
+  if (mini && links.length === 1 && links[0].id === "crunchyroll") return "";
+  const cap = mini ? 3 : 6;
+  const shown = links.slice(0, cap);
+  const pills = shown.map((link) => {
+    const text = mini ? link.short
+      : links.length === 1 && link.id === "crunchyroll" ? "On Crunchyroll"
+      : link.name;
+    return `<span class="avail on svc ${cls}" style="--svc:${esc(link.color)}" data-svc="${esc(link.id)}" title="${esc(link.name)}">${svcMark(link)}${esc(text)}</span>`;
+  }).join("");
+  const more = links.length > cap
+    ? `<span class="avail on svc more ${cls}" title="${esc(links.slice(cap).map((link) => link.name).join(", "))}">+${links.length - cap}</span>`
+    : "";
+  return links.length > 1 || mini ? `<span class="avail-stack ${cls}">${pills}${more}</span>` : pills;
 }
 
 // Cards
@@ -268,18 +398,18 @@ function card(show, opts = {}) {
           <div class="peek-tags">${show.genres.slice(0, 3).map((g) => `<span>${esc(g)}</span>`).join("")}</div>
           <div class="peek-actions">
             ${!onCrunchyroll(show)
-              ? `<a class="btn sm${onYoutube(show) ? " accent" : ""}" href="#show/${esc(show.id)}">${onYoutube(show) ? `${icon("play")} Episodes` : "Where to watch"}</a>`
+              ? `<a class="btn sm" href="#show/${esc(show.id)}">Where to watch</a>`
               : `<button class="btn sm accent" data-act="watch">${icon("play")} ${entry(show)?.status === "watching" ? epLabel(show).replace(/ \/ \d+$/, "") : "Watch"}</button>`}
             ${listButton(show)}
             <a class="btn sm ghost" href="#show/${esc(show.id)}">Details</a>
           </div>
         </div>
       </div>`.replace(/<(button|a) /g, '<$1 tabindex="-1" ');
-  return `<div class="card${opts.rank ? " ranked" : ""}" data-show="${esc(show.id)}" data-crl-card style="--c:${esc(show.color)}" tabindex="0" role="link" aria-label="${esc(show.title)}">
+  return `<div class="card${opts.rank ? " ranked" : ""}${onCrunchyroll(show) ? "" : " off-cr"}" data-show="${esc(show.id)}" data-crl-card style="--c:${esc(show.color)}" tabindex="0" role="link" aria-label="${esc(show.title)}">
     ${rank}
     <div class="poster">
       ${posterImg(show)}
-      ${newsBadge(show)}${statusBadge(show)}${meter(show)}${!onCrunchyroll(show) ? crBadge(show, "mini") : ""}${matchBadge(opts.match)}
+      ${newsBadge(show)}${statusBadge(show)}${meter(show)}${crBadge(show, "mini")}${matchBadge(opts.match)}
     </div>
     ${peek}
     <div class="cap"><div class="title">${esc(show.title)}</div>${opts.why
@@ -287,10 +417,35 @@ function card(show, opts = {}) {
       : `<div class="sub">${esc(show.genres[0] || (show.type === "movie" ? "Movie" : "Series"))} · ${seasonCount(show)}</div>`}</div>
   </div>`;
 }
+function whereWatchHtml(show, links = streamLinks(show)) {
+  if (!links.length) {
+    return onCrunchyroll(show)
+      ? `<a class="where on" href="${esc(show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Crunchilist manages. This link opens the show page</small></div>${icon("right")}</a>`
+      : `<p class="muted">AniList doesn't list a streaming site for this one.</p>
+         <div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`;
+  }
+  const rows = links.map((link) => {
+    if (link.id === "crunchyroll") {
+      return `<a class="where on" href="${esc(link.url || show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Crunchilist manages. This link opens the show page</small></div>${icon("right")}</a>`;
+    }
+    const note = link.checked && link.seen ? "In your catalog · you've watched it there"
+      : link.checked ? "In your catalog · opens in a new tab"
+      : link.seen ? "You've watched it there · opens in a new tab"
+      : "Opens in a new tab";
+    if (!link.url) {
+      return `<div class="where"><span class="where-dot" style="background:${esc(link.color)}">${esc((link.short || link.name)[0])}</span><div><b>${esc(link.name)}</b><small>Listed · no playable link yet</small></div></div>`;
+    }
+    return `<a class="where" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span class="where-dot" style="background:${esc(link.color)}">${esc((link.short || link.name)[0])}</span><div><b>${esc(link.name)}</b><small>${note}</small></div>${icon("right")}</a>`;
+  }).join("");
+  return `${rows}${onCrunchyroll(show) ? "" : `<div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`}`;
+}
+
 function wide(show) {
+  const places = streamLinks(show).filter((link) => link.id !== "crunchyroll");
+  const placeNote = !onCrunchyroll(show) && places[0] ? ` · ${places.map((link) => link.short).slice(0, 2).join(", ")}` : "";
   return `<div class="wide" data-show="${esc(show.id)}" data-crl-card tabindex="0" role="${onCrunchyroll(show) ? "button" : "link"}" aria-label="${onCrunchyroll(show) ? `Play ${esc(show.title)}, ${esc(playLabel(show).toLowerCase())}` : `${esc(show.title)}, ${esc(epLabel(show, true))}`}">
     <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook() })}
-      <div class="wide-copy"><b>${esc(show.title)}</b><small>${epLabel(show, true)}</small>${meter(show)}</div>
+      <div class="wide-copy"><b>${esc(show.title)}</b><small>${epLabel(show, true)}${esc(placeNote)}</small>${meter(show)}</div>
     </div>
   </div>`;
 }
@@ -348,31 +503,92 @@ function similar(show, count = 12) {
     .sort((a, b) => b.hits - a.hits || (b.other.score || 0) - (a.other.score || 0))
     .slice(0, count).map((row) => row.other);
 }
-// Picked for you: the search engine's own For you row. With AI on, the model ranks it on its own when Home opens
-// (cached for 12 hours in the background), and Reroll asks for different picks. With AI off it stays in taste order.
+// Picked for you: AI ranking is hydrated from last week’s cache before Home paints, then refreshed weekly.
+// Recently shown titles are remembered so repeats show up less often. Reroll still asks for different picks.
 // `ranked` keeps the first AI ranking so a reroll changes this row without reshuffling the banner.
 // `prev` is the roll before the current one; Last roll swaps them.
-const forYou = { loaded: false, loading: false, ids: [], matches: new Map(), picks: null, ranked: null, by: "", prev: null, seen: new Set(), busy: false, tried: false };
+const FOR_YOU_HISTORY_KEY = "cl-foryou-history";
+const FOR_YOU_HISTORY_MAX = 48;
+const forYou = { loaded: false, loading: false, ids: [], matches: new Map(), picks: null, ranked: null, by: "", prev: null, seen: new Set(), busy: false, tried: false, cacheFresh: false, remembered: "" };
 const aiOn = () => settings().useAi !== false;
+// Performance mode keeps the AI toggle, but skips model work (ranking, banner extras, inspired).
+const aiLive = () => aiOn() && !lite();
+
+function loadForYouHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FOR_YOU_HISTORY_KEY) || "[]");
+    const now = Date.now();
+    return new Map((Array.isArray(raw) ? raw : [])
+      .filter((row) => row?.id && now - Number(row.at || 0) < FOR_YOU_HISTORY_MS)
+      .map((row) => [String(row.id), Number(row.at) || 0]));
+  } catch {
+    return new Map();
+  }
+}
+
+function rememberForYou(ids) {
+  const list = [...new Set((ids || []).map((id) => String(id)).filter(Boolean))];
+  if (!list.length) return;
+  const key = list.join(",");
+  if (forYou.remembered === key) return;
+  forYou.remembered = key;
+  const now = Date.now();
+  const map = loadForYouHistory();
+  for (const id of list) map.set(id, now);
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, FOR_YOU_HISTORY_MAX);
+  try {
+    localStorage.setItem(FOR_YOU_HISTORY_KEY, JSON.stringify(entries.map(([id, at]) => ({ id, at }))));
+  } catch {}
+}
+
+function applyForYouPicks(rows, by, { ranked = true } = {}) {
+  const picks = (rows || []).map((row) => ({
+    id: String(row.id).replace(/^sight:/, ""),
+    reason: row.reason || "",
+    rank: row.rank ?? null,
+    confidence: Number.isFinite(row.confidence) ? row.confidence : null,
+    mention: Boolean(row.mention),
+  })).filter((pick) => !SHOWS.length || byId.has(pick.id));
+  if (!picks.some((pick) => !pick.mention)) return false;
+  forYou.picks = picks;
+  if (ranked) forYou.ranked = picks;
+  forYou.by = by || "";
+  return true;
+}
+
+async function hydrateForYouFromCache() {
+  // Cached picks are cheap to show; still skip when AI is off. Performance mode can reuse cache.
+  if (!aiOn()) return;
+  const reply = await send("forYouPicksCache");
+  if (!reply?.ok || !reply.picks?.length) return;
+  applyForYouPicks(reply.picks, reply.by);
+  forYou.cacheFresh = Boolean(reply.fresh);
+}
+
 function forYouOrder() {
-  if (!forYou.ids.length) return popular().filter((show) => !entry(show)).slice(0, 14).map((show) => ({ id: show.id, match: null, reason: "", ai: false }));
+  const recentShown = loadForYouHistory();
+  if (!forYou.ids.length) {
+    const popularIds = popular().filter((show) => !entry(show)).slice(0, 14).map((show) => show.id);
+    return orderForYou({ tasteIds: popularIds, picks: aiOn() ? forYou.picks : null, recentShown }).filter((row) => byId.has(row.id));
+  }
   const tasteIds = forYou.ids.filter((id) => entry(byId.get(id))?.status !== "finished");
-  return orderForYou({ tasteIds, picks: aiOn() ? forYou.picks : null, tasteMatch: forYou.matches }).filter((row) => byId.has(row.id));
+  return orderForYou({ tasteIds, picks: aiOn() ? forYou.picks : null, tasteMatch: forYou.matches, recentShown }).filter((row) => byId.has(row.id));
 }
 function forYouRail() {
   const rows = forYouOrder().slice(0, 14);
-  const ai = aiOn() && forYou.ids.length >= 3;
+  rememberForYou(rows.map((row) => row.id));
+  const ai = aiOn() && (forYou.ids.length >= 3 || forYou.picks?.length);
   const action = !ai ? ""
     : forYou.busy ? `<span class="ai-state busy">${icon("sparkle")} ${forYou.picks ? "Rerolling" : "Ranking"}…</span>`
     : forYou.picks ? `<button class="btn sm ghost ai-btn" data-act="ai-reroll" title="Ask AI for different picks">${icon("refresh")} Reroll</button>${forYou.prev ? `<button class="btn sm ghost ai-btn" data-act="ai-last" title="Bring back the picks from before">${icon("history")} Last roll</button>` : ""}`
     : `<button class="btn sm ai-btn" data-act="ai-pick" title="Let AI rank this row and say why">${icon("sparkle")} AI picks</button>`;
   const why = new Map(rows.filter((row) => row.reason).map((row) => [row.id, row.reason]));
   const match = new Map(rows.filter((row) => row.match != null).map((row) => [row.id, row.match]));
-  const sub = ai && forYou.picks ? `Ranked by ${esc(forYou.by || "AI")}`
+  const sub = ai && forYou.picks ? `Ranked by ${esc(forYou.by || "AI")}${forYou.cacheFresh ? " · refreshes weekly" : ""}`
     : ai && forYou.busy ? "Ranked by your taste while AI looks it over"
     : "Ranked by your taste and what you've watched";
-  return rail("Picked for you", rows.map((row) => byId.get(row.id)), {
-    id: "for-you", cls: ai && forYou.picks ? "ai-row" : "", sub, extra: action, why, match, ranked: forYou.ids.length > 0, href: "#search",
+  return rail("Picked for you", rows.map((row) => byId.get(row.id)).filter(Boolean), {
+    id: "for-you", cls: ai && forYou.picks ? "ai-row" : "", sub, extra: action, why, match, ranked: forYou.ids.length > 0 || Boolean(forYou.picks?.length), href: "#search",
   });
 }
 function paintForYou() {
@@ -389,7 +605,37 @@ function paintForYou() {
 const BANNER_COUNT = 18;
 const BANNER_EXTRA_KEY = "cl-banner-ai";
 const BANNER_EXTRA_MS = 12 * 60 * 60 * 1000;
-const banner = { rows: null, prev: null, seen: new Set(), busy: false, extra: [], extraFor: "" };
+const BANNER_HISTORY_KEY = "cl-banner-history";
+const BANNER_HISTORY_MAX = 60;
+const banner = { rows: null, prev: null, seen: new Set(), busy: false, extra: [], extraFor: "", remembered: "" };
+
+function loadBannerHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BANNER_HISTORY_KEY) || "[]");
+    const now = Date.now();
+    return new Map((Array.isArray(raw) ? raw : [])
+      .filter((row) => row?.id && now - Number(row.at || 0) < BANNER_HISTORY_MS)
+      .map((row) => [String(row.id), Number(row.at) || 0]));
+  } catch {
+    return new Map();
+  }
+}
+
+function rememberBanner(ids) {
+  const list = [...new Set((ids || []).map((id) => String(id)).filter(Boolean))];
+  if (!list.length) return;
+  const key = list.join(",");
+  if (banner.remembered === key) return;
+  banner.remembered = key;
+  const now = Date.now();
+  const map = loadBannerHistory();
+  for (const id of list) map.set(id, now);
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, BANNER_HISTORY_MAX);
+  try {
+    localStorage.setItem(BANNER_HISTORY_KEY, JSON.stringify(entries.map(([id, at]) => ({ id, at }))));
+  } catch {}
+}
+
 // The AI-named Home rows, a few from each in turn, each saying which row it came from.
 function homeRowPicks() {
   if (!homeGen.ai || !homeGen.rows?.length) return [];
@@ -402,19 +648,28 @@ function homeRowPicks() {
   }
   return out;
 }
-const bannerBase = (picks) => ({
-  shows: SHOWS,
-  trending: popular().map((show) => show.id),
-  tasteIds: forYou.ids,
-  picks,
-  extraPicks: picks ? [...banner.extra, ...homeRowPicks()] : [],
-  tasteMatch: forYou.matches,
-  statusOf: (show) => entry(show)?.status || "",
-  hasArt: (show) => Boolean(show.banner || show.cover),
-});
+const bannerBase = (picks) => {
+  const recentShown = loadBannerHistory();
+  const statusOf = (show) => entry(show)?.status || "";
+  const hasArt = (show) => Boolean(show.banner || show.cover);
+  return {
+    shows: SHOWS,
+    trending: popular().map((show) => show.id),
+    tasteIds: forYou.ids,
+    picks,
+    extraPicks: picks ? [...banner.extra, ...homeRowPicks()] : [],
+    exclusivePicks: pickExclusiveBanner(SHOWS, { recentShown, hasArt, statusOf }),
+    tasteMatch: forYou.matches,
+    statusOf,
+    hasArt,
+    recentShown,
+  };
+};
 function bannerRows(count = BANNER_COUNT) {
   if (banner.rows) return banner.rows.filter((row) => byId.has(row.id) && !["finished", "dropped"].includes(entry(byId.get(row.id))?.status));
-  return galleryBanner({ ...bannerBase(aiOn() ? forYou.ranked : null), count });
+  const rows = galleryBanner({ ...bannerBase(aiOn() ? forYou.ranked : null), count });
+  rememberBanner(rows.map((row) => row.id));
+  return rows;
 }
 function rerankPicks(answer) {
   return (answer?.ok ? answer.results || [] : []).map((row) => ({
@@ -427,6 +682,7 @@ function rerankPicks(answer) {
 }
 // One more AI roll after the first ranking, asked to avoid it, cached for 12 hours per ranking.
 async function loadBannerExtra() {
+  if (!aiLive()) return;
   const ranked = (forYou.ranked || []).map((pick) => pick.id);
   const key = ranked.join(",");
   if (!key || banner.extraFor === key) return;
@@ -468,7 +724,7 @@ async function rerollBanner() {
   banner.busy = true;
   home.paintRoll?.();
   let picks = null;
-  if (aiOn() && forYou.ids.length >= 3) {
+  if (aiLive() && forYou.ids.length >= 3) {
     const answer = await send("catalogRerank", {
       query: "",
       chip: "",
@@ -494,11 +750,15 @@ async function rerollBanner() {
   }
   banner.prev = current;
   banner.rows = next;
+  banner.remembered = "";
+  rememberBanner(next.map((row) => row.id));
   home.refreshBanner?.(api, { restart: true });
 }
 function lastBannerRoll() {
   if (banner.busy || !banner.prev) return;
   [banner.rows, banner.prev] = [banner.prev, shownBanner()];
+  banner.remembered = "";
+  rememberBanner(banner.rows.map((row) => row.id));
   home.refreshBanner?.(api, { restart: true });
 }
 function paintAi() {
@@ -520,18 +780,27 @@ async function loadForYou() {
   autoRank();
 }
 // Never starts Chrome's multi-GB model download on its own; pressing AI picks still can.
+// Weekly cache: skip when hydrated picks are still fresh; otherwise refresh and avoid recent repeats.
 async function autoRank() {
-  if (forYou.tried || !aiOn() || forYou.ids.length < 3) return;
+  if (forYou.tried || !aiLive() || forYou.ids.length < 3) return;
   forYou.tried = true;
+  if (forYou.picks?.length && forYou.cacheFresh) return;
   const model = await send("modelStatus");
   if (model?.status?.needsDownload) return;
-  pickForYou(false, { quiet: true });
+  const refresh = Boolean(forYou.picks?.length && !forYou.cacheFresh);
+  pickForYou(refresh, { quiet: true, weekly: refresh });
 }
-async function pickForYou(reroll, { quiet = false } = {}) {
-  if (forYou.busy || forYou.ids.length < 3 || !aiOn()) return;
-  const last = reroll ? (forYou.picks || []).filter((pick) => !pick.mention).map((pick) => `sight:${pick.id}`) : [];
-  if (!reroll) forYou.seen = new Set();
+async function pickForYou(reroll, { quiet = false, weekly = false } = {}) {
+  if (forYou.busy || forYou.ids.length < 3 || !aiLive()) return;
+  const history = [...loadForYouHistory().keys()].map((id) => `sight:${id}`);
+  const last = (reroll || weekly)
+    ? (forYou.picks || []).filter((pick) => !pick.mention).map((pick) => `sight:${pick.id}`)
+    : [];
+  const avoid = reroll || weekly;
+  if (!avoid) forYou.seen = new Set();
   for (const id of last) forYou.seen.add(id);
+  if (weekly) for (const id of history) forYou.seen.add(id);
+  const prevRoll = reroll && !weekly && forYou.picks ? { picks: forYou.picks, by: forYou.by } : null;
   forYou.busy = true;
   paintForYou();
   const answer = await send("catalogRerank", {
@@ -539,32 +808,23 @@ async function pickForYou(reroll, { quiet = false } = {}) {
     chip: "",
     site: "all",
     ids: forYou.ids.map((id) => `sight:${id}`),
-    ...(reroll ? { reroll: true, seen: [...forYou.seen], last } : {}),
+    ...(avoid ? { reroll: true, seen: [...forYou.seen], last: last.length ? last : history.slice(0, 14) } : {}),
   });
   forYou.busy = false;
   const rows = answer?.ok ? answer.results || [] : [];
-  const picks = rows.map((row) => ({
-    id: String(row.id).replace(/^sight:/, ""),
-    reason: row.reason || "",
-    rank: row.rank ?? null,
-    confidence: Number.isFinite(row.confidence) ? row.confidence : null,
-    mention: Boolean(row.mention),
-  })).filter((pick) => byId.has(pick.id));
-  if (picks.some((pick) => !pick.mention)) {
+  if (applyForYouPicks(rows, answer?.by, { ranked: !reroll || weekly })) {
     if (answer.reset) forYou.seen = new Set(last);
-    for (const row of rows) if (!row.mention) forYou.seen.add(row.id);
-    forYou.prev = reroll && forYou.picks ? { picks: forYou.picks, by: forYou.by } : null;
-    forYou.picks = picks;
-    if (!reroll) forYou.ranked = picks;
-    forYou.by = answer.by || "";
+    for (const row of rows) if (!row.mention) forYou.seen.add(String(row.id).replace(/^sight:/, ""));
+    if (prevRoll) forYou.prev = prevRoll;
+    if (!reroll || weekly) forYou.cacheFresh = true;
   } else if (!quiet && !answer?.off) {
     toast(answer?.downloading ? "Chrome is still downloading its AI model. Try again when it finishes"
       : `${answer?.note || answer?.error || "AI couldn't pick right now."}${reroll ? " Kept your current picks" : ""}`);
   }
-  if (reroll) paintForYou();
+  if (reroll && !weekly) paintForYou();
   else {
     paintAi();
-    if (forYou.ranked) loadBannerExtra();
+    if (forYou.ranked && aiLive()) loadBannerExtra();
   }
 }
 
@@ -613,31 +873,44 @@ function ensureSettings() {
 }
 
 // Side panel on wide screens: picks inspired by recent searches (kept on this device) and the viewer's history.
+// Visible chips + Inspired AI use the last 5; a longer history is stored separately and not sent to Inspired.
 const RECENT_KEY = "cl-recent";
+const SEARCH_HISTORY_KEY = "cl-search-history";
 const SIDE_QUERY = "(min-width: 1320px)";
 let recent = (() => { try { return cleanSearches(JSON.parse(localStorage.getItem(RECENT_KEY)), RECENT_LIMIT); } catch { return []; } })();
+let searchHistory = (() => { try { return cleanSearches(JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY)), SEARCH_HISTORY_LIMIT); } catch { return []; } })();
 let inspired = { key: "", results: null, by: "", ai: false, busy: false, note: "" };
 let inspiredTimer = 0;
 let inspiredSeq = 0;
 const sideWide = () => matchMedia(SIDE_QUERY).matches;
 function rememberQuery(query) {
   const next = rememberSearch(recent, query);
-  if (next.join("\n") === recent.join("\n")) return;
-  recent = next;
-  localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
+  const history = rememberSearch(searchHistory, query, SEARCH_HISTORY_LIMIT);
+  const chipsChanged = next.join("\n") !== recent.join("\n");
+  const historyChanged = history.join("\n") !== searchHistory.join("\n");
+  if (!chipsChanged && !historyChanged) return;
+  if (chipsChanged) {
+    recent = next;
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)); } catch {}
+  }
+  if (historyChanged) {
+    searchHistory = history;
+    try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory)); } catch {}
+  }
+  if (!chipsChanged) return;
   clearTimeout(inspiredTimer);
   inspiredTimer = setTimeout(() => loadInspired(), 1200);
 }
 async function loadInspired({ fresh = false } = {}) {
   if (document.body.dataset.page !== "search" || !sideWide() || !SHOWS.length) return;
   const searches = recent.slice(0, INSPIRED_SEARCHES);
-  const key = JSON.stringify([searches, aiOn()]);
+  const key = JSON.stringify([searches, aiLive()]);
   if (!fresh && key === inspired.key && (inspired.results || inspired.busy)) return paintSide();
   const seq = ++inspiredSeq;
   inspired = { ...inspired, key, busy: true };
   paintSide();
   // Never starts Chrome's model download on its own; the engine's blend shows instead.
-  const model = aiOn() && searches.length ? await send("modelStatus") : null;
+  const model = aiLive() && searches.length ? await send("modelStatus") : null;
   const reply = await send("searchInspired", { searches, ai: Boolean(model) && !model.status?.needsDownload, fresh });
   if (seq !== inspiredSeq) return;
   const results = (reply?.ok ? reply.results || [] : []).map((row) => ({ id: String(row.id).replace(/^sight:/, ""), reason: row.reason || "" })).filter((row) => byId.has(row.id));
@@ -679,7 +952,7 @@ async function loadHomeRows({ fresh = false, nudge } = {}) {
   homeGen.busy = true;
   paintHomeRows();
   // Never starts Chrome's model download on its own; the taste-based rows show instead.
-  const model = aiOn() ? await send("modelStatus") : null;
+  const model = aiLive() ? await send("modelStatus") : null;
   const reply = await send("homeRows", {
     searches: recent.slice(0, INSPIRED_SEARCHES),
     ai: Boolean(model) && !model.status?.needsDownload,
@@ -792,7 +1065,7 @@ function pageList(tab) {
   const rows = () => `<div class="lib-rows">${items.slice(0, 400).map((show) => {
     const item = entry(show);
     const pct = item.status === "finished" ? 100 : item.episodes ? Math.round((item.progress / item.episodes) * 100) : 0;
-    return `<div class="lib-row" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}</span><span class="lib-badge">${statusBadge(show, { inline: true, focusable: true })}</span></div>
+    return `<div class="lib-row" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}</span><span class="lib-badge">${statusBadge(show, { inline: true, focusable: true })}${crBadge(show, "small")}</span></div>
       <div class="lib-prog">${item.progress} of ${item.episodes || "?"} episodes<div class="meter"><i style="width:${pct}%"></i></div></div>
       <div class="lib-acts">${listTab === "watching" ? `<button class="btn sm" data-act="plus-one">+1 ep</button>` : ""}${onCrunchyroll(show) ? `<button class="btn sm accent" data-act="watch" aria-label="Play">${icon("play")}</button>` : ""}</div></div>`;
   }).join("")}</div>`;
@@ -808,7 +1081,11 @@ function pageList(tab) {
 const SEASON_NAMES = ["WINTER", "SPRING", "SUMMER", "FALL"];
 const titleCase = (word) => `${word[0]}${word.slice(1).toLowerCase()}`;
 const nowSeason = () => ({ season: SEASON_NAMES[Math.floor(new Date().getMonth() / 3)], year: new Date().getFullYear() });
-const BROWSE_DEFAULT = { genre: "", when: "", status: "", length: "", sort: "popular", hideSeen: false, crOnly: false, ytOnly: false, tags: [], without: [] };
+const BROWSE_DEFAULT = { genre: "", when: "", status: "", length: "", sort: "popular", hideSeen: false, crOnly: false, mineOnly: false, tags: [], without: [] };
+const MINE_KEY = "ks-mine";
+let mineHome = localStorage.getItem(MINE_KEY) === "1";
+const onMyServices = (show) => Boolean(show?.onServices?.length || (show?.streaming || []).some((link) => link?.url));
+const mineServices = () => [...new Set(SHOWS.flatMap((show) => show.onServices || []))];
 const freshBrowse = (keep = {}) => ({ ...BROWSE_DEFAULT, tags: [], without: [], ...keep });
 let browse = freshBrowse();
 // Tags and genres together, so either can be required or ruled out.
@@ -846,7 +1123,7 @@ function browseResults() {
     if (browse.length === "long" && !(show.episodes > 26)) return false;
     if (browse.hideSeen && entry(show)?.status === "finished") return false;
     if (browse.crOnly && !onCrunchyroll(show)) return false;
-    if (browse.ytOnly && !onYoutube(show)) return false;
+    if (browse.mineOnly && !onMyServices(show)) return false;
     if (!browse.tags.length && !browse.without.length) return true;
     const labels = labelsOf(show);
     if (!browse.tags.every((tag) => labels.includes(tag))) return false;
@@ -895,8 +1172,8 @@ function pageBrowse(genre) {
       ${browseSelect("status", "Status", [["", "Airing or finished"], ["airing", "Airing now"], ["finished", "Finished"]])}
       ${browseSelect("length", "Length", [["", "Any length"], ["short", "Short (up to 13 eps)"], ["standard", "Standard (14 to 26 eps)"], ["long", "Long (27+ eps)"]])}
       <button class="chip ${browse.hideSeen ? "on" : ""}" data-bflag="hideSeen">Hide finished</button>
+      ${mineServices().length ? `<button class="chip ${browse.mineOnly ? "on" : ""}" data-bflag="mineOnly" title="Shows on or watched on your connected services">On my services</button>` : ""}
       ${SHOWS.some((show) => !onCrunchyroll(show)) ? `<button class="chip ${browse.crOnly ? "on" : ""}" data-bflag="crOnly">On Crunchyroll only</button>` : ""}
-      ${SHOWS.some(onYoutube) ? `<button class="chip ${browse.ytOnly ? "on" : ""}" data-bflag="ytOnly">Free on YouTube</button>` : ""}
       ${browseSelect("sort", "Sort", [["popular", "Most popular"], ["rated", "Highest rated"], ["newest", "Newest"], ["az", "A to Z"]])}
     </div>
     <div class="tag-filter">
@@ -1009,6 +1286,7 @@ function pageShow(id, seasonArg) {
   const show = byId.get(id);
   if (!show) return loaded && SHOWS.length ? `<h1 class="page-title">We couldn't find that show</h1><p class="page-sub">The link may be out of date, or the show has left the catalog.</p>
     <div class="missing-acts"><a class="btn accent" href="#browse">Browse shows</a><a class="btn ghost" href="#">Back to home</a></div>` : loadingPage();
+  send("checkShowLinks", { id: show.id }).catch(() => {});
   if (markingShow !== show.id) { marking = false; markingShow = show.id; }
   const seasons = seasonsOf(show);
   const at = library[show.id]?.at ?? 0;
@@ -1027,24 +1305,19 @@ function pageShow(id, seasonArg) {
     : count
     ? `<div class="eps ${markMode ? "marking" : "playing"}">${Array.from({ length: count }, (_, i) => `<button class="ep ${i < progress ? "seen" : ""} ${i === progress && item?.status !== "finished" ? "next" : ""}" data-ep="${i + 1}" data-season="${index}" title="${markMode ? `Watched through episode ${i + 1}` : `Play episode ${i + 1}`}">${i + 1}</button>`).join("")}</div>`
     : `<div class="set-row"><div class="grow"><b>Episode ${progress}</b><small>${season.episodes ? `of ${season.episodes}` : "Still airing, so the episode count isn't final"}</small></div>${playable ? `<button class="btn sm accent" data-act="watch" data-season="${index}">${icon("play")} Next episode</button>` : ""}<button class="btn sm" data-act="plus-one" data-season="${index}">+1 episode</button></div>`;
-  const streams = show.streaming || [];
-  const yt = onYoutube(show) ? show.youtube : null;
-  const ytNext = yt && yt.videos[Math.min(item?.status === "finished" ? 0 : progress, yt.videos.length - 1)];
-  const ytEps = yt ? `<div class="eps-head"><h3>On YouTube</h3><span class="muted eps-hint">· ${yt.videos.length} ${yt.videos.length === 1 ? "upload" : "uploads"}${yt.channel ? ` from ${esc(yt.channel)}` : ""}, opens on YouTube</span></div>
-    <div class="yt-eps">${yt.videos.map((video, i) => `<a class="yt-ep ${i < progress ? "seen" : ""} ${i === progress && item?.status !== "finished" ? "next" : ""}" href="${esc(watchUrl(video.id, yt.playlist))}" target="_blank" rel="noopener noreferrer">
-      <div class="yt-ep-art"><img src="https://i.ytimg.com/vi/${esc(video.id)}/mqdefault.jpg" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">${video.seconds ? `<span class="yt-ep-time">${runtime(video.seconds)}</span>` : ""}</div>
-      <b>${esc(video.title || `Episode ${i + 1}`)}</b></a>`).join("")}</div>` : "";
-  const ytWhole = !yt ? "" : season.format === "MOVIE" ? "The full movie" : yt.airing ? `All ${yt.expected || yt.videos.length} episodes aired so far` : `All ${yt.expected || yt.videos.length} episodes`;
+  const streams = streamLinks(show);
+  const nextEp = item?.status === "finished" ? null : progress + 1;
+  const playLink = !onCr && streams.length ? pickPlayLink(show, { episode: nextEp }) : null;
   const actions = !released(season) ? ""
     : onCr ? `<button class="btn accent" data-act="watch" data-show="${esc(show.id)}" data-season="${index}">${icon("play")} ${playLabel(show, index)}</button>`
-    : yt ? `<a class="btn accent" href="${esc(watchUrl(ytNext.id, yt.playlist))}" target="_blank" rel="noopener noreferrer">${icon("play")} ${progress && item?.status !== "finished" && season.format !== "MOVIE" ? `Episode ${progress + 1}` : "Watch"} on YouTube</a>`
-    : streams.length ? streams.map((link) => `<a class="btn accent" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Watch on ${esc(link.site)} ${icon("right")}</a>`).join("")
+    : playLink ? `<a class="btn accent" href="${esc(playLink.url)}" target="_blank" rel="noopener noreferrer">${icon("play")} Watch on ${esc(playLink.site)} ${icon("right")}</a>`
     : `<button class="btn" disabled>Not on Crunchyroll</button>`;
   const where = settings().openIn === "window" ? "your Crunchyroll window" : settings().openIn === "new" ? "a new Crunchyroll tab" : "your Crunchyroll tab";
+  const others = streams.filter((link) => link.id !== "crunchyroll").map((link) => esc(link.name));
   const playHint = !released(season) ? ""
-    : onCr ? `Opens ${esc(playTarget(show, index).label.toLowerCase())} in ${where}`
-    : yt ? `${ytWhole}, free and official${yt.channel ? ` from ${esc(yt.channel)}` : ""}. Opens on YouTube; tick off episodes below as you watch`
-    : `Crunchyroll doesn't have this show, so it can't play here. Crunchilist still tracks it: mark episodes below as you watch${streams.length ? ` on ${streams.map((link) => esc(link.site)).join(" or ")}` : " elsewhere"}`;
+    : onCr ? `Opens ${esc(playTarget(show, index).label.toLowerCase())} in ${where}${others.length ? ` · also on ${others.join(", ")}` : ""}`
+    : playLink ? `Opens ${esc(playLink.site)} in a new tab. Mark episodes below as you watch`
+    : `Crunchyroll doesn't have this show, so it can't play here. Crunchilist still tracks it: mark episodes below as you watch${others.length ? ` on ${others.join(" or ")}` : " elsewhere"}`;
   const seasonName = (season.title || "").replace(show.title, "").replace(/^[\s:–-]+/, "").trim();
   const lastYear = seasons.filter((s) => s.year).at(-1)?.year;
   const totalEps = seasons.reduce((sum, s) => sum + (s.episodes || 0), 0);
@@ -1078,7 +1351,7 @@ function pageShow(id, seasonArg) {
     <div>
       ${multi ? `<h3>Seasons <span class="muted" style="font-weight:600;font-size:14px">· ${seasons.length} on AniList, all in one place</span></h3>${seasonStrip(show, index)}` : ""}
       ${show.about ? `<h3>Story</h3><p class="show-about">${esc(show.about)}</p>` : ""}
-      <div class="eps-head"><h3>${multi ? `${esc(season.label)} episodes` : "Episodes"}</h3>${epsHead}</div>${epsGrid}${ytEps}
+      <div class="eps-head"><h3>${multi ? `${esc(season.label)} episodes` : "Episodes"}</h3>${epsHead}</div>${epsGrid}
     </div>
     <aside>
       <div class="side-card"><h3>Details</h3><dl class="facts">
@@ -1086,10 +1359,7 @@ function pageShow(id, seasonArg) {
         ${multi ? `<dt>Seasons</dt><dd>${seasons.length - movies}${movies ? ` + ${movies} movie${movies > 1 ? "s" : ""}` : ""}</dd>` : ""}
         <dt>Episodes</dt><dd>${multi && totalEps ? `${totalEps} total` : show.episodes || "Ongoing"}</dd>
         <dt>Year</dt><dd>${show.year || "–"}${multi && lastYear && lastYear !== show.year ? `–${lastYear}` : ""}</dd><dt>Studio</dt><dd>${esc(show.studio) || "–"}</dd><dt>Score</dt><dd>${score(show)} / 10</dd></dl></div>
-      <div class="side-card"><h3>Where to watch</h3>${onCr
-        ? `<a class="where on" href="${esc(show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Crunchilist manages. This link opens the show page</small></div>${icon("right")}</a>`
-        : `${streams.map((link) => `<a class="where" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span class="where-dot">${esc(link.site[0])}</span><div><b>${esc(link.site)}</b><small>Opens in a new tab</small></div>${icon("right")}</a>`).join("") || `<p class="muted">AniList doesn't list a streaming site for this one.</p>`}
-          <div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`}</div>
+      <div class="side-card"><h3>Where to watch</h3>${whereWatchHtml(show, streams)}</div>
       ${show.tags.length ? `<div class="side-card"><h3>Tags</h3><div class="tag-list">${show.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div></div>` : ""}
       ${season.anilistId || show.anilistId ? `<div class="side-card"><a class="btn ghost" style="width:100%" href="https://anilist.co/anime/${Number(season.anilistId || show.anilistId)}" target="_blank" rel="noopener noreferrer">Open ${multi ? `${esc(season.label.toLowerCase())} ` : ""}on AniList</a></div>` : ""}
     </aside>
@@ -1097,54 +1367,201 @@ function pageShow(id, seasonArg) {
   ${rail("More like this", similar(show))}`;
 }
 
-function pageSettings() {
+const SETTINGS_NAV = [
+  { id: "appearance", label: "Appearance", about: "Theme, mode, cards and trailers" },
+  { id: "where", label: "Where to watch", about: "Sites, catalogs and visibility" },
+  { id: "import", label: "Import & tracking", about: "History, daily sync and as-you-watch" },
+  { id: "playback", label: "Playback", about: "Tabs, back button and tips" },
+  { id: "account", label: "Account", about: "AniList, taste and catalog" },
+  { id: "ai", label: "AI", about: "Models, ranking and keys" },
+  { id: "badges", label: "Badges", about: "Status badges on Crunchyroll" },
+  { id: "notifications", label: "Notifications", about: "Dialogs and toasts" },
+  { id: "data", label: "Data", about: "Backups, privacy and diagnostics" },
+  { id: "about", label: "About", about: "Privacy, version and updates" },
+];
+const EMBED_SECTIONS = new Set(["account", "ai", "badges", "notifications"]);
+
+function settingsSection(id) {
+  const known = SETTINGS_NAV.some((item) => item.id === id);
+  return known ? id : "appearance";
+}
+
+function favoriteCharacterStub() {
+  const pack = characterById(DEFAULT_CHARACTER_ID);
+  const sample = composeLine({ characterId: DEFAULT_CHARACTER_ID, kind: "welcome", seed: "settings-stub" });
+  const name = pack?.name || "Kivi";
+  const about = pack
+    ? `${name} is our original anime guide (first fave when this ships) — short welcome and look-here lines in her voice. Sample: “${sample.text}” Not selectable yet.`
+    : "Coming soon — short welcome and look-here lines from a character you pick.";
+  return `<div class="set-row off fave-stub" aria-disabled="true" title="Coming soon">
+      <img class="fave-stub-art" src="../icons/kivi.png" alt="" width="40" height="40" decoding="async">
+      <div class="grow"><b>Favorite character</b><small>${esc(about)}</small></div>
+      <div class="seg"><button type="button" disabled tabindex="-1">${esc(name)} · soon</button></div>
+    </div>`;
+}
+
+function settingsPaneAppearance() {
+  return `<div class="set-card"><h3>Appearance</h3><p>Pick a theme or make your own, then choose light, dark, or follow your system.</p>
+    <div class="themes">${PALETTES.map((p) => `<button class="theme-tile" data-palette="${p.id}" data-set-palette="${p.id}">
+      <div class="theme-prev"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="theme-name">${p.name}<span>${p.colors.map((c) => `<i style="background:${c}"></i>`).join("")}</span></div></button>`).join("")}
+      <button class="theme-tile" data-palette="custom" data-set-palette="custom">
+      <div class="theme-prev"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="theme-name">Custom<span><i style="background:var(--accent)"></i><i style="background:var(--accent-2)"></i></span></div></button></div>
+    <div class="set-row"><div class="grow"><b>Custom color</b><small>Drag around the wheel to pick any color. Backgrounds, text and highlights are built from it for light and dark mode</small></div>
+      ${wheelControls()}</div>
+    <div class="set-row"><div class="grow"><b>Mode</b><small>Light, dark, or match your device</small></div>
+      <div class="seg"><button data-set-mode="light">Light</button><button data-set-mode="dark">Dark</button><button data-set-mode="system">System</button></div></div>
+    <div class="set-row"><div class="grow"><b>Card size</b><small>How big title cards are on every page</small></div>
+      <div class="seg"><button data-set-size="s">Small</button><button data-set-size="m">Medium</button><button data-set-size="l">Large</button></div></div>
+    <div class="set-row"><div class="grow"><b>Trailer previews</b><small>Play a muted trailer when you rest on a card</small></div><button class="switch" data-pref="previews" aria-label="Trailer previews"></button></div>
+    <div class="set-row"><div class="grow"><b>English subtitles</b><small>Show English captions on trailers that have them, in card previews and the trailer window</small></div><button class="switch" data-pref="subs" aria-label="English subtitles on trailers"></button></div>
+    <div class="set-row"><div class="grow"><b>Preview sound</b><small>One setting for every preview. The volume slider lives in the header</small></div><button class="switch" data-pref="sound" aria-label="Preview sound"></button></div>
+    <div class="set-row"><div class="grow"><b>Performance mode</b><small>Cuts motion, blur and trailer autoplay; skips AI ranking and model downloads; slows Crunchyroll page scans and holds background AniList cover matching</small></div><button class="switch" data-setting="liteMode" aria-label="Performance mode"></button></div>
+    ${favoriteCharacterStub()}
+  </div>`;
+}
+
+function settingsPaneWhere() {
   const s = settings();
-  const openIn = s.openIn || "tab";
+  return `<div class="set-card"><h3>Where to watch</h3><p>Connect the sites you use, choose which appear on show pages, and read what each catalog carries. Crunchyroll is always connected. Netflix, Prime and Hulu also use the weekly gap map.</p>
+    <div class="set-row"><div class="grow"><b>Gap map</b><small id="where-map-status">Checking…</small></div><button class="btn ghost" type="button" data-act="refresh-title-feeds">Refresh now</button></div>
+    <div class="set-row"><div class="grow"><b>Master list</b><small id="id-map-status">Checking…</small></div></div>
+    <h4 class="set-sub">Accounts</h4>
+    <div id="site-connections" class="site-connections"><p class="muted">Loading sites…</p></div>
+    <h4 class="set-sub">Catalogs</h4>
+    <div class="set-row"><div class="grow"><b>Read what your services carry</b><small>About once a week, while a connected site is open, its catalog is matched to AniList so show pages know what you can watch.</small></div>
+      <button class="switch" data-setting="readCatalogs" aria-label="Read what your services carry"></button></div>
+    <div id="catalog-rows" class="catalog-rows" ${s.readCatalogs === false ? "hidden" : ""}><p class="muted">Loading catalogs…</p></div>
+    <h4 class="set-sub">Shown on show pages</h4>
+    <div class="set-row"><div class="grow"><b>Hide shows only on switched-off sites</b><small>Home, Browse, search and airing leave out shows that only stream on sites switched off below. My list still shows everything.</small></div>
+      <button class="switch" data-setting="hideOffSiteShows" aria-label="Hide shows only on switched-off sites"></button></div>
+    <div id="listing-rows" class="listing-rows"><p class="muted">Loading…</p></div>
+    <h4 class="set-sub">Search filter on site panels</h4>
+    <div class="set-row"><div class="grow"><b>Where filter default</b><small data-choice-about="whereFilterMode">${esc(CHOICE_ABOUT.whereFilterMode[(s.whereFilterMode || "host") === "remember" ? "remember" : "host"])}</small></div>
+      <div class="seg"><button type="button" class="${(s.whereFilterMode || "host") === "host" ? "on" : ""}" data-choice="whereFilterMode:host">Always this site</button>
+        <button type="button" class="${(s.whereFilterMode || "host") === "remember" ? "on" : ""}" data-choice="whereFilterMode:remember">Remember last</button></div></div>
+  </div>`;
+}
+
+function settingsPaneImport() {
+  return `<div id="import-root"><p class="muted">Loading import…</p></div>`;
+}
+
+let importState = null;
+let importPoll = 0;
+
+async function paintImportPane() {
+  const onHistory = document.body.dataset.page === "imports";
+  const root = onHistory ? document.querySelector("main") : document.querySelector("#import-root");
+  if (!root) return;
+  const reply = await send("importStatus");
+  if (!reply?.ok) {
+    root.innerHTML = onHistory ? `<p class="muted">${esc(reply?.error || "Couldn't load import status")}</p>`
+      : `<div class="set-card"><h3>Import</h3><p class="muted">${esc(reply?.error || "Couldn't load import status")}</p></div>`;
+    return;
+  }
+  const wasRunning = Boolean(importState?.job?.running);
+  importState = reply;
+  const connected = Boolean(reply.anilistConnected || settings().anilistConnected);
+  root.innerHTML = onHistory
+    ? renderImportsHistory(reply)
+    : renderImportPane(reply, { anilistConnected: connected });
+  noteImportState(reply);
+  clearTimeout(importPoll);
+  // Keep polling while a job runs, and once more after it stops so preview/message isn't missed.
+  if (reply.job?.running) importPoll = setTimeout(() => paintImportPane(), 1000);
+  else if (wasRunning) importPoll = setTimeout(() => paintImportPane(), 400);
+}
+
+function settingsPanePlayback() {
+  const s = settings();
+  const open = s.openEpisodes || (s.openIn === "window" ? "window" : s.openIn === "new" ? "new" : s.tabAuto ? "tab-auto" : "tab-ask");
   const keys = shortcut == null ? [] : shortcut.split("+").filter(Boolean);
+  const tipsSeen = localStorage.getItem(TIPS_SEEN) === "1" || s.showTips === false;
+  return `<div class="set-card"><h3>Playback</h3><p>Browse in Kivori SekAI, watch on Crunchyroll. Episodes always play on Crunchyroll's own site, so your account, quality and subtitles work as normal.</p>
+    <div class="set-row"><div class="grow"><b>Open episodes</b><small data-choice-about="openEpisodes">${esc(CHOICE_ABOUT.openEpisodes[open] || "")}</small></div>
+      <div class="seg">${[["tab-ask", "Reuse (ask)"], ["tab-auto", "Reuse (auto)"], ["window", "Pop-out"], ["new", "Always new"]].map(([v, l]) => `<button type="button" class="${open === v ? "on" : ""}" data-choice="openEpisodes:${v}">${l}</button>`).join("")}</div></div>
+    <div class="set-row"><div class="grow"><b>“Back to Kivori SekAI” on Crunchyroll</b><small>Adds a button at the top of Crunchyroll pages that switches back to this tab instead of opening a new one, and pauses the episode you leave</small></div><button class="switch" data-setting="backButton" aria-label="Back to Kivori SekAI button"></button></div>
+    <div class="set-row"><div class="grow"><b>Open episodes in the mini player</b><small>Floats each episode in Chrome's small always-on-top player. Chrome only allows this after a click on the player, so each episode starts with a prompt; when you switch away from the tab, Chrome may also float it on its own</small></div><button class="switch" data-setting="miniPlayer" aria-label="Open episodes in the mini player"></button></div>
+    ${tipsSeen
+      ? `<div class="set-row"><div class="grow"><b>Tips</b><small>Short pointers for preview volume, theme controls, and the back button. You’ve dismissed them on this device.</small></div>
+        <button class="btn ghost" type="button" data-act="reset-tips">Show tips again</button></div>`
+      : `<div class="set-row"><div class="grow"><b>Tips</b><small>Short pointers will appear once on Home and on Crunchyroll. You can dismiss them permanently from the tip itself.</small></div></div>`}
+    <div class="set-row"><div class="grow"><b>Switch between Kivori SekAI and Crunchyroll</b><small>${shortcut === "" ? "Chrome didn't assign this shortcut, usually because another extension already uses the keys. Pick one in Chrome's extension shortcuts" : "Keyboard shortcut, changeable in Chrome's extension shortcuts"}</small></div>${keys.map((key) => `<kbd class="kbd">${esc(key)}</kbd>`).join("")}<button class="btn ghost" data-act="shortcuts">${shortcut ? "Change" : "Set shortcut"}</button></div>
+  </div>`;
+}
+
+function settingsPaneEmbed(title, about, section, { aiToggle = false } = {}) {
+  return `<div class="set-card set-embed"><h3>${esc(title)}</h3><p>${about}</p>
+    ${aiToggle ? `<div class="set-row"><div class="grow"><b>AI features</b><small>${aiOn()
+      ? "AI ranks Picked for you and the banner, explains each pick with a match score, and re-orders search results for moods and descriptions"
+      : "Off: nothing is sent to an AI model. Picked for you, the banner and search still work, ranked by your taste, what you've watched and what's trending"}</small></div><button class="switch" data-setting="useAi" aria-label="AI features"></button></div>` : ""}
+    <div id="settings-embed" data-embed-section="${esc(section)}"></div></div>`;
+}
+
+function settingsPaneAccount() {
+  return settingsPaneEmbed("Account", "AniList, your Crunchyroll history, taste preferences, and the catalog.", "account");
+}
+function settingsPaneAi() {
+  return settingsPaneEmbed("AI", "Choose how ranking and search use on-device or remote models.", "ai", { aiToggle: true });
+}
+function settingsPaneBadges() {
+  return settingsPaneEmbed("Badges", "How status badges look on Crunchyroll title cards.", "badges");
+}
+function settingsPaneNotifications() {
+  return settingsPaneEmbed("Notifications", "How episode updates and toasts behave on Crunchyroll.", "notifications");
+}
+
+function settingsPaneData() {
+  return `<div class="set-card"><h3>Data &amp; privacy</h3><p>Backups and diagnostics for this browser. Sign-ins stay on this device. List sync and optional AI keys only leave when you connect AniList or save a remote model key.</p>
+    <div class="stack">
+      <div class="set-row"><div class="grow"><b>Backup</b><small>Saves your matches, picks, import history and settings to a file.</small></div>
+        <button class="btn ghost" type="button" data-act="backup-save">Download backup</button>
+        <label class="btn ghost">Restore…<input type="file" accept=".json,application/json" data-act="backup-restore" hidden></label></div>
+      <div class="set-row"><div class="grow"><b>Diagnostics</b><small>Copies a short report (versions, connections, recent imports) for bug reports. No passwords or API keys.</small></div>
+        <button class="btn ghost" type="button" data-act="copy-diagnostics">Copy diagnostics</button></div>
+      <p class="muted fold-foot">To forget a site's data on this device, disconnect it under Where to watch and confirm when asked. <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></p>
+    </div></div>`;
+}
+
+function settingsPaneAbout() {
+  return `<div class="set-card"><h3>About</h3><p>Version, privacy and updates.</p>
+    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><span>Kivori SekAI ${esc(chrome.runtime.getManifest().version)}</span>${updateHtml()}</p>
+    ${update?.available ? `<p class="set-foot set-update">${canSelfUpdate()
+      ? `Update now installs it into your Kivori SekAI folder and restarts. The first time, Chrome asks you to pick that folder: the one shown under Kivori SekAI on chrome://extensions.${manualUpdate ? " If it can't finish, double-click update.cmd in that folder." : ""} Your list and settings stay.`
+      : manualUpdate
+        ? "Double-click update.cmd in your Kivori SekAI folder (the one shown under Kivori SekAI on chrome://extensions), then come back here. Your list and settings stay."
+        : "Download it, unzip it over your Kivori SekAI folder, then press reload on Kivori SekAI in chrome://extensions. Your list and settings stay."}</p>` : ""}
+  </div>`;
+}
+
+const SETTINGS_PANES = {
+  appearance: settingsPaneAppearance,
+  where: settingsPaneWhere,
+  import: settingsPaneImport,
+  playback: settingsPanePlayback,
+  account: settingsPaneAccount,
+  ai: settingsPaneAi,
+  badges: settingsPaneBadges,
+  notifications: settingsPaneNotifications,
+  data: settingsPaneData,
+  about: settingsPaneAbout,
+};
+
+function pageSettings(section) {
+  const current = settingsSection(section);
+  const nav = SETTINGS_NAV.find((item) => item.id === current);
   return `<h1 class="page-title">Settings</h1><p class="page-sub">Make it yours. Everything here saves instantly.</p>
   <div class="settings">
-    <div class="set-card"><h3>Appearance</h3><p>Pick a theme or make your own, then choose light, dark, or follow your system.</p>
-      <div class="themes">${PALETTES.map((p) => `<button class="theme-tile" data-palette="${p.id}" data-set-palette="${p.id}">
-        <div class="theme-prev"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        <div class="theme-name">${p.name}<span>${p.colors.map((c) => `<i style="background:${c}"></i>`).join("")}</span></div></button>`).join("")}
-        <button class="theme-tile" data-palette="custom" data-set-palette="custom">
-        <div class="theme-prev"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        <div class="theme-name">Custom<span><i style="background:var(--accent)"></i><i style="background:var(--accent-2)"></i></span></div></button></div>
-      <div class="set-row"><div class="grow"><b>Custom color</b><small>Drag around the wheel to pick any color. Backgrounds, text and highlights are built from it for light and dark mode</small></div>
-        ${wheelControls()}</div>
-      <div class="set-row"><div class="grow"><b>Mode</b><small>Light, dark, or match your device</small></div>
-        <div class="seg"><button data-set-mode="light">Light</button><button data-set-mode="dark">Dark</button><button data-set-mode="system">System</button></div></div>
-      <div class="set-row"><div class="grow"><b>Card size</b><small>How big title cards are on every page</small></div>
-        <div class="seg"><button data-set-size="s">Small</button><button data-set-size="m">Medium</button><button data-set-size="l">Large</button></div></div>
-      <div class="set-row"><div class="grow"><b>Trailer previews</b><small>Play a muted trailer when you rest on a card</small></div><button class="switch" data-pref="previews" aria-label="Trailer previews"></button></div>
-      <div class="set-row"><div class="grow"><b>English subtitles</b><small>Show English captions on trailers that have them, in card previews and the trailer window</small></div><button class="switch" data-pref="subs" aria-label="English subtitles on trailers"></button></div>
-      <div class="set-row"><div class="grow"><b>Preview sound</b><small>One setting for every preview. The volume slider lives in the header</small></div><button class="switch" data-pref="sound" aria-label="Preview sound"></button></div>
-      <div class="set-row"><div class="grow"><b>Performance mode</b><small>Turns off motion, blur and trailer autoplay here, and checks Crunchyroll pages less often</small></div><button class="switch" data-setting="liteMode" aria-label="Performance mode"></button></div>
+    <nav class="settings-nav" aria-label="Settings sections">
+      ${SETTINGS_NAV.map((item) => `<a class="settings-nav-link${item.id === current ? " on" : ""}" href="#settings/${item.id}">
+        <b>${item.label}</b><small>${item.about}</small></a>`).join("")}
+    </nav>
+    <div class="settings-main" data-settings-section="${current}">
+      <p class="settings-crumb"><b>${esc(nav.label)}</b><span>${esc(nav.about)}</span></p>
+      ${SETTINGS_PANES[current]()}
     </div>
-    <div class="set-card"><h3>Playback</h3><p>Browse in Crunchilist, watch on Crunchyroll. Episodes always play on Crunchyroll's own site, so your account, quality and subtitles work as normal.</p>
-      <div class="set-row"><div class="grow"><b>Open episodes in</b><small>${{ tab: "One Crunchyroll tab that Crunchilist reuses every time you press Play", window: "One pop-out Crunchyroll window with no tabs or address bar, reused every time", new: "A new Crunchyroll tab every time you press Play" }[openIn] || ""}</small></div>
-        <div class="seg">${[["tab", "One tab"], ["window", "Pop-out window"], ["new", "New tab"]].map(([v, l]) => `<button class="${openIn === v ? "on" : ""}" data-choice="openIn:${v}">${l}</button>`).join("")}</div></div>
-      <div class="set-row"><div class="grow"><b>Multiple tab management</b>
-          <small>Keeps Crunchyroll to one tab. If a Crunchyroll page opens in another tab (from a link, a bookmark, or a search result), Crunchilist offers to move it into your Crunchilist-opened Crunchyroll tab and close the extra one. It only touches Crunchyroll tabs, never closes anything without asking${s.tabAuto ? " (or showing Undo)" : ""}, and does nothing when that tab isn't open.</small></div>
-        <button class="switch" data-setting="tabManage" aria-label="Multiple tab management"></button></div>
-      ${s.tabManage !== false && openIn !== "new" ? `<div class="set-row sub-row"><div class="grow"><b>When an extra Crunchyroll tab opens</b><small>${s.tabAuto ? "Moved into your Crunchyroll tab right away, with an Undo button there" : "That tab shows a small bar asking whether to move it"}</small></div>
-        <div class="seg"><button class="${s.tabAuto ? "" : "on"}" data-choice="tabAuto:false">Ask me</button><button class="${s.tabAuto ? "on" : ""}" data-choice="tabAuto:true">Move automatically</button></div></div>` : ""}
-      <div class="set-row"><div class="grow"><b>“Back to Crunchilist” on Crunchyroll</b><small>Adds a button at the top of Crunchyroll pages that switches back to this tab instead of opening a new one, and pauses the episode you leave</small></div><button class="switch" data-setting="backButton" aria-label="Back to Crunchilist button"></button></div>
-      <div class="set-row"><div class="grow"><b>Open episodes in the mini player</b><small>Floats each episode in Chrome's small always-on-top player, the same as the Always on top switch next to “Back to Crunchilist”. Chrome only allows this after a click on the player, so each episode starts with a “Click anywhere to open the mini player” prompt; when you switch away from the tab, Chrome may also float it on its own</small></div><button class="switch" data-setting="miniPlayer" aria-label="Open episodes in the mini player"></button></div>
-      <div class="set-row"><div class="grow"><b>Show tips</b><small>Short pointers, like where the preview volume and theme controls are here, and the “Back to Crunchilist” button when an episode opens. Turning this back on shows them again</small></div><button class="switch" data-setting="showTips" aria-label="Show tips"></button></div>
-      <div class="set-row"><div class="grow"><b>Switch between Crunchilist and Crunchyroll</b><small>${shortcut === "" ? "Chrome didn't assign this shortcut, usually because another extension already uses the keys. Pick one in Chrome's extension shortcuts" : "Keyboard shortcut, changeable in Chrome's extension shortcuts"}</small></div>${keys.map((key) => `<kbd class="kbd">${esc(key)}</kbd>`).join("")}<button class="btn ghost" data-act="shortcuts">${shortcut ? "Change" : "Set shortcut"}</button></div>
-    </div>
-    <div class="set-card set-embed"><h3>Account, search and AI</h3><p>AniList, your Crunchyroll history, taste, AI services, notifications, badges on Crunchyroll, and the catalog.</p>
-      <div class="set-row"><div class="grow"><b>AI features</b><small>${aiOn()
-        ? "AI ranks Picked for you and the banner, explains each pick with a match score, and re-orders search results for moods and descriptions"
-        : "Off: nothing is sent to an AI model. Picked for you, the banner and search still work, ranked by your taste, what you've watched and what's trending"}</small></div><button class="switch" data-setting="useAi" aria-label="AI features"></button></div>
-      <div id="settings-embed"></div></div>
-    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><span>Crunchilist ${esc(chrome.runtime.getManifest().version)}</span>${updateHtml()}</p>
-    ${update?.available ? `<p class="set-foot set-update">${canSelfUpdate()
-      ? `Update now installs it into your Crunchilist folder and restarts Crunchilist. The first time, Chrome asks you to pick that folder: the one shown under Crunchilist on chrome://extensions.${manualUpdate ? " If it can't finish, double-click update.cmd in that folder." : ""} Your list and settings stay.`
-      : manualUpdate
-        ? "Double-click update.cmd in your Crunchilist folder (the one shown under Crunchilist on chrome://extensions), then come back here. Your list and settings stay."
-        : "Download it, unzip it over your Crunchilist folder, then press reload on Crunchilist in chrome://extensions. Your list and settings stay."}</p>` : ""}
   </div>`;
 }
 let updating = false;
@@ -1199,14 +1616,159 @@ async function runUpdate() {
     paint();
   }
 }
+function feedNote(status, empty) {
+  if (!status) return "Checking…";
+  if (status.error && !status.count) return status.error;
+  if (!status.count) return empty;
+  const when = status.updated ? `Updated ${status.updated}` : status.checkedAt ? `Checked ${ago(status.checkedAt)}` : "";
+  return `${status.count.toLocaleString()} titles${when ? ` · ${when}` : ""}${status.error ? ` · ${status.error}` : ""}`;
+}
+
+async function paintTitleFeeds() {
+  const whereEl = document.querySelector("#where-map-status");
+  const idEl = document.querySelector("#id-map-status");
+  if (!whereEl && !idEl) return;
+  const reply = await send("titleFeeds");
+  if (!reply?.ok) {
+    if (whereEl) whereEl.textContent = reply?.error || "Couldn't load feed status";
+    if (idEl) idEl.textContent = reply?.error || "Couldn't load feed status";
+    return;
+  }
+  if (whereEl) whereEl.textContent = feedNote(reply.whereMap, "Using the packaged map until the first download finishes");
+  if (idEl) idEl.textContent = feedNote(reply.idMap, "Downloading the master list in the background");
+}
+
+async function paintSiteConnections() {
+  const root = document.querySelector("#site-connections");
+  const listings = document.querySelector("#listing-rows");
+  const catalogs = document.querySelector("#catalog-rows");
+  if (!root && !listings && !catalogs) return;
+  const reply = await send("siteConnections");
+  if (!reply?.ok) {
+    if (root) root.innerHTML = `<p class="muted">${esc(reply?.error || "Couldn't load sites")}</p>`;
+    return;
+  }
+  const sites = reply.sites || [];
+  const connected = new Set(sites.filter((site) => site.connected).map((site) => site.id));
+  const hidden = new Set((settings().hiddenSites || []).map((site) => String(site).toLowerCase()));
+  if (root) {
+    root.innerHTML = sites.map((site) => {
+      const note = site.required ? "Always connected · full panel on Crunchyroll"
+        : site.id === "hulu" ? "Coming later — Hulu connection and tracking aren't ready yet"
+          : site.untested ? "Not available to connect yet"
+            : site.connected ? (site.tracks ? "Connected · tracks as you watch" : site.imports ? "Connected · history import ready" : "Connected · search panel on this site")
+              : "Not connected";
+      const actions = site.required
+        ? `<a class="btn ghost" href="${esc(site.home)}" target="_blank" rel="noopener">Open</a>`
+        : site.id === "hulu"
+          ? `<a class="btn ghost" href="${esc(site.home)}" target="_blank" rel="noopener">Open</a><button class="btn ghost" type="button" disabled>Coming later</button>`
+          : site.untested && !site.connected
+            ? `<button class="btn ghost" type="button" disabled>Connect</button>`
+            : `<a class="btn ghost" href="${esc(site.home)}" target="_blank" rel="noopener">Open</a>
+               <button class="btn ghost" type="button" data-site="${esc(site.id)}" data-act="${site.connected ? "disconnect-site" : "connect-site"}">${site.connected ? "Disconnect" : "Connect"}</button>`;
+      return `<div class="set-row${(site.untested || site.id === "hulu") && !site.connected ? " off" : ""}">
+        <div class="grow"><b style="display:inline-flex;align-items:center;gap:8px"><i style="width:8px;height:8px;border-radius:50%;background:${esc(site.color)}"></i>${esc(site.name)}</b>
+          <small>${esc(note)}</small></div>
+        <span class="pill${site.connected ? " on" : ""}">${site.connected ? "Connected" : "Not connected"}</span>
+        ${actions}
+      </div>`;
+    }).join("");
+  }
+  if (listings) {
+    listings.innerHTML = sites.map((site) => {
+      const on = !hidden.has(site.name.toLowerCase());
+      const link = site.connected ? "Connected · " : "";
+      return `<div class="set-row"><div class="grow"><b>${esc(site.name)}</b><small>${link}${on ? "Shown in where-to-watch" : `Hidden from where-to-watch${site.connected ? " and On my services" : ""}`}</small></div>
+        <button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on}" data-listing="${esc(site.name)}" aria-label="Show ${esc(site.name)}"></button></div>`;
+    }).join("");
+  }
+  if (catalogs) {
+    const status = reply.catalogs || {};
+    const catalogIds = ["crunchyroll", "hidive", "tubi", "netflix"];
+    catalogs.innerHTML = catalogIds.map((id) => {
+      const site = sites.find((row) => row.id === id);
+      const item = status[id];
+      const name = site?.name || id;
+      const on = connected.has(id);
+      const rate = item?.matchRate != null ? ` (${Math.round(item.matchRate * 1000) / 10}% matched)` : "";
+      const note = !on ? `Connect ${name} first.`
+        : item?.at ? `${(item.titles || 0).toLocaleString()} titles, ${(item.matched || 0).toLocaleString()} matched${rate}.`
+          : item?.error ? `Not read yet: ${item.error}` : `Not read yet. Keep ${name} open in a tab${id === "crunchyroll" ? " while signed in" : ""}.`;
+      return `<div class="set-row${on ? "" : " off"}"><div class="grow"><b>${esc(name)}</b><small>${esc(note)}</small></div>
+        ${on ? `<button class="btn ghost" type="button" data-act="catalog-read" data-catalog="${esc(id)}">Read now</button>` : ""}</div>`;
+    }).join("");
+  }
+}
+
+let readingCatalog = "";
+
+// Opens the site with a Back card when the tab isn't ready; after Back, waits for hello then reads.
+async function readCatalogNow(id, { fromReturn = false, button = null } = {}) {
+  const service = serviceById(id);
+  if (!service || readingCatalog === id) return;
+  readingCatalog = id;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Reading…";
+  }
+  let reply;
+  try {
+    reply = await send("refreshCatalogs", { service: id, openIfNeeded: !fromReturn, wait: fromReturn });
+  } finally {
+    readingCatalog = "";
+    paintSiteConnections();
+  }
+  if (reply?.opened) {
+    toast(`Opened ${service.name}. ${id === "netflix" ? "Pick your profile, keep the tab open, then" : "Keep the tab open, then"} click Back to Kivori SekAI.`);
+    return;
+  }
+  const result = reply?.results?.[0];
+  toast(!reply?.ok
+    ? reply?.error || "That catalog couldn't be read"
+    : result?.ok
+      ? `Read ${(result.titles || 0).toLocaleString()} titles from ${service.name}`
+      : result?.error || "That catalog couldn't be read");
+}
+
+async function takeCatalogKick() {
+  const kick = (await chrome.storage.session.get(KEYS.catalogKick))[KEYS.catalogKick];
+  if (!kick?.service || Date.now() - (kick.at || 0) > 120_000) return;
+  await chrome.storage.session.remove(KEYS.catalogKick);
+  if (!location.hash.startsWith("#settings")) location.hash = "#settings/where";
+  else if (!location.hash.includes("/where")) location.hash = "#settings/where";
+  await readCatalogNow(kick.service, { fromReturn: true });
+}
+
 function mountSettings() {
   ensureSettings();
-  document.querySelector("#settings-embed")?.append(settingsEmbed.wrap);
+  const embed = document.querySelector("#settings-embed");
+  if (embed) {
+    embed.append(settingsEmbed.wrap);
+    const section = embed.dataset.embedSection || null;
+    settingsView?.focus(EMBED_SECTIONS.has(section) ? section : null);
+  }
+  paintTitleFeeds();
+  paintSiteConnections();
+  paintImportPane();
+  const rows = document.querySelector("#catalog-rows");
+  if (rows) rows.hidden = settings().readCatalogs === false;
 }
 async function setSettings(patch) {
   const reply = await send("setSettings", { patch });
   if (!reply?.ok) return toast(reply?.error || "Couldn't save that setting");
   applyView(reply.view);
+  // Settings controls paint from view.settings; remounting the whole page fights that and drops choice .on state.
+  if (document.body.dataset.page === "settings") {
+    paintSettingControls();
+    if (document.querySelector("#import-root")) paintImportPane();
+    // Tips row layout depends on dismissed state — rebuild Playback when that flips.
+    if ("showTips" in patch && document.querySelector("[data-settings-section='playback']")) rerender(true);
+    return;
+  }
+  if (document.body.dataset.page === "imports") {
+    paintImportPane();
+    return;
+  }
   rerender(true);
 }
 
@@ -1385,8 +1947,9 @@ async function resolveAll(action) {
 // "by Phoniix" under the wordmark.
 function nav() {
   return `<nav class="nav">
-    <a class="brand" href="#"><img class="brand-logo" src="../icons/crunchilist-logo.svg" alt=""><span class="brand-word">Crunchilist<small>by Phoniix</small></span></a>
+    <a class="brand" href="#"><img class="brand-logo" src="../icons/crunchilist-logo.svg" alt="Kivori SekAI"><span class="brand-word">Kivori SekAI<small>by Phoniix</small></span></a>
     <a class="nav-link" data-route="home" href="#">${icon("home")}<span>Home</span></a>
+    <a class="nav-link" data-route="search" href="#search">${icon("search")}<span>Search</span></a>
     <a class="nav-link" data-route="browse" href="#browse">${icon("compass")}<span>Browse</span></a>
     <a class="nav-link" data-route="airing" href="#airing">${icon("calendar")}<span>Airing</span></a>
     <a class="nav-link" data-route="list" href="#list">${icon("list")}<span>My list</span></a>
@@ -1645,7 +2208,6 @@ function playTarget(show, seasonArg, episodeArg) {
   return { index, season, episode, label, multi };
 }
 function playLabel(show, seasonArg) {
-  if (onYoutube(show)) return "Episodes on YouTube";
   if (!onCrunchyroll(show)) return "Where to watch";
   const target = playTarget(show, seasonArg);
   const started = seasonState(show, target.index)?.status === "watching";
@@ -1653,9 +2215,13 @@ function playLabel(show, seasonArg) {
 }
 async function play(show, seasonArg, episodeArg) {
   if (!onCrunchyroll(show)) {
+    const link = pickPlayLink(show, { episode: episodeArg || playTarget(show, seasonArg).episode });
+    if (link?.url) {
+      window.open(link.url, "_blank", "noopener,noreferrer");
+      return;
+    }
     location.hash = `show/${show.id}`;
-    if (onYoutube(show)) return;
-    return toast(`${show.title} isn't on Crunchyroll${show.streaming?.length ? `. It streams on ${show.streaming.map((link) => link.site).join(", ")}` : ""}`);
+    return toast(`${show.title} isn't on Crunchyroll${show.streaming?.length ? `. It streams on ${show.streaming.map((row) => row.site).join(", ")}` : ""}`);
   }
   stopPreview();
   hush(true);
@@ -1754,7 +2320,7 @@ function loadingPage() {
 }
 function emptyHome() {
   return `<section class="welcome">
-    <img src="../icons/crunchilist-logo.svg" alt="">
+    <img src="../icons/crunchilist-logo.svg" alt="Kivori SekAI">
     <h1 class="page-title">Your catalog is on its way</h1>
     <p class="page-sub">Open Crunchyroll in this browser while signed in. Crunchilist reads the catalog from there, then matches each show on AniList for art, trailers and seasons. This page fills in by itself.</p>
     <div class="missing-acts"><a class="btn accent" href="https://www.crunchyroll.com/" target="_blank" rel="noopener">Open Crunchyroll</a><a class="btn ghost" href="#settings">Settings</a></div>
@@ -1773,10 +2339,10 @@ function route() {
   const main = document.querySelector("main");
   const decode = (text) => { try { return decodeURIComponent(text); } catch { return text; } };
   const searchQuery = query?.startsWith("q=") ? decode(query.slice(2)) : null;
-  const pages = { search: () => pageSearch(searchQuery), list: () => pageList(arg), show: () => pageShow(decode(arg || ""), sub), settings: pageSettings, browse: () => pageBrowse(arg ? decode(arg) : route.keep ? undefined : ""), airing: pageAiring };
+  const pages = { search: () => pageSearch(searchQuery), list: () => pageList(arg), show: () => pageShow(decode(arg || ""), sub), settings: () => pageSettings(arg), browse: () => pageBrowse(arg ? decode(arg) : route.keep ? undefined : ""), airing: pageAiring, imports: () => (importState ? renderImportsHistory(importState) : `<p class="muted">Loading import history…</p>`) };
   const page = pages[name] ? name : "home";
   document.body.dataset.page = page;
-  const needsShows = page !== "settings" && page !== "search";
+  const needsShows = page !== "settings" && page !== "search" && page !== "imports";
   main.innerHTML = !loaded && needsShows ? loadingPage()
     : !SHOWS.length && needsShows ? emptyHome()
     : page === "home" ? home.render(api) : pages[page]();
@@ -1784,6 +2350,7 @@ function route() {
   if (page === "search") mountSearch(searchQuery);
   if (page === "home") { loadHomeRows(); setTimeout(warmPlay, 1500); }
   if (page === "settings") mountSettings();
+  if (page === "imports") paintImportPane();
   if (page === "browse") paintBrowse();
   if (page === "list" && listView === "grid") {
     const target = main.querySelector("#list-grid");
@@ -1804,6 +2371,8 @@ const rerender = (force = false) => {
   const page = document.body.dataset.page;
   if (!force && (page === "search" || page === "settings")) {
     if (page === "search") paintSide();
+    // Settings short-circuits the full remount; still refresh Import when it's on screen.
+    if (page === "settings" && document.querySelector("#import-root")) paintImportPane();
     return paintChrome();
   }
   route.keep = true;
@@ -1834,7 +2403,7 @@ function syncAi() {
   const on = aiOn();
   if (aiWasOn === null || aiWasOn === on) { aiWasOn = on; return; }
   aiWasOn = on;
-  Object.assign(banner, { rows: null, prev: null, seen: new Set() });
+  Object.assign(banner, { rows: null, prev: null, seen: new Set(), remembered: "" });
   if (on) { forYou.tried = false; autoRank(); }
   homeGen.checkedAt = 0;
   if (document.body.dataset.page === "home") { paintAi(); loadHomeRows(); }
@@ -1842,6 +2411,7 @@ function syncAi() {
 }
 
 let badgeLook = "";
+let wasAnilistConnected = null;
 function applyView(next) {
   if (!next) return;
   view = next;
@@ -1854,11 +2424,17 @@ function applyView(next) {
   const restyle = badgeLook && look !== badgeLook;
   badgeLook = look;
   if (restyle) rerender();
+  // Import stays gated until AniList connects; remount the pane when that flips without leaving Settings.
+  const connected = Boolean(settings().anilistConnected);
+  if (wasAnilistConnected !== null && wasAnilistConnected !== connected) {
+    if (document.body.dataset.page === "imports" || document.querySelector("#import-root")) paintImportPane();
+  }
+  wasAnilistConnected = connected;
 }
 // After the taste popup closes with changes: For you is fetched again and the banner re-blends.
 function tasteChanged() {
-  Object.assign(forYou, { loaded: false, picks: null, ranked: null, prev: null, seen: new Set(), tried: false });
-  Object.assign(banner, { rows: null, prev: null, seen: new Set() });
+  Object.assign(forYou, { loaded: false, picks: null, ranked: null, prev: null, seen: new Set(), tried: false, cacheFresh: false, remembered: "" });
+  Object.assign(banner, { rows: null, prev: null, seen: new Set(), remembered: "" });
   toast("Taste saved. Picked for you and the banner are updated");
   loadForYou();
 }
@@ -1881,6 +2457,7 @@ async function reload({ first = false } = {}) {
   applyView(reply.view);
   if (first || (!hadShows && SHOWS.length)) {
     route.keep = !first;
+    await hydrateForYouFromCache();
     route();
     loadForYou();
     return;
@@ -1896,7 +2473,7 @@ function bind() {
     if (statusEl) { event.preventDefault(); return toggleStatusMenu(statusEl); }
     const recentEl = event.target.closest("[data-recent]");
     if (recentEl) { location.hash = `search?q=${encodeURIComponent(recentEl.dataset.recent)}`; return; }
-    const target = event.target.closest("[data-act],[data-choice],[data-set-palette],[data-set-mode],[data-set-size],[data-pref],[data-setting],[data-mood],[data-status],[data-ep],[data-view],[data-genre],[data-bflag],[data-airing-mine],[data-tag-add],[data-tag-flip],[data-tag-remove],[data-tag],[data-note-act],[data-show],a");
+    const target = event.target.closest("[data-act],[data-choice],[data-set-palette],[data-set-mode],[data-set-size],[data-pref],[data-setting],[data-listing],[data-mood],[data-status],[data-ep],[data-view],[data-genre],[data-bflag],[data-airing-mine],[data-mine],[data-tag-add],[data-tag-flip],[data-tag-remove],[data-tag],[data-note-act],[data-show],a");
     if (event.target.closest("[data-tip-next]")) return fadeTip(() => showTip(Number(event.target.closest("[data-tip-next]").dataset.tipNext)));
     if (event.target.classList.contains("trailer-modal")) { event.target.remove(); return announcePreview(); }
     if (document.querySelector(".tip.show") && !event.target.closest(".tip, .tip-target")) fadeTip();
@@ -1923,18 +2500,48 @@ function bind() {
       if (target.dataset.pref === "subs") for (const p of players) p.applySubs();
       return applyTheme();
     }
+    if (target.dataset.listing) {
+      return setSettings({ listingSite: target.dataset.listing, listingOn: !target.classList.contains("on") });
+    }
     if (target.dataset.setting) {
       const key = target.dataset.setting;
       if (key === "showTips" && !settingOn(key)) localStorage.removeItem(TIPS_SEEN);
-      if (key === "liteMode") stopPreview();
+      if (key === "liteMode") {
+        stopPreview();
+        // Turning on: block auto AI. Turning off: allow autoRank to try again.
+        forYou.tried = !settingOn("liteMode");
+      }
       if (key === "useAi") return toggleAi();
-      return setSettings({ [key]: !settingOn(key) });
+      if (key === "trackWhileWatching") {
+        const on = !settingOn(key);
+        target.classList.toggle("on", on);
+        if (!on) return setSettings({ trackWhileWatching: false });
+        const connected = new Set(importState?.connected || []);
+        const trackSites = ["netflix", "hidive", "tubi"].filter((id) => connected.has(id));
+        return setSettings({ trackWhileWatching: true, trackSites });
+      }
+      const next = !settingOn(key);
+      target.classList.toggle("on", next);
+      if (target.getAttribute("role") === "switch") target.setAttribute("aria-checked", next ? "true" : "false");
+      return setSettings({ [key]: next });
+    }
+    if (act === "reset-tips") {
+      localStorage.removeItem(TIPS_SEEN);
+      tipsStarted = false;
+      return setSettings({ showTips: true }).then(() => toast("Tips will show again"));
+    }
+    if (act === "catalog-read") {
+      return readCatalogNow(target.dataset.catalog, { button: target });
+    }
+    if (act?.startsWith("import-") || act === "pick-all" || act === "pick-none" || act === "kitsu-import" || act?.startsWith("pending-") || act?.startsWith("mal-") || act === "tracker-pull") {
+      return handleImportAct(act, target, { send, toast, refresh: paintImportPane });
     }
     if (act === "ai-toggle") return toggleAi();
     if (act === "inspired-refresh") return loadInspired({ fresh: true });
     if (act === "recent-clear") {
+      // Clears visible chips only; longer search history stays for later use.
       recent = [];
-      localStorage.removeItem(RECENT_KEY);
+      try { localStorage.removeItem(RECENT_KEY); } catch {}
       return loadInspired();
     }
     if (target.dataset.mood) { location.hash = `search?q=${encodeURIComponent(target.dataset.mood)}`; return; }
@@ -1961,6 +2568,10 @@ function bind() {
       return paintBrowse();
     }
     if (target.dataset.airingMine) { airingMine = target.dataset.airingMine === "true"; return rerender(); }
+    if (target.dataset.mine != null) {
+      setMineHome(target.dataset.mine === "true");
+      return rerender();
+    }
     if (target.dataset.noteAct) return noteAction(target.closest("[data-note]").dataset.note, target.dataset.noteAct, target);
     if (target.dataset.status && show) return setStatus(show, Number(target.dataset.season ?? entry(show)?.index ?? 0), target.dataset.status);
     if (target.dataset.ep) {
@@ -2035,10 +2646,69 @@ function bind() {
     if (act === "shortcuts") return send("openShortcuts");
     if (act === "check-update") return checkUpdate(true);
     if (act === "install-update") return runUpdate();
+    if (act === "refresh-title-feeds") {
+      const whereEl = document.querySelector("#where-map-status");
+      const idEl = document.querySelector("#id-map-status");
+      if (whereEl) whereEl.textContent = "Refreshing…";
+      if (idEl) idEl.textContent = "Refreshing…";
+      return send("refreshTitleFeeds").then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't refresh title feeds");
+        paintTitleFeeds();
+        toast("Title feeds refreshed");
+      });
+    }
+    if (act === "connect-site" || act === "disconnect-site") {
+      const id = target.dataset.site;
+      if (act === "connect-site") {
+        return send("connectSite", { service: id }).then(async (reply) => {
+          if (!reply?.ok) return toast(reply?.error || "Couldn't update that site");
+          paintSiteConnections();
+          toast(`${reply.name || "Site"} connected`);
+          const opened = await send("openSite", { service: id });
+          if (opened?.ok) toast(`Opened ${reply.name || "site"}. When it's loaded, use Back to Kivori Sekai on that tab.`);
+        });
+      }
+      return send("disconnectSite", { service: id }).then(async (reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't update that site");
+        paintSiteConnections();
+        const name = reply.name || "Site";
+        if (confirm(`${name} is disconnected. Also forget your ${name} data on this device?\n\nThat clears remembered matches, waiting picks, and where imports left off. Your AniList list and past imports stay.\n\nOK forgets it; Cancel keeps it.`)) {
+          const forgot = await send("forgetSiteData", { service: id });
+          toast(forgot?.ok ? forgot.note : `${name} disconnected. ${forgot?.error || "Its data wasn't forgotten."}`);
+        } else toast(`${name} disconnected. Its data is kept.`);
+      });
+    }
+    if (act === "backup-save") {
+      let theme = null;
+      try { theme = JSON.parse(localStorage.getItem(THEME_KEY)); } catch { /* no theme */ }
+      return send("backup", { theme }).then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "The backup wasn't made");
+        const blob = new Blob([JSON.stringify(reply.file, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = Object.assign(document.createElement("a"), { href: url, download: `kivori-sekai-backup-${new Date().toISOString().slice(0, 10)}.json` });
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast("Backup downloaded");
+      });
+    }
+    if (act === "copy-diagnostics") {
+      return send("copyDiagnostics", { userAgent: navigator.userAgent }).then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Diagnostics weren't made");
+        navigator.clipboard.writeText(reply.text).then(() => toast("Diagnostics copied"), () => toast("Couldn't reach the clipboard"));
+      });
+    }
     if (act === "watch" && show) return play(show, target.dataset.season != null ? Number(target.dataset.season) : undefined);
     if (target.dataset.choice) {
-      const [key, value] = target.dataset.choice.split(":");
-      return setSettings({ [key]: value === "true" ? true : value === "false" ? false : value });
+      const [key, raw] = target.dataset.choice.split(":");
+      const value = raw === "true" ? true : raw === "false" ? false : raw;
+      // Paint immediately so segment controls feel instant; setSettings confirms from the saved view.
+      target.parentElement?.querySelectorAll("[data-choice]").forEach((el) => {
+        const [, elRaw] = el.dataset.choice.split(":");
+        el.classList.toggle("on", elRaw === raw);
+      });
+      const about = target.closest(".set-row")?.querySelector(`[data-choice-about="${key}"]`);
+      if (about && CHOICE_ABOUT[key]?.[raw]) about.textContent = CHOICE_ABOUT[key][raw];
+      return setSettings({ [key]: value });
     }
     if (target.tagName === "A") return;
     if (show && !target.closest("button")) openCard(showEl, show);
@@ -2074,7 +2744,28 @@ function bind() {
       localStorage.setItem(TIPS_SEEN, "1");
       setTimeout(() => fadeTip(() => setSettings({ showTips: false })), 700);
     }
+    if (event.target.matches("[data-act=netflix-csv],[data-act=mal-file]")) {
+      handleImportAct(event.target.dataset.act, event.target, { send, toast, refresh: paintImportPane });
+    }
+    if (event.target.matches("[data-act=backup-restore]")) {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      file.text().then(async (text) => {
+        if (!confirm("Restore this backup? Matches, picks, import history and settings on this device are replaced. AniList itself isn't touched.")) return;
+        const reply = await send("restore", { text });
+        if (!reply?.ok) return toast(reply?.error || "That backup couldn't be restored");
+        if (reply.theme && typeof reply.theme === "object") {
+          Object.assign(theme, reply.theme);
+          applyTheme();
+        }
+        toast(`Restored ${reply.restored} item(s)`);
+        reload().finally(() => rerender(true));
+      });
+    }
+    if (event.target.matches("[data-pick]")) onImportPick(event);
   });
+  document.addEventListener("toggle", onImportToggle, true);
   document.addEventListener("focusin", (event) => { if (event.target.id === "tag-q") paintTagMenu(true); });
   document.addEventListener("focusout", (event) => {
     if (event.target.id === "tag-q") setTimeout(() => { if (!document.activeElement?.closest(".tag-box")) paintTagMenu(false); }, 0);
@@ -2159,13 +2850,22 @@ function closeMenu(popSel, openerSel) {
   if (!focus || focus === document.body || pop.contains(focus)) document.querySelector(openerSel)?.focus({ preventScroll: true });
 }
 
+function homePool(list) {
+  return mineHome && mineServices().length ? list.filter(onMyServices) : list;
+}
+function setMineHome(on) {
+  mineHome = Boolean(on) && mineServices().length > 0;
+  localStorage.setItem(MINE_KEY, mineHome ? "1" : "0");
+}
+
 export const api = {
   get SHOWS() { return SHOWS; },
   get byId() { return byId; },
   send: (...args) => send(...args),
   icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, seasonsOf, epLabel, seasonCount, nextSeason,
   popular, rated, fresh, similar, forYouRail, homeRowsHtml, bannerRows, bannerRoll, aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
-  prefs: () => ({ ...prefs, reduce: lite() }), player, soundButton, onCrunchyroll, playLabel, crBadge,
+  prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, onCrunchyroll, playLabel, crBadge,
+  onMyServices, mineServices, homePool, mineHome: () => mineHome, setMineHome,
 };
 
 export function startPrism(source, design) {
@@ -2193,4 +2893,8 @@ export function startPrism(source, design) {
     setTimeout(() => toast(`Crunchilist updated to version ${crJustUpdated}`), 600);
   }).catch(() => {});
   source.watch((kind, next) => (kind === "view" ? applyView(next) : reload().finally(() => setTimeout(startTips, 800))));
+  takeCatalogKick().catch(() => {});
+  chrome.storage.session.onChanged.addListener((changes) => {
+    if (changes[KEYS.catalogKick]?.newValue?.service) takeCatalogKick().catch(() => {});
+  });
 }

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Crunchilist",
+  "name": "Kivori SekAI",
   "version": "1.0.115",
   "minimum_chrome_version": "114",
-  "description": "Search anime by title or mood, get AI-ranked picks, and track what you watch with AniList.",
-  "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "webNavigation", "declarativeNetRequestWithHostAccess"],
+  "description": "Find anime across your services, get AI-ranked picks, and track what you watch with AniList.",
+  "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "scripting", "alarms", "webNavigation", "declarativeNetRequestWithHostAccess"],
   "host_permissions": [
     "https://www.crunchyroll.com/*",
     "https://*.crunchyroll.com/*",
@@ -15,7 +15,10 @@
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
     "https://openrouter.ai/*",
-    "https://www.youtube-nocookie.com/*"
+    "https://www.youtube-nocookie.com/*",
+    "https://raw.githubusercontent.com/Phoniix/crunchilist/*",
+    "https://api.myanimelist.net/*",
+    "https://myanimelist.net/*"
   ],
   "optional_host_permissions": [
     "https://*/*",
@@ -27,7 +30,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Crunchilist",
+    "default_title": "Kivori SekAI",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -45,7 +48,7 @@
   "commands": {
     "switch-crunchilist": {
       "suggested_key": { "default": "Alt+Shift+C" },
-      "description": "Switch between Crunchilist and your Crunchyroll tab"
+      "description": "Switch between Kivori SekAI and your Crunchyroll tab"
     }
   },
   "externally_connectable": {

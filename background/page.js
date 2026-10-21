@@ -101,7 +101,8 @@ export async function pageUpdate(observation, sender) {
   retryPendingSync().then(async (result) => {
     if (result && tabId != null) await chrome.tabs.sendMessage(tabId, { type: "enriched", view: await currentView(result.state) });
   }).catch(() => {});
-  if (tabId != null && (observation.kind === "series" || observation.kind === "watch")) {
+  // AniList season lookups on every series/watch page are skipped in performance mode.
+  if (tabId != null && (observation.kind === "series" || observation.kind === "watch") && !state.settings?.liteMode) {
     const token = ++enrichToken;
     enrich(tabId, token).catch(() => {});
   }

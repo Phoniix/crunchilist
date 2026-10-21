@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Crunchilist Search</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="pp">
+    <header class="pp-head">
+      <img src="../icons/icon32.png" alt="">
+      <div class="grow"><b>Crunchilist Search</b><small>Title search</small></div>
+      <button class="pp-link" id="open-app" type="button">Open app</button>
+    </header>
+    <p class="pp-line" id="char-line" hidden></p>
+    <label class="pp-search">
+      <input id="q" type="search" placeholder="Search titles…" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="pp-chips" id="chips" hidden></div>
+    <label class="pp-only" id="only-row" hidden>
+      <input id="only" type="checkbox">
+      <span>Search this service only</span>
+    </label>
+    <div id="continue" class="pp-block" hidden></div>
+    <div id="results" class="pp-results"></div>
+    <p class="pp-foot muted" id="note">Type at least two letters.</p>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

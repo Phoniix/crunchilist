@@ -70,6 +70,17 @@ test("mediaWanted lists catalog shows and off-catalog library shows", () => {
   assert.equal(wanted.catalogIds.has(500), false);
 });
 
+test("mediaWanted also requests catalog-only availability ids for enrichment", () => {
+  const found = {
+    1: [{ service: "crunchyroll", url: "https://www.crunchyroll.com/series/x" }],
+    900: [{ service: "netflix", url: "https://www.netflix.com/title/900" }],
+  };
+  const wanted = mediaWanted({ catalog, cache, library: {}, found, now: NOW });
+  assert.ok(wanted.ids.includes(900));
+  assert.equal(wanted.offCatalog.has(900), true);
+  assert.equal(wanted.offCatalog.has(1), false, "CR catalog ids stay on-catalog");
+});
+
 test("libraryMirror maps each season to its own AniList entry", () => {
   const shows = buildAppShows({ catalog, cache, media, now: NOW });
   const library = {

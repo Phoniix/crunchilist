@@ -994,6 +994,111 @@
     });
   }
 
+  // lib/services.js
+  var SERVICES = [
+    {
+      id: "crunchyroll",
+      name: "Crunchyroll",
+      origins: ["https://www.crunchyroll.com/*"],
+      home: "https://www.crunchyroll.com/",
+      sites: ["Crunchyroll"],
+      imports: true,
+      why: "Reads your Crunchyroll watch history and notices what you play, using your own sign-in. Nothing is changed on Crunchyroll.",
+      // The page script only notices the sign-in token the site already uses; the content script passes it on.
+      scripts: [
+        { file: "crunchyroll-page", world: "MAIN", runAt: "document_start" },
+        { file: "crunchyroll", world: "ISOLATED", runAt: "document_start" }
+      ]
+    },
+    {
+      id: "netflix",
+      name: "Netflix",
+      origins: ["https://www.netflix.com/*"],
+      home: "https://www.netflix.com/",
+      sites: ["Netflix"],
+      imports: true,
+      why: "Reads your Netflix viewing activity and notices what you play, using your own sign-in. Nothing is changed on Netflix.",
+      // The page script only reports the site's build id and open profile; the content script reads activity pages.
+      scripts: [
+        { file: "netflix-page", world: "MAIN", runAt: "document_idle" },
+        { file: "netflix", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    },
+    {
+      id: "prime",
+      name: "Prime Video",
+      origins: ["https://www.primevideo.com/*", "https://www.amazon.com/gp/video/*"],
+      home: "https://www.primevideo.com/",
+      sites: ["Amazon Prime Video", "Prime Video", "Amazon"],
+      imports: true,
+      why: "Reads your Prime Video watch history, using your own sign-in. Nothing is changed on Prime Video.",
+      // Loads the Watch History page in the user's tab and passes on the list of what was watched.
+      scripts: [{ file: "prime", world: "ISOLATED", runAt: "document_idle" }]
+    },
+    {
+      id: "hulu",
+      name: "Hulu",
+      origins: ["https://www.hulu.com/*"],
+      home: "https://www.hulu.com/",
+      sites: ["Hulu"],
+      imports: false,
+      // No history to read, so episodes are noted as they're played.
+      tracks: true,
+      // Not connectable until it can be tested against a real account.
+      untested: true,
+      why: "Coming later \u2014 Hulu connection and tracking aren't ready yet.",
+      scripts: []
+    },
+    {
+      id: "tubi",
+      name: "Tubi",
+      origins: ["https://tubitv.com/*"],
+      home: "https://tubitv.com/",
+      sites: ["Tubi TV", "Tubi"],
+      imports: false,
+      tracks: true,
+      why: "Notices the anime episodes and films you finish on Tubi, and reads Tubi's Anime category. Nothing is changed on Tubi.",
+      // The page script only notices the guest token Tubi's app signs catalog requests with, and loads Anime pages with it.
+      scripts: [
+        { file: "tubi-page", world: "MAIN", runAt: "document_start" },
+        { file: "tubi", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    },
+    {
+      id: "hidive",
+      name: "HIDIVE",
+      origins: ["https://www.hidive.com/*"],
+      home: "https://www.hidive.com/",
+      sites: ["HIDIVE"],
+      imports: true,
+      why: "Reads your HIDIVE watch history and notices what you play, using your own sign-in. Nothing is changed on HIDIVE.",
+      // The page script only notices the headers HIDIVE's app already sends, and loads history pages with them.
+      scripts: [
+        { file: "hidive-page", world: "MAIN", runAt: "document_start" },
+        { file: "hidive", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    }
+  ];
+  var LISTING_SITES = SERVICES.map((service) => ({ site: service.name, service: service.id }));
+
+  // lib/play-url.js
+  var SERVICE_BRAND = {
+    crunchyroll: "#F47521",
+    netflix: "#E50914",
+    prime: "#00A8E1",
+    hidive: "#00AEEF",
+    tubi: "#7408FF",
+    hulu: "#1CE783"
+  };
+  var SERVICE_SHORT = {
+    crunchyroll: "CR",
+    netflix: "Netflix",
+    prime: "Prime",
+    hidive: "HIDIVE",
+    tubi: "Tubi",
+    hulu: "Hulu"
+  };
+
   // lib/taste.js
   var ANILIST_GENRES = [
     "Action",
@@ -1034,6 +1139,13 @@
   }
 
   // ui/search-view.js
+  var SEARCH_PLATFORMS = [
+    { id: "crunchyroll", label: "Crunchyroll", short: "CR", color: SERVICE_BRAND.crunchyroll },
+    { id: "netflix", label: "Netflix", short: "Netflix", color: SERVICE_BRAND.netflix },
+    { id: "hidive", label: "HIDIVE", short: "HIDIVE", color: SERVICE_BRAND.hidive },
+    { id: "tubi", label: "Tubi", short: "Tubi", color: SERVICE_BRAND.tubi },
+    { id: "prime", label: "Prime Video", short: "Prime", color: SERVICE_BRAND.prime }
+  ];
   var SEARCH_CSS = `
   .sv { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
   .sv-bar {
@@ -1083,63 +1195,128 @@
   .sv-drop-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .sv-drop-title { font: 700 14px/1.25 ${ROUNDED}; }
   .sv-drop-reason { color: var(--muted); font: 600 12px/1.3 ${ROUNDED}; }
-  .sv-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-  .sv-chips, .sv-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
-  .sv-chips { flex: 1; }
+  .sv-filters {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 14px; border-radius: 16px;
+    background: color-mix(in srgb, var(--pane) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sv-filter-label {
+    flex: none; min-width: 52px; color: var(--faint);
+    font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .sv-chips, .sv-toggles, .sv-sites { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .sv-chip, .sv-toggle {
     display: inline-flex; align-items: center; gap: 6px;
-    min-height: 30px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--pane); color: var(--muted);
-    font: 700 12.5px/1 ${ROUNDED};
-    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+    min-height: 28px; padding: 3px 11px; border-radius: 999px; cursor: pointer;
+    border: 1px solid transparent; background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--muted);
+    font: 700 12px/1 ${ROUNDED};
+    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease), box-shadow .16s var(--ease);
   }
-  .sv-chip:hover, .sv-toggle:hover { color: var(--text); border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-chip.is-on { color: #1a0d05; background: var(--accent); border-color: transparent; }
-  .sv-toggle svg { opacity: .35; }
-  .sv-toggle.is-on { color: var(--text); border-color: var(--line-strong); }
+  .sv-chip:hover, .sv-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+  .sv-chip.is-on {
+    color: var(--on-accent, #1a0d05); background: var(--accent); border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .sv-toggle svg { opacity: .4; }
+  .sv-toggle.is-on { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
   .sv-toggle.is-on svg { opacity: 1; color: var(--accent-text); }
-  .sv-refine { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 12px; padding-top: 12px; border-top: 1px solid rgba(255, 226, 196, .07); }
-  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; flex: 1 1 140px; max-width: 220px; }
+  .sv-site { --sv-site: var(--accent); gap: 7px; }
+  .sv-site-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--sv-site); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sv-site) 20%, transparent);
+  }
+  .sv-site:not(.is-on) {
+    color: color-mix(in srgb, var(--sv-site) 78%, var(--text));
+    background: color-mix(in srgb, var(--sv-site) 10%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 28%, transparent);
+  }
+  .sv-site:not(.is-on):hover {
+    background: color-mix(in srgb, var(--sv-site) 18%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 48%, transparent);
+  }
+  .sv-site.is-on {
+    color: #fff;
+    background: color-mix(in srgb, var(--sv-site) 90%, #111);
+    border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
+  .sv-site.is-on .sv-site-dot { background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .18); }
+  .sv-site.is-on svg { color: #fff; opacity: 1; }
+  .sv-refine {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 12px 14px; align-items: start;
+    padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  @media (max-width: 720px) {
+    .sv-refine { grid-template-columns: 1fr; }
+    .sv-refine-group.is-end { justify-self: stretch; align-items: stretch; }
+  }
+  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
   .sv-refine-group .sv-under { justify-content: flex-start; }
-  .sv-refine-group.is-end { align-items: flex-end; flex: 0 0 auto; max-width: none; }
+  .sv-refine-group.is-end { align-items: flex-end; }
+  .sv-refine-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    color: var(--faint); font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
   .sv-refine-group .sv-tag-input { flex: 1; width: auto; min-width: 0; }
-  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 340px; }
+  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .sv-clear {
     border: 0; background: transparent; padding: 2px 4px; border-radius: 6px; cursor: pointer;
-    color: var(--muted); font: 700 11.5px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
+    color: var(--muted); font: 700 11px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
   }
   .sv-clear:hover:not(:disabled) { color: var(--accent-text); }
   .sv-clear:disabled { opacity: .35; cursor: default; }
-  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .5); color: #ff8a80; }
-  .is-exclude .sv-tag-token { background: rgba(255, 69, 58, .12); color: #ff8a80; }
-  .is-exclude .sv-tag-token span { text-decoration: line-through; text-decoration-color: rgba(255, 138, 128, .55); }
-  .is-exclude .sv-tag-token:hover { background: rgba(255, 69, 58, .2); }
+  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .55); color: #ff8a80; box-shadow: 0 0 0 3px rgba(255, 105, 97, .12); }
+  .is-exclude .sv-tag-token {
+    background: color-mix(in srgb, #ff453a 16%, transparent); color: #ff8a80;
+    border: 1px solid color-mix(in srgb, #ff453a 28%, transparent);
+  }
+  .is-exclude .sv-tag-token .sv-tag-mark { background: color-mix(in srgb, #ff453a 28%, transparent); color: #ffb4ae; }
+  .is-exclude .sv-tag-token:hover { background: color-mix(in srgb, #ff453a 24%, transparent); }
   .sv-tag-pick {
-    position: relative; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 10px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--pane); color: var(--faint);
-    transition: border-color .16s var(--ease), background .16s var(--ease);
+    position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+    background: color-mix(in srgb, var(--pane) 88%, transparent); color: var(--faint);
+    transition: border-color .16s var(--ease), background .16s var(--ease), box-shadow .16s var(--ease);
   }
   .sv-tag-pick:hover { border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-tag-pick:focus-within { border-color: rgba(255, 154, 92, .5); color: var(--accent-text); }
-  .sv-tag-input { width: 130px; height: 30px; padding: 0 6px 0 0; border: 0; border-radius: 0; background: transparent; font: 700 12.5px/1 ${ROUNDED}; }
-  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
-  .sv-tag-input::placeholder { color: var(--faint); }
-  .sv-tag-list {
-    position: absolute; z-index: 6; left: 0; top: calc(100% + 6px); width: 220px; max-height: 240px; overflow: auto;
-    display: flex; flex-direction: column; gap: 2px; padding: 5px; border-radius: 14px; background: var(--glass-strong);
+  .sv-tag-pick:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent-text);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
   }
-  .sv-tag-list button { text-align: left; border: 0; border-radius: 9px; padding: 7px 9px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
-  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: rgba(255, 226, 196, .08); }
+  .sv-tag-input { width: 100%; min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 0; background: transparent; font: 700 13px/1 ${ROUNDED}; color: var(--text); }
+  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
+  .sv-tag-input::placeholder { color: var(--faint); font-weight: 600; }
+  .sv-tag-list {
+    position: absolute; z-index: 6; left: 0; right: 0; top: calc(100% + 6px); max-height: 240px; overflow: auto;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 14px;
+    background: var(--glass-strong); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-tag-list button { text-align: left; border: 0; border-radius: 10px; padding: 8px 10px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
+  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .sv-tag-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
   .sv-tag-token {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px 0 12px; border: 0; border-radius: 999px; cursor: pointer;
-    background: var(--accent-soft); color: var(--accent-text); font: 800 12px/1 ${ROUNDED};
-    transition: background .16s var(--ease);
+    display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 0 8px 0 6px; border-radius: 999px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-text);
+    font: 800 12px/1 ${ROUNDED};
+    transition: background .16s var(--ease), border-color .16s var(--ease);
   }
-  .sv-tag-token:hover { background: rgba(255, 122, 47, .24); }
-  .sv-refine-spacer { flex: 1; }
+  .sv-tag-mark {
+    display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 22%, transparent); font: 800 11px/1 ${ROUNDED};
+  }
+  .sv-tag-token:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sv-tag-token svg { opacity: .7; }
+  .sv-refine-spacer { display: none; }
   .sv-sort-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--faint); font: 700 12px/1 ${ROUNDED}; }
-  .sv-sort { height: 32px; padding: 0 10px; border-radius: 10px; font: 700 12.5px/1 ${ROUNDED}; background: rgba(255, 226, 196, .04); }
+  .sv-sort {
+    height: 36px; padding: 0 12px; border-radius: 12px; font: 700 12.5px/1 ${ROUNDED};
+    background: color-mix(in srgb, var(--pane) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); color: var(--text);
+  }
   .sv-more { height: 1px; }
   .sv-more.is-loading { height: 44px; display: grid; place-items: center; }
   .sv-more.is-loading::after {
@@ -1194,6 +1371,20 @@
   .sv-reason { margin: 0; color: var(--muted); font: 500 13.5px/1.45 ${ROUNDED}; }
   .sv-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sv-tag { padding: 3px 8px; border-radius: 8px; background: rgba(255, 226, 196, .06); color: var(--muted); font: 700 11.5px/1.3 ${ROUNDED}; }
+  .sv-svcs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .sv-svc {
+    --sv-svc: var(--accent);
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 7px 2px 4px; border-radius: 999px;
+    background: color-mix(in srgb, var(--sv-svc) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--sv-svc) 36%, transparent);
+    color: color-mix(in srgb, var(--sv-svc) 78%, #fff);
+    font: 800 10.5px/1.2 ${ROUNDED};
+  }
+  .sv-svc-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--sv-svc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sv-svc) 22%, transparent);
+  }
   .sv-foot-spacer { flex: 1; }
   .sv-status-select {
     height: 30px; padding: 0 10px; border-radius: 10px; font: 700 12px/1 ${ROUNDED};
@@ -1270,6 +1461,7 @@
     send: send2,
     site = "all",
     siteToggle = true,
+    platforms = SEARCH_PLATFORMS,
     newTab = false,
     onView = () => {
     },
@@ -1280,7 +1472,9 @@
   } = {}) {
     let chip = "";
     let currentSite = site;
+    const sitePlatforms = (Array.isArray(platforms) ? platforms : SEARCH_PLATFORMS).map((row) => typeof row === "string" ? SEARCH_PLATFORMS.find((p) => p.id === row) : row).filter(Boolean);
     let useAi = true;
+    let liteMode = false;
     let hideWatched = false;
     let seq = 0;
     let suggestSeq = 0;
@@ -1335,31 +1529,57 @@
       chipButtons.set(id, button);
       chipRow.append(button);
     }
-    const siteButton = el("button", { class: "sv-toggle", type: "button", title: "Only shows you can watch on Crunchyroll" }, [
-      icon("check", 14),
-      el("span", { text: "Crunchyroll only" })
-    ]);
-    siteButton.hidden = !siteToggle;
+    const siteButtons = /* @__PURE__ */ new Map();
+    const siteRow = el("div", { class: "sv-toggles sv-sites" });
+    for (const platform of sitePlatforms) {
+      const button = el("button", {
+        class: "sv-toggle sv-site",
+        type: "button",
+        title: `Empty search: browse titles on ${platform.label}. With a search: keep only matches watchable there.`,
+        "aria-pressed": "false",
+        "data-site": platform.id,
+        text: platform.label
+      });
+      button.style.setProperty("--sv-site", platform.color || SERVICE_BRAND[platform.id] || "#ff7a2f");
+      button.prepend(el("span", { class: "sv-site-dot", "aria-hidden": "true" }));
+      button.addEventListener("click", () => {
+        currentSite = currentSite === platform.id ? "all" : platform.id;
+        paintToggles();
+        run();
+      });
+      siteButtons.set(platform.id, button);
+      siteRow.append(button);
+    }
+    siteRow.hidden = !siteToggle || !sitePlatforms.length;
     const hideButton = el("button", { class: "sv-toggle", type: "button", title: "Leave out finished and dropped shows" }, [
       icon("eye", 14),
       el("span", { text: "Hide watched" })
     ]);
-    const filters = el("div", { class: "sv-filters" }, [chipRow, el("div", { class: "sv-toggles" }, [siteButton, hideButton])]);
-    const include = tagPicker({ label: "Filter by tag", glyph: "tag", removeLabel: "Remove tag", others: () => exclude.values });
-    const exclude = tagPicker({ label: "Exclude tag", glyph: "tagOff", removeLabel: "Stop excluding", others: () => include.values, tone: "is-exclude" });
+    const filters = el("div", { class: "sv-filters" }, [
+      el("div", { class: "sv-filter-row" }, [
+        el("span", { class: "sv-filter-label", text: "Show" }),
+        chipRow,
+        el("div", { class: "sv-toggles" }, [hideButton])
+      ]),
+      siteRow.hidden ? null : el("div", { class: "sv-filter-row" }, [
+        el("span", { class: "sv-filter-label", text: "Where" }),
+        siteRow
+      ])
+    ].filter(Boolean));
+    const include = tagPicker({ label: "Include tag", head: "Include", glyph: "tag", removeLabel: "Remove tag", mark: "+", others: () => exclude.values });
+    const exclude = tagPicker({ label: "Exclude tag", head: "Exclude", glyph: "tagOff", removeLabel: "Stop excluding", mark: "\u2212", others: () => include.values, tone: "is-exclude" });
     const sortSelect = el("select", { class: "sv-sort", "aria-label": "Sort results" });
     for (const [value, label] of SORTS) sortSelect.append(el("option", { value, text: label }));
     const sortClear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: "Back to best match" });
     const refine = el("div", { class: "sv-refine" }, [
       include.root,
       exclude.root,
-      el("span", { class: "sv-refine-spacer" }),
       el("div", { class: "sv-refine-group is-end" }, [
-        el("label", { class: "sv-sort-wrap" }, [el("span", { text: "Sort" }), sortSelect]),
-        el("div", { class: "sv-under" }, [sortClear])
+        el("div", { class: "sv-refine-head" }, [el("span", { text: "Sort" }), sortClear]),
+        el("label", { class: "sv-sort-wrap" }, [sortSelect])
       ])
     ]);
-    function tagPicker({ label, glyph, removeLabel, others, tone = "" }) {
+    function tagPicker({ label, head = label, glyph, removeLabel, mark = "+", others, tone = "" }) {
       const picker = { values: [] };
       let matches = [];
       let active2 = -1;
@@ -1368,8 +1588,9 @@
       const tokens = el("div", { class: "sv-tag-tokens" });
       const clear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: `Clear ${label.toLowerCase()}` });
       picker.root = el("div", { class: `sv-refine-group ${tone}` }, [
+        el("div", { class: "sv-refine-head" }, [el("span", { text: head }), clear]),
         el("div", { class: "sv-tag-pick" }, [icon(glyph, 15), field, list]),
-        el("div", { class: "sv-under" }, [tokens, clear])
+        el("div", { class: "sv-under" }, [tokens])
       ]);
       const change = (next) => {
         picker.values = next;
@@ -1378,7 +1599,11 @@
       };
       function paintTokens() {
         tokens.replaceChildren(...picker.values.map((tag) => {
-          const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [el("span", { text: tag }), icon("close", 12)]);
+          const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [
+            el("span", { class: "sv-tag-mark", text: mark, "aria-hidden": "true" }),
+            el("span", { text: tag }),
+            icon("close", 12)
+          ]);
           token.addEventListener("click", () => change(picker.values.filter((value) => value !== tag)));
           return token;
         }));
@@ -1468,9 +1693,11 @@
       }
     }
     function paintToggles() {
-      const siteOn = currentSite === "crunchyroll";
-      siteButton.classList.toggle("is-on", siteOn);
-      siteButton.setAttribute("aria-pressed", siteOn ? "true" : "false");
+      for (const [id, button] of siteButtons) {
+        const on = currentSite === id;
+        button.classList.toggle("is-on", on);
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+      }
       hideButton.classList.toggle("is-on", hideWatched);
       hideButton.setAttribute("aria-pressed", hideWatched ? "true" : "false");
     }
@@ -1529,6 +1756,22 @@
       paint();
       return el("span", { class: "sv-status" }, [plan, select]);
     }
+    function servicePills(item) {
+      const ids = [...new Set(item.sources || [])].filter(Boolean);
+      if (!ids.length) return null;
+      const row = el("span", { class: "sv-svcs", "aria-label": "Available on" });
+      for (const id of ids.slice(0, 4)) {
+        const platform = SEARCH_PLATFORMS.find((row2) => row2.id === id);
+        const color = platform?.color || SERVICE_BRAND[id] || "#8a7b71";
+        const label = platform?.short || SERVICE_SHORT[id] || platform?.label || id;
+        const pill = el("span", { class: "sv-svc", title: platform?.label || label, text: label });
+        pill.style.setProperty("--sv-svc", color);
+        pill.prepend(el("span", { class: "sv-svc-dot", "aria-hidden": "true" }));
+        row.append(pill);
+      }
+      if (ids.length > 4) row.append(el("span", { class: "sv-tag", text: `+${ids.length - 4}` }));
+      return row;
+    }
     function card(item, kind = "result", index = 0) {
       const confidence = kind === "pick" && Number.isInteger(item.confidence) ? item.confidence : null;
       const head = el("div", { class: "sv-card-head" }, [
@@ -1540,6 +1783,8 @@
         ]) : null
       ]);
       const foot = el("div", { class: "sv-foot" });
+      const services = kind !== "mention" ? servicePills(item) : null;
+      if (services) foot.append(services);
       if (kind !== "mention") for (const tag of (item.tags || []).slice(0, 5)) foot.append(el("span", { class: "sv-tag", text: tag }));
       foot.append(el("span", { class: "sv-foot-spacer" }), statusControl(item));
       const node = el("article", { class: `sv-card is-${kind}${index >= 0 ? " is-appear" : ""}` }, [
@@ -1562,11 +1807,13 @@
     }
     function poster(item) {
       const mark = STATUS_LABEL[item.status];
+      const services = servicePills(item);
       return el("article", { class: "sv-poster" }, [
         el("a", linkAttrs(item, { class: "sv-poster-link" }), [
           el("span", { class: "sv-poster-art" }, [art(item), mark ? el("span", { class: "sv-mark", text: mark }) : null]),
           el("span", { class: "sv-poster-title", text: item.title })
         ]),
+        services,
         statusControl(item)
       ]);
     }
@@ -1603,16 +1850,23 @@
       results.append(section("Browse all", [list]));
       startPager(seq, { query: "", chip: "", site: currentSite, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
     }
+    function resultsTitle() {
+      const platform = sitePlatforms.find((row) => row.id === currentSite);
+      if (!platform) return "Results";
+      if (!input.value.trim()) return `On ${platform.label}`;
+      return `Results on ${platform.label}`;
+    }
     function renderInstant(items, { pending, note: note2 = "", total = items.length }) {
       results.replaceChildren();
       if (!items.length) {
-        const hint = currentSite === "crunchyroll" ? "Try fewer words, or turn off Crunchyroll only." : "Try fewer words, or turn off a filter.";
+        const platform = sitePlatforms.find((row) => row.id === currentSite);
+        const hint = platform ? `Nothing matched on ${platform.label} yet. Read its catalog under Where to watch, or turn the filter off.` : "Try fewer words, or turn off a filter.";
         results.append(empty("No matches", note2 && note2 !== "No matches." ? note2 : hint));
         return null;
       }
       const extra = pending ? aiState("Ranking with AI", true) : null;
       const list = el("div", { class: "sv-list" }, [cardPage(items)]);
-      results.append(section("Results", [list], { count: total, extra }));
+      results.append(section(resultsTitle(), [list], { count: total, extra }));
       return list;
     }
     function cardPage(items) {
@@ -1793,15 +2047,20 @@
       renderHome(payload);
       aiFailed(answer);
     }
+    function browsingCatalog() {
+      if (input.value.trim()) return false;
+      return currentSite !== "all" || Boolean(chip) || include.values.length > 0 || exclude.values.length > 0 || sort !== "relevance";
+    }
     async function run() {
       const id = ++seq;
       closeDrop();
       closeAsk(false);
       window.clearInterval(modelPoll);
       const query2 = input.value.trim();
+      const browse = browsingCatalog();
       pager = null;
       form.classList.add("is-busy");
-      const params = { query: query2, chip, site: currentSite, sort, tags: include.values, without: exclude.values };
+      const params = { query: query2, chip, site: currentSite, sort, tags: include.values, without: exclude.values, browse };
       const response = await send2("catalogSearch", params);
       if (id !== seq) return;
       form.classList.remove("is-busy");
@@ -1816,9 +2075,12 @@
         renderHome(response);
         return;
       }
-      writeNote(response.results?.length ? [response.notice, response.note].filter(Boolean).join(" ") : "");
+      const platform = sitePlatforms.find((row) => row.id === currentSite);
+      const fallbackNote = platform ? query2 ? `Only titles watchable on ${platform.label}.` : `Titles watchable on ${platform.label}.` : "";
+      const note2 = response.results?.length ? [response.notice, response.note || fallbackNote].filter(Boolean).join(" ") : "";
+      writeNote(note2);
       const items = response.results || [];
-      const pending = Boolean(useAi && response.rerank);
+      const pending = Boolean(useAi && !liteMode && response.rerank && query2 && !browse);
       const list = renderInstant(items, { pending, note: response.note, total: response.total ?? items.length });
       if (list) startPager(id, params, list, items, Boolean(response.hasMore));
       if (!pending) return;
@@ -1873,7 +2135,7 @@
         suggestions = response?.suggestions || [];
         activeSuggestion = -1;
         paintDrop();
-      }, 130);
+      }, liteMode ? 450 : 130);
     }
     async function refreshModel() {
       const response = await send2("modelStatus");
@@ -1941,11 +2203,6 @@
       send2("setSettings", { patch: { useAi } });
       if (useAi && lastRun?.response?.rerank && lastRun.query === input.value.trim()) run();
     });
-    siteButton.addEventListener("click", () => {
-      currentSite = currentSite === "crunchyroll" ? "all" : "crunchyroll";
-      paintToggles();
-      run();
-    });
     hideButton.addEventListener("click", async () => {
       hideWatched = !hideWatched;
       paintToggles();
@@ -1984,6 +2241,7 @@
       setView(view) {
         const settings = view?.settings || {};
         if (typeof settings.useAi === "boolean") useAi = settings.useAi;
+        if (typeof settings.liteMode === "boolean") liteMode = settings.liteMode;
         if (typeof settings.hideWatched === "boolean") hideWatched = settings.hideWatched;
         if (typeof settings.askModelDownload === "boolean") askDownload = settings.askModelDownload;
         if (Array.isArray(view?.tagSuggestions)) tagOptions = view.tagSuggestions;
@@ -2724,14 +2982,13 @@
     ]);
     const search = el("details", { class: "st-card" }, [
       el("summary", { text: "Search preferences" }),
-      switchRow("favorNamed", "Favor the named show", "In searches like \u201Clike Frieren but sadder,\u201D being close to the named show counts more than the other words."),
-      switchRow("youtubeTitles", "Include free YouTube shows", "Complete, official uploads of shows Crunchyroll doesn't carry. They appear in the Crunchilist app with a YouTube label, never on Crunchyroll pages.")
+      switchRow("favorNamed", "Favor the named show", "In searches like \u201Clike Frieren but sadder,\u201D being close to the named show counts more than the other words.")
     ]);
     const liteBox = el("input", { type: "checkbox", role: "switch", "aria-label": "Performance mode" });
     liteBox.addEventListener("change", () => act("setSettings", { patch: { liteMode: liteBox.checked } }, liteBox.checked ? "Performance mode on." : "Performance mode off."));
     const liteSwitch = el("label", {
       class: "switch",
-      title: "Turns off blur, glow animations, and transitions, and checks Crunchyroll pages less often. Try it if things feel slow."
+      title: "Cuts blur, glow, and transitions; skips AI ranking and model downloads; slows Crunchyroll page scans; holds background AniList cover matching. Try it if things feel slow."
     }, [liteBox, el("span", { class: "switch-label", text: "Performance mode" })]);
     const refreshCatalog = el("button", { class: "btn", type: "button", title: "Update Crunchyroll titles and AniList details" }, [icon("refresh", 15), el("span", { text: "Refresh catalog" })]);
     const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "" });
@@ -3186,26 +3443,37 @@
   .drawer.is-open { display: block; animation: shell-fade .18s var(--ease) both; }
   :host(.fullscreen) .launcher { width: 12px; height: 60px; border-radius: 8px 0 0 8px; opacity: .5; }
   :host(.fullscreen) .launcher svg { display: none; }
-  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer { display: none !important; }
+  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer, :host(.fullscreen) .gather { display: none !important; }
 `;
-  function createPanel(doc, { send: send2, onOpenChange = () => {
-  }, onCorner = () => {
-  }, onView = () => {
-  } }) {
+  function createPanel(doc, {
+    send: send2,
+    site = "crunchyroll",
+    platforms = ["crunchyroll"],
+    accent = "",
+    gatherLabel = "Gathering the Crunchyroll list",
+    layout = null,
+    hostId = "cr-corner-host",
+    onOpenChange = () => {
+    },
+    onCorner = () => {
+    },
+    onView = () => {
+    }
+  } = {}) {
     const host = doc.createElement("div");
-    host.id = "cr-corner-host";
+    host.id = hostId;
     host.className = "cl-theme";
     const shadow = host.attachShadow({ mode: "open" });
     const style = doc.createElement("style");
     style.textContent = roundedFontFace() + THEME_CSS + SEARCH_CSS + SETTINGS_CSS + NOTICES_CSS + SHELL_CSS;
     const launcherBadge = noticeBadge();
-    const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Crunchilist search", title: "Search with Crunchilist" }, [icon("search", 22), launcherBadge]);
-    const gatherText = el("span", { text: "Gathering the Crunchyroll list" });
+    const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Kivori SekAI search", title: "Search with Kivori SekAI" }, [icon("search", 22), launcherBadge]);
+    const gatherText = el("span", { text: gatherLabel });
     const gatherMeter = progressMeter("Background progress");
     const gather = el("div", { class: "gather glass", role: "status", hidden: true }, [icon("sparkle", 15), el("div", { class: "gather-copy" }, [gatherText, gatherMeter.root])]);
-    const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Crunchilist", tabindex: "-1" });
-    const panel2 = el("section", { class: "panel glass", role: "dialog", "aria-label": "Crunchilist search", hidden: true });
-    const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Crunchilist settings", hidden: true });
+    const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Kivori SekAI", tabindex: "-1" });
+    const panel2 = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
+    const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Kivori SekAI settings", hidden: true });
     const toastTitle = el("p", { class: "toast-title" });
     const toastMeta = el("p", { class: "toast-meta" });
     const toastAction = el("button", { class: "btn primary", type: "button" });
@@ -3222,7 +3490,7 @@
     let tasks = [];
     let corner = "bottom-right";
     let hydrated = false;
-    const search = createSearchView({ send: send2, site: "crunchyroll", onView });
+    const search = createSearchView({ send: send2, site, platforms, onView });
     const moveButton = el("button", { class: "btn", type: "button", title: "Move the search button to the next corner" }, [icon("corner", 15), el("span", { text: "Move button" })]);
     const settings = createSettingsView({ send: send2, onView, pageContext: true, extras: [moveButton] });
     const notices = createNoticesView({ send: send2, onView });
@@ -3233,15 +3501,21 @@
     const closeButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Close", title: "Close" }, [icon("close")]);
     const body = el("div", { class: "body" }, [search.root]);
     panel2.append(
-      el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Crunchilist" }), fullButton, bellButton, settingsButton, closeButton]),
+      el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Kivori SekAI" }), fullButton, bellButton, settingsButton, closeButton]),
       body
     );
     search.setScrollRoot(body);
     drawer.append(settings.root, notices.root);
     let drawerPane = "settings";
+    function applyAccent() {
+      if (!accent) return;
+      host.style.setProperty("--accent", accent);
+      host.style.setProperty("--accent-text", accent);
+      host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
+    }
     function place() {
       const edge = {
-        "bottom-right": "right:18px;bottom:18px;",
+        "bottom-right": layout?.edge || "right:18px;bottom:18px;",
         "bottom-left": "left:18px;bottom:18px;",
         "top-left": "left:18px;top:18px;",
         "top-right": "right:18px;top:18px;"
@@ -3252,6 +3526,7 @@
       host.classList.toggle("fullscreen", fullscreen);
       host.classList.toggle("at-top", !fullscreen && corner.startsWith("top"));
       host.style.cssText = fullscreen ? `${base}top:40%;right:0;` : `${base}${edge[corner] || edge["bottom-right"]}`;
+      applyAccent();
       placeDrawer();
     }
     function placeDrawer() {
@@ -3280,7 +3555,7 @@
       drawer.classList.toggle("is-open", drawerOpen);
       settings.root.hidden = pane !== "settings";
       notices.root.hidden = pane !== "notices";
-      drawer.setAttribute("aria-label", pane === "notices" ? "Crunchilist notifications" : "Crunchilist settings");
+      drawer.setAttribute("aria-label", pane === "notices" ? "Kivori SekAI notifications" : "Kivori SekAI settings");
       for (const [button, name] of [[settingsButton, "settings"], [bellButton, "notices"]]) {
         const on = drawerOpen && pane === name;
         button.classList.toggle("is-on", on);
@@ -3302,7 +3577,7 @@
       gather.hidden = !showGather;
       launcher.classList.toggle("is-locked", gathering);
       launcher.disabled = fullscreen || gathering;
-      launcher.title = gathering ? gatherText.textContent : shown ? "Close Crunchilist" : "Search with Crunchilist";
+      launcher.title = gathering ? gatherText.textContent : shown ? "Close Kivori SekAI" : "Search with Kivori SekAI";
     }
     function setOpen(next, { silent = false } = {}) {
       if (next && (fullscreen || gathering)) return;
@@ -3331,8 +3606,9 @@
       onCorner(corner);
     });
     window.addEventListener("resize", placeDrawer);
+    const stopKeys = (event) => event.stopPropagation();
     host.addEventListener("keydown", (event) => {
-      event.stopPropagation();
+      stopKeys(event);
       if (event.key !== "Escape" || !open || fullscreen) return;
       if (drawerOpen) setDrawer(false);
       else {
@@ -3340,6 +3616,8 @@
         launcher.focus();
       }
     });
+    host.addEventListener("keyup", stopKeys);
+    host.addEventListener("keypress", stopKeys);
     host.addEventListener("click", (event) => event.stopPropagation());
     let toastTimer = 0;
     let toastHandler = null;
@@ -3390,7 +3668,7 @@
         const count = view.notices?.length || 0;
         paintBadge2(bellBadge, count);
         paintBadge2(launcherBadge, view.settings?.muteNotifications ? 0 : count);
-        launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Crunchilist search, ${count} notifications` : "Open Crunchilist search");
+        launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Kivori SekAI search, ${count} notifications` : "Open Kivori SekAI search");
         if (syncOpen && !hydrated) {
           hydrated = true;
           corner = view.settings?.panelCorner || corner;
@@ -3534,14 +3812,14 @@
     const host = doc.createElement("div");
     host.id = "crunchilist-tabbar";
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Crunchilist">
+    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Crunchilist</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>Back to Kivori SekAI</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Crunchilist tab whenever you're done watching.</small>
+    <b>Click here to go back</b><small>Returns to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
@@ -3793,16 +4071,23 @@
     }, { passive: true, capture: true });
     win.addEventListener("scroll", schedulePlace, { passive: true, capture: true });
     win.addEventListener("resize", schedulePlace, { passive: true });
+    let liteTick = false;
     win.setInterval(() => {
       if (!host.isConnected) return;
       syncPip();
+      if (role?.liteMode) {
+        liteTick = !liteTick;
+        if (liteTick) return;
+      } else {
+        liteTick = false;
+        maybeTip();
+      }
       schedulePlace();
-      maybeTip();
     }, 1e3);
     back.addEventListener("click", async () => {
       hideTip();
       const response = await send2("backToCrunchilist");
-      if (!response?.ok) flash(response?.error || "Couldn't find your Crunchilist tab.");
+      if (!response?.ok) flash(response?.error || "Couldn't find your Kivori SekAI tab.");
     });
     const button = (node, label, onClick) => {
       node.hidden = !label;
@@ -4130,7 +4415,7 @@
   }
   function schedule() {
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 1200 : 450);
+    scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 2e3 : 450);
   }
   function observationSignature(observation) {
     return JSON.stringify({

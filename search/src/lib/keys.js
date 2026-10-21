@@ -1,0 +1,35 @@
+// Every storage key starts with "cs" so this extension never reads or overwrites Crunchilist's data.
+export const KEYS = {
+  settings: "csSettings",
+  session: "csAnilistSession",
+  matches: "csMatches",
+  checkpoints: "csCheckpoints",
+  importLog: "csImportLog",
+  notices: "csNotices",
+  feeds: "csFeeds",
+  importDraft: "csImportDraft",
+  importPreview: "csImportPreview",
+  pending: "csPending",
+  crunchyrollAuth: "csCrunchyrollAuth",
+  netflixTab: "csNetflixTab",
+  primeTab: "csPrimeTab",
+  hidiveTab: "csHidiveTab",
+  cacheIndex: "csCacheIndex",
+  openedTabs: "csOpenedTabs",
+  syncState: "csSyncState",
+  watchLog: "csWatchLog",
+  tubiTab: "csTubiTab",
+  catalogs: "csCatalogs",
+  deadLinks: "csDeadLinks",
+  whereMap: "csWhereMap",
+  // Tab id -> why the app opened it ("catalog" | omitted for connect/import).
+  openPurpose: "csOpenPurpose",
+  pendingCatalog: "csPendingCatalog",
+  // App tab watches this to start a catalog read after Back (tabs.sendMessage can't reach extension pages).
+  catalogKick: "csCatalogKick",
+  malSession: "csMalSession",
+  malClientId: "csMalClientId",
+  kitsuLink: "csKitsuLink",
+  // Favorite character pack id (+ pickedAt). Text lines only; AI paraphrase optional later.
+  favoriteCharacter: "csFavoriteCharacter",
+};

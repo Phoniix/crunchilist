@@ -119,14 +119,14 @@
     const host = doc.createElement("div");
     host.id = "crunchilist-tabbar";
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Crunchilist">
+    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Crunchilist</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>Back to Kivori SekAI</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Crunchilist tab whenever you're done watching.</small>
+    <b>Click here to go back</b><small>Returns to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
@@ -378,16 +378,23 @@
     }, { passive: true, capture: true });
     win.addEventListener("scroll", schedulePlace, { passive: true, capture: true });
     win.addEventListener("resize", schedulePlace, { passive: true });
+    let liteTick = false;
     win.setInterval(() => {
       if (!host.isConnected) return;
       syncPip();
+      if (role?.liteMode) {
+        liteTick = !liteTick;
+        if (liteTick) return;
+      } else {
+        liteTick = false;
+        maybeTip();
+      }
       schedulePlace();
-      maybeTip();
     }, 1e3);
     back.addEventListener("click", async () => {
       hideTip();
       const response = await send("backToCrunchilist");
-      if (!response?.ok) flash(response?.error || "Couldn't find your Crunchilist tab.");
+      if (!response?.ok) flash(response?.error || "Couldn't find your Kivori SekAI tab.");
     });
     const button = (node, label, onClick) => {
       node.hidden = !label;

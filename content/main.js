@@ -138,7 +138,7 @@ function onPageMessage(event) {
 
 function schedule() {
   window.clearTimeout(scanTimer);
-  scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 1200 : 450);
+  scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 2000 : 450);
 }
 
 function observationSignature(observation) {
