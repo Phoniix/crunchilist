@@ -20,17 +20,40 @@ Discovery feed stays on hold. Track-while-watching does **not** live-update Cont
 
 ## Manual smoke (needs your Chrome)
 
-11. [ ] Netflix / HIDIVE / Tubi import + track-while-watching
-12. [ ] AniList connect → Import preview → Needs your pick → Apply
-13. [ ] Settings toggles remount/paint (Remember last, notification style)
-14. [ ] Packaged extension load smoke
+Do these on **your** signed-in Chrome (Monitor 1 is fine). Agent browser cannot use your profile or unpacked extension.
 
-**Partner checklist for 11–14:** load unpacked extension → AniList signed in → site connected → tracking on → finish one anime ep → wait 2–3 min (no open preview) → check Import sync note + AniList progress. Continue watching will not move until AniList list pull / local Watching mark.
+### 11. Netflix / HIDIVE / Tubi import + track-while-watching
+
+- [ ] Load unpacked extension from this repo
+- [ ] Site connected + tracking on for at least one of Netflix / HIDIVE / Tubi
+- [ ] Finish (or near-finish) one anime episode; leave Import preview **closed**
+- [ ] Wait 2–3 minutes
+- [ ] Confirm Import sync note / backlog updated for that title
+- [ ] Confirm AniList progress moved (or pending catch-up queued) — **not** that Continue watching auto-bumped
+
+### 12. AniList connect → Import preview → Needs your pick → Apply
+
+- [ ] AniList connected in Settings
+- [ ] Open Import → run preview
+- [ ] Hit at least one **Needs your pick** row; choose a match
+- [ ] Apply; spot-check list/history reflects the choice
+
+### 13. Settings toggles remount/paint
+
+- [ ] Toggle **Remember last** (where-filter); leave Settings and reopen — value sticks
+- [ ] Change **notification style**; trigger a toast/activity and confirm look matches
+
+### 14. Packaged extension load smoke
+
+- [ ] `npm run` / package zip (or Chrome “Pack extension”) produces a loadable build
+- [ ] Load packaged build once; popup/options open without console errors on blank start
+
+**Partner one-liner:** unpacked → AniList in → site connected → tracking on → finish one ep → wait 2–3 min (no open preview) → check Import sync + AniList. Continue watching stays put until list pull / local Watching mark.
 
 ## Suggested order
 
 - [x] Full `npm test` — 700 pass
 - [x] Fill high-priority root twins / importer / package
 - [x] Medium root tests + push (`02b55a4` on `origin/search`)
-- [ ] Manual smoke with you in Chrome
-- [ ] PR: https://github.com/Phoniix/crunchilist/compare/main...search (no `gh` token in this environment)
+- [ ] Manual smoke with you in Chrome (11–14 above)
+- [ ] PR: https://github.com/Phoniix/crunchilist/compare/master...search (`gh` not installed / no token here — open from that compare link)
