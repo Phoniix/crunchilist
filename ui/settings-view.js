@@ -142,6 +142,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   const tasteBox = el("div");
   const taste = el("details", { class: "st-card" }, [el("summary", { text: "Taste preferences" }), tasteBox]);
   const modelLine = el("p", { class: "st-model" });
+  let lastModelStatus = null;
   const service = el("select", { "aria-label": "AI service" });
   service.append(el("option", { value: "auto", text: "Auto (recommended)" }));
   for (const provider of PROVIDERS) service.append(el("option", { value: provider.id, text: provider.free ? `${provider.label} (free)` : provider.label }));
@@ -473,6 +474,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   async function refreshModel() {
     const response = await send("modelStatus");
     const state = response?.ok ? response.status : { label: "Unknown" };
+    lastModelStatus = state;
     modelLine.replaceChildren(
       document.createTextNode(`${view?.settings?.modelLabel || "Chrome"} model: `),
       el("strong", { text: state.label || "Unknown" }),
@@ -577,8 +579,13 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       const keys = settings.keys || {};
       const savedCount = Object.values(keys).filter(Boolean).length;
       if (focused() !== service) service.value = settings.aiService || "auto";
+      const chromeHint = lastModelStatus?.label === "Unavailable here" || /not supported|unavailable here/i.test(lastModelStatus?.detail || "")
+        ? "No key saved, and Chrome's on-device model isn't available here. Add a free key from Gemini, Groq, or OpenRouter to rank results."
+        : lastModelStatus?.label === "Not downloaded" || lastModelStatus?.needsDownload
+          ? "No key saved. Chrome can download its on-device model the first time you let AI rank results, or add a free API key instead."
+          : "No key saved, so Chrome's built-in model runs on this PC when it's available. A free key from Gemini, Groq, or OpenRouter is faster.";
       serviceHint.textContent = !savedCount
-        ? "No key saved, so Chrome's built-in model runs on this PC. A free key from Gemini, Groq, or OpenRouter is faster."
+        ? chromeHint
         : service.value === "auto"
           ? savedCount > 1
             ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead."

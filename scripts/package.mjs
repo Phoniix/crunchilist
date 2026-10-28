@@ -1,16 +1,20 @@
-// Builds the store package: dist/crunchilist/ plus dist/crunchilist-<version>.zip.
-// node scripts/package.mjs
+// Builds store or sideload packages.
+//   node scripts/package.mjs              -> dist/crunchilist-<version>.zip (Chrome Web Store)
+//   node scripts/package.mjs --sideload   -> dist/kivori-sekai-<version>.zip (GitHub Releases)
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
-import { PACKAGE_FOLDERS as FOLDERS, PACKAGE_ROOT_FILES, contentFiles, storeManifest } from "../lib/update-files.js";
+import {
+  PACKAGE_FOLDERS, PACKAGE_ROOT_FILES, STORE_OMIT_FILES,
+  STORE_PACKAGE_FOLDERS, STORE_PACKAGE_ROOT_FILES,
+  contentFiles, sideloadManifest, storeManifest, storeUpdaterStub,
+} from "../lib/update-files.js";
 
-export { contentFiles, storeManifest };
+export { contentFiles, storeManifest, sideloadManifest };
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const DIST = path.join(ROOT, "dist");
-const OUT = path.join(DIST, "crunchilist");
 
 async function walk(dir) {
   const out = [];
@@ -34,20 +38,20 @@ export function localRefs(file, text) {
   return [...text.matchAll(pattern)].map((match) => match[1].split(/[?#]/)[0]).filter(Boolean);
 }
 
-async function missingRefs(manifest) {
+async function missingRefs(outDir, manifest) {
   const missing = [];
   const need = (from, ref) => {
-    const target = ref.startsWith("/") ? path.join(OUT, ref) : path.resolve(path.dirname(from), ref);
-    if (!existsSync(target)) missing.push(`${path.relative(OUT, from) || "manifest.json"} -> ${ref}`);
+    const target = ref.startsWith("/") ? path.join(outDir, ref) : path.resolve(path.dirname(from), ref);
+    if (!existsSync(target)) missing.push(`${path.relative(outDir, from) || "manifest.json"} -> ${ref}`);
   };
-  const manifestFile = path.join(OUT, "manifest.json");
+  const manifestFile = path.join(outDir, "manifest.json");
   const entries = [
     manifest.background?.service_worker, manifest.action?.default_popup, manifest.options_ui?.page,
     ...Object.values(manifest.icons || {}), ...contentFiles(manifest),
     ...(manifest.web_accessible_resources || []).flatMap((entry) => entry.resources || []),
   ].filter(Boolean);
   for (const ref of entries) need(manifestFile, `/${ref}`);
-  for (const file of await walk(OUT)) {
+  for (const file of await walk(outDir)) {
     for (const ref of localRefs(file, await readFile(file, "utf8").catch(() => ""))) need(file, ref);
   }
   return missing;
@@ -95,15 +99,27 @@ export function zip(files) {
   return Buffer.concat([...locals, ...centrals, end]);
 }
 
-async function main() {
+async function build({ sideload }) {
   const manifest = JSON.parse(await readFile(path.join(ROOT, "manifest.json"), "utf8"));
-  await rm(OUT, { recursive: true, force: true });
-  await mkdir(OUT, { recursive: true });
-  for (const folder of FOLDERS) await cp(path.join(ROOT, folder), path.join(OUT, folder), { recursive: true });
-  for (const file of [...PACKAGE_ROOT_FILES, ...contentFiles(manifest)]) await cp(path.join(ROOT, file), path.join(OUT, file));
-  await writeFile(path.join(OUT, "manifest.json"), `${JSON.stringify(storeManifest(manifest), null, 2)}\n`);
+  const folders = sideload ? PACKAGE_FOLDERS : STORE_PACKAGE_FOLDERS;
+  const rootFiles = sideload ? PACKAGE_ROOT_FILES : STORE_PACKAGE_ROOT_FILES;
+  const outName = sideload ? "kivori-sekai" : "crunchilist";
+  const outDir = path.join(DIST, outName);
+  await rm(outDir, { recursive: true, force: true });
+  await mkdir(outDir, { recursive: true });
+  for (const folder of folders) await cp(path.join(ROOT, folder), path.join(outDir, folder), { recursive: true });
+  for (const file of [...rootFiles, ...contentFiles(manifest)]) {
+    await mkdir(path.dirname(path.join(outDir, file)), { recursive: true });
+    await cp(path.join(ROOT, file), path.join(outDir, file));
+  }
+  if (!sideload) {
+    for (const file of STORE_OMIT_FILES) await rm(path.join(outDir, file), { force: true });
+    await writeFile(path.join(outDir, "app/updater.js"), storeUpdaterStub());
+  }
+  const packaged = sideload ? sideloadManifest(manifest) : storeManifest(manifest);
+  await writeFile(path.join(outDir, "manifest.json"), `${JSON.stringify(packaged, null, 2)}\n`);
 
-  const missing = await missingRefs(manifest);
+  const missing = await missingRefs(outDir, packaged);
   if (missing.length) {
     console.error(`Missing files in the package:\n  ${missing.join("\n  ")}`);
     process.exitCode = 1;
@@ -111,13 +127,18 @@ async function main() {
   }
 
   const files = [];
-  for (const file of (await walk(OUT)).sort()) {
-    files.push({ name: path.relative(OUT, file).split(path.sep).join("/"), data: await readFile(file) });
+  for (const file of (await walk(outDir)).sort()) {
+    files.push({ name: path.relative(outDir, file).split(path.sep).join("/"), data: await readFile(file) });
   }
-  const zipFile = path.join(DIST, `crunchilist-${manifest.version}.zip`);
+  const zipFile = path.join(DIST, `${outName}-${manifest.version}.zip`);
   await writeFile(zipFile, zip(files));
   const size = (await stat(zipFile)).size;
-  console.log(`${files.length} files, ${(size / 1024).toFixed(0)} KB -> ${path.relative(ROOT, zipFile)}`);
+  console.log(`${sideload ? "sideload" : "store"}: ${files.length} files, ${(size / 1024).toFixed(0)} KB -> ${path.relative(ROOT, zipFile)}`);
+}
+
+async function main() {
+  const sideload = process.argv.includes("--sideload");
+  await build({ sideload });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) await main();

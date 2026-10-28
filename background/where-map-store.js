@@ -1,4 +1,5 @@
 // Keeps the Netflix / Prime / Hulu gap map fresh from the weekly feed (same pattern as YouTube).
+import { allowsRemoteFeeds } from "../lib/build-channel.js";
 import {
   WHERE_MAP_KEY,
   WHERE_MAP_META_KEY,
@@ -45,6 +46,25 @@ async function runRefresh({ force = false, fetchImpl = fetch } = {}) {
   const have = await loadGaps();
   if (!force && stored.checkedAt && Date.now() - stored.checkedAt < 12 * 60 * 60 * 1000 && Object.keys(have).length) {
     return have;
+  }
+  if (!allowsRemoteFeeds()) {
+    if (!Object.keys(have).length) {
+      const packed = await packagedFeed(fetchImpl);
+      if (packed && Object.keys(packed.links).length) {
+        await chrome.storage.local.set({ [WHERE_MAP_KEY]: packed });
+        await saveMeta({
+          updated: packed.updated,
+          count: Object.keys(packed.links).length,
+          source: packed.source || "packaged",
+          checkedAt: Date.now(),
+          error: "",
+        });
+        return packed.links;
+      }
+    } else {
+      await saveMeta({ checkedAt: Date.now(), error: "" });
+    }
+    return loadGaps();
   }
   try {
     const metaResponse = await fetchImpl(WHERE_MAP_META_URL, { cache: "no-cache" });

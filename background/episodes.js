@@ -67,8 +67,10 @@ export async function resolveNotice(id, action) {
 
 export async function resolveAllNotices(action) {
   const state = await loadState();
-  const asks = action === "update" ? liveNotices(state.notices, state.library).filter((row) => row.kind === "ask") : [];
-  state.notices = [];
+  const live = liveNotices(state.notices, state.library);
+  const asks = action === "update" ? live.filter((row) => row.kind === "ask") : [];
+  // Clear keeps episode asks for update-all; ignore clears everything including system notices.
+  state.notices = action === "update" ? live.filter((row) => row.kind !== "ask") : [];
   await saveState(state);
   let latest = state;
   let syncNote = "";

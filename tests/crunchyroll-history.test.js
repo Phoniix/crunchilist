@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PAGE_SIZE, newerThan, parsePage } from "../lib/crunchyroll-history.js";
+import { CATCH_UP_DAYS, PAGE_SIZE, catchUpCheckpoint, newerThan, parsePage } from "../lib/crunchyroll-history.js";
 
 const episode = (number, { date = "2026-10-01T00:00:00Z", id = `ep-${number}` } = {}) => ({
   id,
@@ -71,4 +71,12 @@ test("newerThan keeps only history past the checkpoint for catch-up reads", () =
   assert.deepEqual(cut.rows.map((row) => row.key), ["new", "same-time-other"]);
   assert.deepEqual(newerThan(rows, null).rows.map((row) => row.key), rows.map((row) => row.key));
   assert.equal(newerThan(rows, null).reached, false);
+});
+
+test("catchUpCheckpoint uses the last few days unless a newer checkpoint exists", () => {
+  const now = Date.parse("2026-10-25T12:00:00Z");
+  const floor = now - CATCH_UP_DAYS * 24 * 60 * 60 * 1000;
+  assert.deepEqual(catchUpCheckpoint(null, now), { newestAt: floor, newestKey: "" });
+  assert.deepEqual(catchUpCheckpoint({ newestAt: floor - 1, newestKey: "old" }, now), { newestAt: floor, newestKey: "" });
+  assert.deepEqual(catchUpCheckpoint({ newestAt: floor + 1, newestKey: "fresh" }, now), { newestAt: floor + 1, newestKey: "fresh" });
 });

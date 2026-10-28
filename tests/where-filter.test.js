@@ -7,16 +7,16 @@ import { applySettingsPatch, defaultSettings, whereFilterMode } from "../lib/set
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("whereFilterMode defaults to host and accepts remember", () => {
-  assert.equal(whereFilterMode(defaultSettings()), "host");
-  assert.equal(whereFilterMode(applySettingsPatch(defaultSettings(), { whereFilterMode: "remember" })), "remember");
-  assert.equal(whereFilterMode({ whereFilterMode: "nope" }), "host");
+test("whereFilterMode defaults to remember and accepts host", () => {
+  assert.equal(whereFilterMode(defaultSettings()), "remember");
+  assert.equal(whereFilterMode(applySettingsPatch(defaultSettings(), { whereFilterMode: "host" })), "host");
+  assert.equal(whereFilterMode({ whereFilterMode: "nope" }), "remember");
 });
 
-test("panelHello siteFilter uses host service unless remember + lastWhereSite", () => {
+test("panelHello siteFilter uses host service only in host mode; remember opens all until a chip is chosen", () => {
   const source = readFileSync(join(root, "background/site-scripts.js"), "utf8");
   assert.match(source, /whereFilterMode\(state\.settings\)/);
-  assert.match(source, /siteFilter:\s*mode === "remember" && last \? last : service\.id/);
+  assert.match(source, /mode === "host" \? service\.id : \(last \|\| "all"\)/);
 });
 
 test("search-view and site-panel persist lastWhereSite when the filter changes", () => {

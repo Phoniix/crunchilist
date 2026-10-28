@@ -75,11 +75,12 @@ async function readHistory(token, signal) {
   let seen = 0;
   let url = historyPageUrl(account, 1, locale);
   let cutShort = false;
+  let capped = false;
   for (let page = 1; page <= HISTORY_MAX_PAGES; page += 1) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const fresh = await currentToken();
     if (!validBearer(fresh)) {
-      if (!rows.length) throw new Error("Crunchyroll session expired. Reload Crunchyroll and try again.");
+      if (!rows.length) throw new Error("Reload the Crunchyroll tab and try again (the page may need a fresh token).");
       cutShort = true;
       break;
     }
@@ -101,10 +102,15 @@ async function readHistory(token, signal) {
     bumpScan();
     job.note = `Reading your Crunchyroll history… ${seen} episodes so far`;
     if (!parsed.more) break;
+    if (page === HISTORY_MAX_PAGES) {
+      cutShort = true;
+      capped = true;
+      break;
+    }
     url = parsed.nextUrl || historyPageUrl(account, page + 1, locale);
     await delay(150, signal);
   }
-  return { rows, seen, cutShort };
+  return { rows, seen, cutShort, capped };
 }
 
 async function askAniList(query, variables, signal) {
@@ -166,7 +172,7 @@ export async function scanHistory() {
   const state = await loadState();
   if (!anilistSession(state.settings).connected) throw new Error("Connect your AniList account first.");
   const token = await currentToken();
-  if (!validBearer(token)) throw new Error("Open Crunchyroll while signed in, then start the import from the Crunchilist panel there.");
+  if (!validBearer(token)) throw new Error("Open Crunchyroll while signed in, then start the import from the Kivori SekAI panel there.");
   controller?.abort();
   controller = new AbortController();
   const { signal } = controller;
@@ -174,7 +180,7 @@ export async function scanHistory() {
   job = { phase: "reading", running: true, progress: 0, note: "Reading your Crunchyroll history…" };
   (async () => {
     await clearPreview();
-    const { rows, seen, cutShort } = await readHistory(token, signal);
+    const { rows, seen, cutShort, capped } = await readHistory(token, signal);
     const groups = groupHistory(rows);
     if (!groups.length) {
       job = { phase: "done", running: false, progress: 1, note: "No finished episodes found in your Crunchyroll history." };
@@ -182,8 +188,11 @@ export async function scanHistory() {
     }
     job.phase = "matching";
     const { items, unmatched } = await matchGroups(groups, await loadState(), signal);
-    await savePreview({ items, unmatched, scannedAt: Date.now(), seen, cutShort });
-    job = { phase: "ready", running: false, progress: 1, note: "" };
+    await savePreview({ items, unmatched, scannedAt: Date.now(), seen, cutShort, capped });
+    const capNote = capped
+      ? `Stopped after ${(HISTORY_MAX_PAGES * HISTORY_PAGE_SIZE).toLocaleString()} history entries (import cap). Run again later for older history, or use Import & tracking for a full rescan.`
+      : "";
+    job = { phase: "ready", running: false, progress: 1, note: capNote };
   })().catch((error) => {
     if (error?.name === "AbortError") {
       job = { phase: "idle", running: false, progress: 0, note: "Import canceled." };

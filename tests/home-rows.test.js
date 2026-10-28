@@ -4,10 +4,12 @@ import {
   activitySignature,
   buildHomeRowsPrompt,
   cleanNudge,
+  cleanThemes,
   expiryFor,
   fallbackThemes,
   fillThemes,
   HOME_ROWS_ACTIVITY_MS,
+  HOME_ROWS_CYCLE_AVOID,
   HOME_ROWS_MAX,
   HOME_ROWS_MIN,
   HOME_ROWS_RETRY_MS,
@@ -15,7 +17,10 @@ import {
   needsRefresh,
   NUDGE_MAX,
   parseHomeRows,
+  recentThemeTokens,
+  recordCycle,
   shortTitle,
+  themeTokens,
 } from "../lib/home-rows.js";
 
 const row = (title, query, why = "Because.") => ({ title, query, why });
@@ -136,4 +141,48 @@ test("filling rows keeps each show in one row and drops thin rows", () => {
     ["A", ["1", "2", "3", "4", "5"]],
     ["C", ["6", "7", "8", "9", "10"]],
   ]);
+});
+
+test("theme tokens skip stop words and feed a six-cycle avoid list", () => {
+  assert.deepEqual(themeTokens("cozy slice of life"), ["cozy", "slice", "life"]);
+  assert.deepEqual(themeTokens("like Frieren"), ["frieren"]);
+  const history = recordCycle(
+    [row("Cozy", "cozy slice of life"), row("Sports", "short sports")],
+    [],
+    1,
+  );
+  assert.equal(history.length, 1);
+  assert.ok(history[0].tokens.includes("cozy"));
+  assert.ok(history[0].tokens.includes("sports"));
+  let saved = history;
+  for (let i = 2; i <= 8; i += 1) {
+    saved = recordCycle([row(`R${i}`, `theme${i} mood`)], saved, i);
+  }
+  assert.equal(saved.length, HOME_ROWS_CYCLE_AVOID);
+  assert.equal(saved[0].queries[0], "theme3 mood");
+  assert.ok(recentThemeTokens(saved).includes("theme8"));
+  assert.ok(!recentThemeTokens(saved).includes("cozy"), "tokens from more than six cycles ago drop out");
+});
+
+test("cleanThemes prefers queries that are not in the recent genre window", () => {
+  const recent = themeTokens("cozy slice of life");
+  const rows = cleanThemes(
+    [row("Cozy again", "cozy slice of life"), row("Space", "set in space"), row("Sports", "short sports"), row("Mystery", "underrated mystery")],
+    [],
+    { recentTokens: recent },
+  );
+  assert.equal(rows[0].title, "Space");
+  assert.ok(rows.some((item) => item.title === "Cozy again"), "recent genres stay as fillers if needed");
+});
+
+test("the prompt asks the model to avoid recent themes, and fallbacks rotate stock genres", () => {
+  const prompt = buildHomeRowsPrompt({
+    profile: {},
+    recentThemes: ["cozy slice of life", "short sports"],
+  });
+  assert.match(prompt.system, /recentThemes/);
+  assert.deepEqual(JSON.parse(prompt.user).recentThemes, ["cozy slice of life", "short sports"]);
+  const a = fallbackThemes({ cycle: 0 }).map((item) => item.query);
+  const b = fallbackThemes({ cycle: 3 }).map((item) => item.query);
+  assert.notDeepEqual(a.slice(0, 3), b.slice(0, 3), "stock fillers shift each cycle");
 });

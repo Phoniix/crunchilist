@@ -70,7 +70,7 @@ function render(api) {
   const spots = heroSpots();
   const pool = m.homePool;
   return `${spots.length ? heroHtml(spots) : ""}
-    ${m.rail("Continue watching", pool(m.inStatus("watching")), { render: m.wide, href: "#list/watching" })}
+    ${m.rail("Continue watching", pool(m.continueWatching()), { render: m.wide, href: "#list/watching" })}
     ${m.forYouRail()}
     ${m.homeRowsHtml()}
     ${m.rail("Top 10 on Crunchyroll", pool(m.popular()).slice(0, 10), { ranked: true, sub: "Most popular right now" })}

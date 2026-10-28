@@ -16,6 +16,7 @@
     @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
     .top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: #ff7a2f; box-shadow: 0 0 0 4px rgba(255,122,47,.18); }
+    .dot.ready { background: #3ecf8e; box-shadow: 0 0 0 4px rgba(62,207,142,.18); }
     b { flex: 1; font-size: 14px; }
     p { margin: 0 0 12px; color: #ab9a8f; font-size: 13px; }
     button { font: inherit; cursor: pointer; }
@@ -47,11 +48,37 @@
   root.append(style, card);
   document.documentElement.append(host);
 
+  function paintReady(next) {
+    const ready = Boolean(next?.ready);
+    note.textContent = next?.note || reply.note;
+    dot.classList.toggle("ready", ready);
+    title.textContent = ready ? `${reply.name} is ready` : `${reply.name} is connected`;
+  }
+  paintReady(reply);
+
+  // Clear "pick your profile" once the site reports signed-in / profile-ready.
+  const poll = window.setInterval(async () => {
+    if (!document.documentElement.contains(host)) {
+      window.clearInterval(poll);
+      return;
+    }
+    const next = await chrome.runtime.sendMessage({ type: "returnCheck" }).catch(() => null);
+    if (!next?.ok || !next.show) {
+      window.clearInterval(poll);
+      host.remove();
+      return;
+    }
+    paintReady(next);
+    if (next.ready) window.clearInterval(poll);
+  }, 1500);
+
   close.addEventListener("click", () => {
+    window.clearInterval(poll);
     host.remove();
     chrome.runtime.sendMessage({ type: "returnDismiss" }).catch(() => {});
   });
   back.addEventListener("click", () => {
+    window.clearInterval(poll);
     host.remove();
     chrome.runtime.sendMessage({ type: "returnBack" }).catch(() => {});
   });

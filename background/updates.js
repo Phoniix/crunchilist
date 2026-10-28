@@ -1,9 +1,12 @@
-import { LATEST_RELEASE_API, MASTER_MANIFEST, dueForCheck, fromManifest, fromRelease, updateStatus } from "../lib/update-check.js";
+import { isStoreChannel } from "../lib/build-channel.js";
+import { LATEST_RELEASE_API, dueForCheck, fromRelease, updateStatus } from "../lib/update-check.js";
 
 const UPDATE_KEY = "crUpdate";
 
 // Store installs get an update_url and update themselves, so only copies loaded by hand check GitHub.
 export const selfUpdating = () => Boolean(chrome.runtime.getManifest().update_url);
+// Packaged store zips also must not phone home to GitHub (CWS policy).
+export const storePackaged = () => isStoreChannel();
 
 async function getJson(url) {
   const response = await fetch(url, { headers: { accept: "application/vnd.github+json" }, cache: "no-store" });
@@ -15,14 +18,14 @@ async function getJson(url) {
 async function newest() {
   const release = fromRelease(await getJson(LATEST_RELEASE_API));
   if (release) return release;
-  return fromManifest(await getJson(MASTER_MANIFEST));
+  throw new Error("No GitHub release zip yet. Check again after the next release.");
 }
 
 let running = null;
 
 export async function checkForUpdate({ force = false } = {}) {
   const current = chrome.runtime.getManifest().version;
-  if (selfUpdating()) return { ...updateStatus(null, current), managed: true };
+  if (selfUpdating() || storePackaged()) return { ...updateStatus(null, current), managed: true };
   const stored = (await chrome.storage.local.get(UPDATE_KEY))[UPDATE_KEY] || {};
   if (!dueForCheck(stored.checkedAt, Date.now(), force)) return updateStatus(stored, current);
   running ||= (async () => {
@@ -36,7 +39,21 @@ export async function checkForUpdate({ force = false } = {}) {
     await chrome.storage.local.set({ [UPDATE_KEY]: next });
     return next;
   })().finally(() => { running = null; });
-  return updateStatus(await running, current);
+  const status = updateStatus(await running, current);
+  if (status.announce && status.latest?.version) {
+    const { pushSystemNotice } = await import("./app-notices.js");
+    pushSystemNotice({
+      kind: "update",
+      title: `Kivori SekAI ${status.latest.version} is out`,
+      message: "Open Settings → About to update. Your list and settings stay.",
+      href: "#settings/about",
+    }, {
+      kind: "update",
+      title: `Update available: ${status.latest.version}`,
+      ok: true,
+    }).catch(() => {});
+  }
+  return status;
 }
 
 // The app announces each new version once; after that it only shows in Settings.

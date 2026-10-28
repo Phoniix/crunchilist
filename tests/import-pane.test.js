@@ -31,3 +31,9 @@ test("prism routes pending and import acts through import-pane", () => {
   assert.match(prism, /renderImportPane/);
   assert.match(prism, /pending-/);
 });
+
+test("Import pane stays browsable without AniList and gates apply actions", () => {
+  assert.match(source, /needsAnilist/);
+  assert.match(source, /Connect AniList under Account to import or apply changes/);
+  assert.doesNotMatch(source, /Connect AniList under Account first\. That pulls/);
+});

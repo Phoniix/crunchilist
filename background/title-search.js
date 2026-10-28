@@ -1,8 +1,10 @@
 // Title search for site panels / popup: master list (id-map) first, then Prism shows for play links.
+import { mergeContinueRows } from "../lib/continue-activity.js";
 import { pickPlayLink } from "../lib/play-url.js";
 import { serviceById, serviceForSite } from "../lib/services.js";
 import { searchLocalTitles } from "../lib/title-search-local.js";
 import { appData } from "./app-data.js";
+import { loadContinueActivity } from "./continue-activity.js";
 
 function playUrlFor(show, serviceId) {
   return pickPlayLink(show, { preferService: serviceId || "" })?.url || show.url || show.streaming?.[0]?.url || "";
@@ -92,8 +94,9 @@ export async function titleSearch({ query = "", service = "", limit = 10 } = {})
 
 export async function continueWatching({ service = "", limit = 5 } = {}) {
   const serviceId = serviceById(service)?.id || "";
-  const { shows, library } = await appData();
-  const rows = [];
+  const cap = Number(limit) || 5;
+  const [{ shows, library }, activity] = await Promise.all([appData(), loadContinueActivity()]);
+  const libraryRows = [];
   for (const show of shows) {
     if (!onService(show, serviceId)) continue;
     const mirrored = library?.[show.id];
@@ -103,16 +106,23 @@ export async function continueWatching({ service = "", limit = 5 } = {}) {
     if (watching == null) continue;
     const progress = mirrored.s[watching].progress || 0;
     const season = show.seasons?.[watching];
-    rows.push({
+    const episodes = season?.episodes || show.episodes;
+    // Finished seasons stay "watching" until marked finished — keep them out of Continue watching.
+    if (episodes && progress >= episodes) continue;
+    libraryRows.push({
       id: show.id,
       title: show.title,
       cover: season?.cover || show.cover,
-      episodes: season?.episodes || show.episodes,
+      episodes,
       next: progress + 1,
       progress,
       playUrl: pickPlayLink(show, { preferService: serviceId, episode: progress + 1 })?.url || playUrlFor(show, serviceId),
     });
-    if (rows.length >= (Number(limit) || 5)) break;
   }
-  return { shows: rows };
+  const live = (activity || []).filter((row) => {
+    if (!serviceId) return true;
+    const show = shows.find((item) => item.id === row.id);
+    return show ? onService(show, serviceId) : row.service === serviceId;
+  });
+  return { shows: mergeContinueRows(live, libraryRows, { limit: cap }) };
 }

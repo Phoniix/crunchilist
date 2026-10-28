@@ -182,7 +182,7 @@
       id: "hidive",
       name: "HIDIVE",
       origins: ["https://www.hidive.com/*"],
-      home: "https://www.hidive.com/",
+      home: "https://www.hidive.com/login",
       sites: ["HIDIVE"],
       imports: true,
       why: "Reads your HIDIVE watch history and notices what you play, using your own sign-in. Nothing is changed on HIDIVE.",
@@ -2309,6 +2309,7 @@
     const tasteBox = el("div");
     const taste = el("details", { class: "st-card" }, [el("summary", { text: "Taste preferences" }), tasteBox]);
     const modelLine = el("p", { class: "st-model" });
+    let lastModelStatus = null;
     const service = el("select", { "aria-label": "AI service" });
     service.append(el("option", { value: "auto", text: "Auto (recommended)" }));
     for (const provider of PROVIDERS) service.append(el("option", { value: provider.id, text: provider.free ? `${provider.label} (free)` : provider.label }));
@@ -2617,6 +2618,7 @@
     async function refreshModel() {
       const response = await send("modelStatus");
       const state = response?.ok ? response.status : { label: "Unknown" };
+      lastModelStatus = state;
       modelLine.replaceChildren(
         document.createTextNode(`${view?.settings?.modelLabel || "Chrome"} model: `),
         el("strong", { text: state.label || "Unknown" }),
@@ -2710,7 +2712,8 @@
         const keys = settings.keys || {};
         const savedCount = Object.values(keys).filter(Boolean).length;
         if (focused() !== service) service.value = settings.aiService || "auto";
-        serviceHint.textContent = !savedCount ? "No key saved, so Chrome's built-in model runs on this PC. A free key from Gemini, Groq, or OpenRouter is faster." : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
+        const chromeHint = lastModelStatus?.label === "Unavailable here" || /not supported|unavailable here/i.test(lastModelStatus?.detail || "") ? "No key saved, and Chrome's on-device model isn't available here. Add a free key from Gemini, Groq, or OpenRouter to rank results." : lastModelStatus?.label === "Not downloaded" || lastModelStatus?.needsDownload ? "No key saved. Chrome can download its on-device model the first time you let AI rank results, or add a free API key instead." : "No key saved, so Chrome's built-in model runs on this PC when it's available. A free key from Gemini, Groq, or OpenRouter is faster.";
+        serviceHint.textContent = !savedCount ? chromeHint : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
         for (const item of providerRows) {
           const saved = Boolean(keys[item.provider.id]);
           item.remove.hidden = !saved;
@@ -2846,9 +2849,11 @@
   :host { pointer-events: none; }
   .launcher, .backdrop, .panel, .drawer, .gather, .toast { pointer-events: auto; color: var(--text); font: 400 15px/1.45 ${ROUNDED}; }
   .toast {
-    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 10px; padding: 10px 8px 10px 16px;
+    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 14px; padding: 10px 8px 10px 16px;
     border-radius: 18px; animation: shell-toast .26s var(--ease) both;
   }
+  /* Keep catalog gather and episode toasts from stacking on top of each other. */
+  .gather:not([hidden]) ~ .toast, .toast:not([hidden]) ~ .gather { margin-bottom: 18px; }
   @keyframes shell-toast { from { opacity: 0; transform: translateY(8px); } }
   .toast-copy { flex: 1; min-width: 0; }
   .toast-title { margin: 0; font: 800 13.5px/1.3 ${ROUNDED}; }
@@ -2978,10 +2983,39 @@
       host.style.setProperty("--accent-text", accent);
       host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
     }
+    const COOKIE_SEL = [
+      "#onetrust-banner-sdk",
+      "#onetrust-consent-sdk",
+      "#CybotCookiebotDialog",
+      ".osano-cm-window",
+      "[id*='cookie' i][class*='banner' i]",
+      "[class*='cookie' i][class*='banner' i]",
+      "[aria-label*='cookie' i]",
+      "[aria-label*='consent' i]"
+    ].join(",");
+    function cookieLiftPx() {
+      if (!corner.startsWith("bottom") || fullscreen) return 0;
+      let lift = 0;
+      for (const node of document.querySelectorAll(COOKIE_SEL)) {
+        if (!(node instanceof HTMLElement)) continue;
+        const style2 = getComputedStyle(node);
+        if (style2.display === "none" || style2.visibility === "hidden" || Number(style2.opacity) === 0) continue;
+        const box = node.getBoundingClientRect();
+        if (box.height < 36 || box.width < 80) continue;
+        if (box.bottom < window.innerHeight - 8 || box.top > window.innerHeight) continue;
+        lift = Math.max(lift, Math.ceil(window.innerHeight - box.top + 12));
+      }
+      return Math.min(lift, Math.floor(window.innerHeight * 0.45));
+    }
+    function withBottomLift(css, lift) {
+      if (!lift) return css;
+      return css.replace(/bottom\s*:\s*(\d+)px/i, (_, px) => `bottom:${Number(px) + lift}px`);
+    }
     function place() {
+      const lift = cookieLiftPx();
       const edge = {
-        "bottom-right": layout?.edge || "right:18px;bottom:18px;",
-        "bottom-left": "left:18px;bottom:18px;",
+        "bottom-right": withBottomLift(layout?.edge || "right:18px;bottom:18px;", lift),
+        "bottom-left": withBottomLift("left:18px;bottom:18px;", lift),
         "top-left": "left:18px;top:18px;",
         "top-right": "right:18px;top:18px;"
       };
@@ -3123,6 +3157,13 @@
     });
     place();
     paint();
+    let cookieTimer = 0;
+    const cookieWatch = new MutationObserver(() => {
+      window.clearTimeout(cookieTimer);
+      cookieTimer = window.setTimeout(place, 120);
+    });
+    cookieWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
+    window.addEventListener("resize", place);
     return {
       host,
       setView(view, { syncOpen = false } = {}) {

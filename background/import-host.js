@@ -291,6 +291,51 @@ export async function importSnapshot() {
   };
 }
 
+async function buildDiagnostics({ userAgent }) {
+  const [snap, granted, idMap, whereMap, session, state] = await Promise.all([
+    importSnapshot(),
+    grantedOrigins(),
+    idMapStatus(),
+    whereMapStatus(),
+    chrome.storage.local.get(KEYS.session).then((row) => row[KEYS.session]),
+    loadState(),
+  ]);
+  const now = Date.now();
+  const main = anilistSession(state.settings, now);
+  const mirrored = publicSession(session, now);
+  const anilist = mirrored.connected || mirrored.expired
+    ? mirrored
+    : { connected: main.connected, expired: main.expired, name: main.viewerName || "", avatar: "", renewSoon: false };
+  const title = titleReadiness({
+    idMap,
+    whereMap,
+    catalogs: snap.catalogs || {},
+    connected: snap.connected || [],
+  });
+  const imp = await importStatus();
+  const { [KEYS.importLog]: log = [], [KEYS.checkpoints]: checkpoints = {} } = await chrome.storage.local.get([KEYS.importLog, KEYS.checkpoints]);
+  return {
+    text: diagnostics({
+      version: chrome.runtime.getManifest().version,
+      userAgent: String(userAgent || "").slice(0, 300),
+      connected: snap.connected || [],
+      anilist,
+      mal: snap.mal,
+      kitsu: snap.kitsu,
+      idMap,
+      whereMap,
+      settings: snap.settings,
+      job: imp.job,
+      log,
+      checkpoints,
+      pendingCount: imp.pendingCount,
+      granted,
+      catalogs: snap.catalogs || {},
+      title,
+    }),
+  };
+}
+
 export async function forgetSiteData({ service: id }) {
   const service = serviceById(String(id || ""));
   if (!service) throw new Error("Unknown site.");
@@ -352,51 +397,40 @@ const pageHandlers = {
     await chrome.storage.local.set(data);
     return { restored: Object.keys(data).length, theme, ...(await importSnapshot()) };
   },
-  copyDiagnostics: async ({ userAgent }) => {
-    const [snap, granted, idMap, whereMap, session, state] = await Promise.all([
-      importSnapshot(),
-      grantedOrigins(),
-      idMapStatus(),
-      whereMapStatus(),
-      chrome.storage.local.get(KEYS.session).then((row) => row[KEYS.session]),
-      loadState(),
-    ]);
-    const now = Date.now();
-    // Prefer the Search-style session mirror; fall back to Prism's main AniList settings so diagnostics match Import.
-    const main = anilistSession(state.settings, now);
-    const mirrored = publicSession(session, now);
-    const anilist = mirrored.connected || mirrored.expired
-      ? mirrored
-      : { connected: main.connected, expired: main.expired, name: main.viewerName || "", avatar: "", renewSoon: false };
-    const title = titleReadiness({
-      idMap,
-      whereMap,
-      catalogs: snap.catalogs || {},
-      connected: snap.connected || [],
-    });
-    const imp = await importStatus();
-    const { [KEYS.importLog]: log = [], [KEYS.checkpoints]: checkpoints = {} } = await chrome.storage.local.get([KEYS.importLog, KEYS.checkpoints]);
+  activityLog: async ({ kind } = {}) => {
+    const { listActivity } = await import("./app-notices.js");
+    return { rows: await listActivity({ kind }) };
+  },
+  exportActivity: async () => {
+    const { exportActivityText } = await import("./app-notices.js");
+    return { text: await exportActivityText() };
+  },
+  clearActivity: async () => {
+    const { clearActivityLog } = await import("./app-notices.js");
+    await clearActivityLog();
+    return {};
+  },
+  openFeedback: async ({ userAgent }) => {
+    const { text: diag } = await buildDiagnostics({ userAgent });
+    const { exportActivityText } = await import("./app-notices.js");
+    const activity = await exportActivityText();
+    const text = `${diag}\n\n${activity}\n`;
+    const title = encodeURIComponent("Kivori SekAI feedback");
+    const body = encodeURIComponent([
+      "## What happened",
+      "",
+      "## Steps to reproduce",
+      "",
+      "## Paste diagnostics below",
+      "(Help → Send feedback copies them to your clipboard.)",
+      "",
+    ].join("\n"));
     return {
-      text: diagnostics({
-        version: chrome.runtime.getManifest().version,
-        userAgent: String(userAgent || "").slice(0, 300),
-        connected: snap.connected || [],
-        anilist,
-        mal: snap.mal,
-        kitsu: snap.kitsu,
-        idMap,
-        whereMap,
-        settings: snap.settings,
-        job: imp.job,
-        log,
-        checkpoints,
-        pendingCount: imp.pendingCount,
-        granted,
-        catalogs: snap.catalogs || {},
-        title,
-      }),
+      text,
+      issueUrl: `https://github.com/Phoniix/crunchilist/issues/new?title=${title}&body=${body}`,
     };
   },
+  copyDiagnostics: async ({ userAgent }) => buildDiagnostics({ userAgent }),
   checkShowLinks: async ({ id }) => {
     const { shows } = await appData();
     const show = shows.find((row) => row.id === id || String(row.anilistId) === String(id));
@@ -470,7 +504,8 @@ const contentHandlers = {
     const service = await openedFor(sender);
     if (!service) return { show: false };
     const purpose = (await openPurposes())[sender.tab.id] || "";
-    return { show: true, name: service.name, note: returnNote(service, purpose), purpose };
+    const ready = await siteReady(service.id);
+    return { show: true, name: service.name, note: returnNote(service, purpose, { ready }), purpose, ready };
   },
   returnBack: async (_message, sender) => {
     const service = await openedFor(sender);

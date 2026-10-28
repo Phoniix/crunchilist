@@ -77,12 +77,13 @@ test("parses a browse page and a grouped search payload", () => {
   assert.deepEqual(found.map((item) => item.type), ["series", "movie"]);
 });
 
-test("a finished daily catalog waits, and a failed attempt waits an hour", () => {
+test("a finished weekly catalog waits, and a failed attempt waits six hours", () => {
   const now = Date.parse("2026-10-07T12:00:00Z");
-  assert.equal(catalogDue({ complete: true, updatedAt: now - 60 * 60 * 1000 }, now), false);
-  assert.equal(catalogDue({ complete: true, updatedAt: now - 25 * 60 * 60 * 1000 }, now), true);
-  assert.equal(catalogDue({ complete: false, attemptedAt: now - 5 * 60 * 1000 }, now), false);
-  assert.equal(catalogDue({ complete: false, attemptedAt: now - 2 * 60 * 60 * 1000 }, now), true);
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(catalogDue({ complete: true, updatedAt: now - day }, now), false);
+  assert.equal(catalogDue({ complete: true, updatedAt: now - 8 * day }, now), true);
+  assert.equal(catalogDue({ complete: false, attemptedAt: now - 60 * 60 * 1000 }, now), false);
+  assert.equal(catalogDue({ complete: false, attemptedAt: now - 7 * 60 * 60 * 1000 }, now), true);
 });
 
 

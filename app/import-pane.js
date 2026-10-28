@@ -32,9 +32,17 @@ function pointText(point) {
   return `${who}imported up to ${when(point.newestAt)}.${point.end ? ` All history read, back to ${day(point.oldestAt)}.` : point.resume ? " Older history is still to read; the next import continues it." : ""}`;
 }
 
-function lockReason(imp) {
+function lockReason(imp, serviceId = "", { needsAnilist = false } = {}) {
+  if (needsAnilist) return "Connect AniList under Account to import or apply changes.";
   if (imp?.job?.running) return "Wait for the current step to finish, or stop it above.";
-  if (imp?.preview) return `Apply or dismiss the ${sourceName(imp.preview.service)} preview above first.`;
+  const list = Array.isArray(imp?.previews) && imp.previews.length
+    ? imp.previews
+    : (imp?.preview ? [imp.preview] : []);
+  const hit = list.find((preview) => {
+    if (!serviceId || serviceId === "all") return true;
+    return preview.service === serviceId || preview.service === "all";
+  });
+  if (hit) return `Apply or dismiss the ${sourceName(hit.service)} preview above first.`;
   return "";
 }
 
@@ -104,8 +112,7 @@ function logItem(item, inSite = false) {
     ${item.undoneAt || !item.count ? "" : `<button class="btn ghost" data-act="import-undo" data-id="${esc(item.id)}">Undo</button>`}</div></div>`;
 }
 
-function previewCard(imp) {
-  const preview = imp?.preview;
+function onePreviewCard(imp, preview) {
   if (!preview) return "";
   const { changes = [], notes = [] } = preview;
   const stats = preview.stats || {};
@@ -117,9 +124,10 @@ function previewCard(imp) {
   const pendingNudge = stats.pending
     ? `<p class="hint-note"><a href="#needs-pick">${stats.pending.toLocaleString()} title${stats.pending === 1 ? "" : "s"} still need your pick</a> before those episodes can join AniList — open <b>Needs your pick</b> on this page.</p>`
     : "";
+  const who = sourceName(preview.service);
   if (!changes.length) {
-    return `<div class="panel"><div class="line"><div class="grow"><b>Nothing to change on AniList yet</b><small>${esc(summary)}</small></div>
-      <button class="btn accent" data-act="import-close">Close</button></div>
+    return `<div class="panel" data-preview-svc="${esc(preview.service)}"><div class="line"><div class="grow"><b>${esc(who)}: nothing to change on AniList yet</b><small>${esc(summary)}</small></div>
+      <button class="btn accent" data-act="import-close" data-svc="${esc(preview.service)}">Close</button></div>
       ${pendingNudge || (imp?.pendingCount ? `<p class="hint-note"><a href="#needs-pick">${imp.pendingCount.toLocaleString()} title${imp.pendingCount === 1 ? "" : "s"} waiting in Needs your pick</a>.</p>` : "")}</div>`;
   }
   const list = changes.map((change) => `<label class="change">
@@ -128,14 +136,19 @@ function previewCard(imp) {
       <small>${esc(entryText(change.before, change.episodes))} → ${esc(entryText(change.after, change.episodes))}</small></span>
     <a class="small-link" href="https://anilist.co/anime/${change.anilistId}" target="_blank" rel="noopener">AniList</a>
   </label>`).join("");
-  return `<div class="panel"><div class="line"><div class="grow"><b>${preview.trigger ? `${esc(TRIGGERS[preview.trigger] || "Sync")} found updates` : "Ready to update AniList"}</b>
+  return `<div class="panel" data-preview-svc="${esc(preview.service)}"><div class="line"><div class="grow"><b>${preview.trigger ? `${esc(TRIGGERS[preview.trigger] || "Sync")} · ${esc(who)}` : `${esc(who)}: ready to update AniList`}</b>
     <small>${esc(summary)}</small></div>
-    <button class="btn ghost" data-act="import-dismiss">Dismiss</button>
-    <button class="btn accent" data-act="import-apply" ${!chosen ? "disabled" : ""}>Apply ${chosen} change${chosen === 1 ? "" : "s"}</button></div>
+    <button class="btn ghost" data-act="import-dismiss" data-svc="${esc(preview.service)}">Dismiss</button>
+    <button class="btn accent" data-act="import-apply" data-svc="${esc(preview.service)}" ${!chosen ? "disabled" : ""}>Apply ${chosen} change${chosen === 1 ? "" : "s"}</button></div>
     ${pendingNudge}
     ${notes.map((note) => `<p class="hint-note">${esc(note)}</p>`).join("")}
     <div class="line tools"><button class="link" data-act="pick-all">Select all</button><button class="link" data-act="pick-none">Select none</button></div>
     <div class="changes">${list}</div></div>`;
+}
+
+function previewCard(imp) {
+  const list = Array.isArray(imp?.previews) && imp.previews.length ? imp.previews : (imp?.preview ? [imp.preview] : []);
+  return list.map((preview) => onePreviewCard(imp, preview)).join("");
 }
 
 function pendingCard(imp) {
@@ -162,8 +175,9 @@ function pendingCard(imp) {
       <small class="muted pending-why">${esc(ep)}. ${esc(item.reason || "Couldn’t match this name for sure.")}</small>
       ${hasChoices ? `<p class="pending-label">Suggested AniList titles — tap the one you watched</p>
       <div class="choices">${item.candidates.map((c) => {
-        const name = c.english || c.title;
-        const meta = [c.english && c.title && c.english !== c.title ? c.title : "", c.format, c.year, c.episodes ? `${c.episodes} eps` : ""].filter(Boolean).join(" · ");
+        // `title` is already English/romaji-first from the matcher; `english` holds the native alt when different.
+        const name = c.title || c.english;
+        const meta = [c.english && c.english !== c.title ? c.english : "", c.format, c.year, c.episodes ? `${c.episodes} eps` : ""].filter(Boolean).join(" · ");
         return `<button class="choice" type="button" data-act="pending-pick" data-id="${c.anilistId}" title="Use this AniList show">
           <b>${esc(name)}</b>${meta ? `<small>${esc(meta)}</small>` : ""}
           <span class="choice-act">Use this show</span>
@@ -181,17 +195,16 @@ function pendingCard(imp) {
   </section>`;
 }
 
-function choiceRow(label, about, key, choices, current) {
-  return `<div class="set-row"><div class="grow"><b>${esc(label)}</b><small data-choice-about="${esc(key)}">${esc(about)}</small></div>
-    <div class="seg">${choices.map(([value, text]) => `<button type="button" class="${current === value ? "on" : ""}" data-choice="${esc(key)}:${esc(value)}">${esc(text)}</button>`).join("")}</div></div>`;
+function choiceRow(label, about, key, choices, current, { disabled = false } = {}) {
+  return `<div class="set-row${disabled ? " off" : ""}"><div class="grow"><b>${esc(label)}</b><small data-choice-about="${esc(key)}">${esc(about)}</small></div>
+    <div class="seg">${choices.map(([value, text]) => `<button type="button" class="${current === value ? "on" : ""}" data-choice="${esc(key)}:${esc(value)}" ${disabled ? "disabled" : ""}>${esc(text)}</button>`).join("")}</div></div>`;
 }
 
-function autoRows(state) {
+function autoRows(state, { needsAnilist = false } = {}) {
   const settings = state.settings || {};
   const sync = state.sync || {};
   const connected = new Set(state.connected || []);
   const netflixOn = connected.has("netflix");
-  const netflixDone = (state.checkpoints?.netflix || []).length > 0;
   const hidiveOn = connected.has("hidive");
   const tubiOn = connected.has("tubi");
   const syncNote = sync.lastRun ? ` Last ran ${when(sync.lastRun)}.` : "";
@@ -201,38 +214,38 @@ function autoRows(state) {
     {
       key: "trackNetflix",
       name: "Netflix",
-      about: !netflixOn ? "Connect Netflix first." : !netflixDone ? "Import Netflix once first." : sync.lastTrack ? `Last checked ${when(sync.lastTrack)}.` : "Updates AniList a couple of minutes after you finish an episode.",
-      disabled: !netflixOn,
+      about: !netflixOn ? "Connect Netflix first." : sync.lastTrack ? `Last checked ${when(sync.lastTrack)}.` : "Updates AniList a couple of minutes after you finish an episode.",
+      disabled: !netflixOn || needsAnilist,
     },
     {
       key: "trackHidive",
       name: "HIDIVE",
-      about: !hidiveOn ? "Connect HIDIVE first." : !(state.checkpoints?.hidive || []).length ? "Import HIDIVE once first." : "Updates AniList a couple of minutes after you finish an episode.",
-      disabled: !hidiveOn && !settings.trackHidive,
+      about: !hidiveOn ? "Connect HIDIVE first." : "Updates AniList a couple of minutes after you finish an episode.",
+      disabled: (!hidiveOn && !settings.trackHidive) || needsAnilist,
     },
     {
       key: "trackTubi",
       name: "Tubi",
       about: tubiOn ? "Updates AniList about a minute after you finish an anime episode." : "Connect Tubi first.",
-      disabled: !tubiOn && !settings.trackTubi,
+      disabled: (!tubiOn && !settings.trackTubi) || needsAnilist,
     },
   ];
   return `<div class="panel">
-    ${choiceRow("Daily sync", mode === "apply" ? `Once a day, catches up and sends changes straight to AniList.${syncNote}` : mode === "preview" ? `Once a day, catches up and leaves a preview to apply.${syncNote}` : `Daily catch-up is off.${syncNote}`, "dailySyncMode", [["off", "Off"], ["preview", "Preview"], ["apply", "Apply"]], mode)}
-    ${settingSwitch({ ...settings, trackWhileWatching: trackingOn }, "trackWhileWatching", "Track while watching", "After you finish an episode on a connected site below, AniList is updated. Turn this off to pause every site at once.")}
+    ${choiceRow("Daily sync", mode === "apply" ? `Once a day, reads the last few days of history on connected sites and sends changes straight to AniList.${syncNote}` : mode === "preview" ? `Once a day, reads the last few days of history on connected sites and leaves a preview to apply.${syncNote}` : `Daily catch-up is off.${syncNote}`, "dailySyncMode", [["off", "Off"], ["preview", "Preview"], ["apply", "Apply"]], mode, { disabled: needsAnilist })}
+    ${settingSwitch({ ...settings, trackWhileWatching: trackingOn }, "trackWhileWatching", "Track while watching", "After you finish an episode on a connected site below, AniList is updated. Turn this off to pause every site at once.", { disabled: needsAnilist })}
     ${trackingOn ? trackSites.map((site) => settingSwitch(settings, site.key, site.name, site.about, { disabled: site.disabled })).join("") : ""}
     ${sync.lastResult && settings.dailySync ? `<small class="hint">${esc(sync.lastResult)}</small>` : ""}
     ${sync.trackResult ? `<small class="hint">${esc(sync.trackResult)}</small>` : ""}
   </div>`;
 }
 
-function serviceRows(state) {
+function serviceRows(state, { needsAnilist = false } = {}) {
   const imp = state;
-  const locked = imp?.job?.running || Boolean(imp?.preview);
-  const why = lockReason(imp);
   const connected = new Set(state.connected || []);
   const ready = new URLSearchParams(location.hash.split("?")[1] || "").get("ready");
   return SERVICES.map((service) => {
+    const why = lockReason(imp, service.id, { needsAnilist });
+    const locked = imp?.job?.running || Boolean(why);
     const on = connected.has(service.id) || service.id === "crunchyroll";
     const points = imp?.checkpoints?.[service.id] || [];
     const status = service.id === "hulu" ? "Coming later — Hulu isn't connectable yet."
@@ -242,7 +255,7 @@ function serviceRows(state) {
           : !on ? "Not connected. Connect it under Where to watch."
             : points.length ? points.map(pointText).join(" ") : "Not imported yet. The first import reads your whole history.";
     return `<div class="panel${ready === service.id ? " ready" : ""}${service.untested ? " off" : ""}" data-row="${esc(service.id)}">
-      <div class="line"><div class="grow"><b>${esc(service.name)}</b><small>${esc(status)}</small>${HOW[service.id] ? `<small class="hint">${esc(HOW[service.id])}</small>` : ""}</div>
+      <div class="line"><div class="grow"><b>${esc(service.name)}</b><small class="svc-status"> ${esc(status)}</small>${HOW[service.id] ? `<small class="hint">${esc(HOW[service.id])}</small>` : ""}</div>
         <span class="pill${on ? " on" : ""}">${on ? "Connected" : "Not connected"}</span></div>
       <div class="line actions">
         <a class="btn ghost" href="${esc(service.home)}" target="_blank" rel="noopener">Open</a>
@@ -258,9 +271,9 @@ function serviceRows(state) {
   }).join("");
 }
 
-function listRows(state) {
-  const locked = state?.job?.running || Boolean(state?.preview);
-  const why = lockReason(state);
+function listRows(state, { needsAnilist = false } = {}) {
+  const why = lockReason(state, "", { needsAnilist });
+  const locked = state?.job?.running || Boolean(state?.preview) || Boolean(why);
   return `<div class="panel"><div class="line"><div class="grow"><b>MyAnimeList</b><small>Upload the file from MyAnimeList's Export page (Anime list). The .gz download works as it is.</small></div></div>
       <div class="line actions"><a class="btn ghost" href="https://myanimelist.net/panel.php?go=export" target="_blank" rel="noopener">Open MAL export</a>
         <span class="grow"></span>
@@ -298,20 +311,22 @@ function malApiRow(state, locked) {
   </div>`;
 }
 
-function trackerSyncRows(state, locked) {
+function trackerSyncRows(state, locked, { needsAnilist = false } = {}) {
   const settings = state.settings || {};
   const pullNote = state.sync?.trackerPullResult ? `<small class="hint">${esc(state.sync.trackerPullResult)}</small>` : "";
   const canPull = state.mal?.connected || state.kitsu?.connected;
+  const off = locked || needsAnilist;
   return `<div class="panel">
-    ${settingSwitch(settings, "weeklyTrackerPull", "Weekly tracker pull", "About once a week, pull connected MyAnimeList and Kitsu libraries into an Import preview for AniList.")}
-    ${settingSwitch(settings, "writeMal", "Write to MyAnimeList", "When you apply imports or edit your list, also update MyAnimeList if it's connected. Never lowers progress.")}
+    ${settingSwitch(settings, "weeklyTrackerPull", "Weekly tracker pull", "About once a week, pull connected MyAnimeList and Kitsu libraries into an Import preview for AniList.", { disabled: needsAnilist })}
+    ${settingSwitch(settings, "writeMal", "Write to MyAnimeList", "When you apply imports or edit your list, also update MyAnimeList if it's connected. Never lowers progress.", { disabled: needsAnilist })}
     ${pullNote}
-    ${canPull ? `<button class="btn ghost" data-act="tracker-pull" ${locked ? "disabled" : ""}>Pull trackers now</button>` : ""}
+    ${canPull ? `<button class="btn ghost" data-act="tracker-pull" ${off ? "disabled" : ""}>Pull trackers now</button>` : ""}
   </div>`;
 }
 
-function importAllRow(state) {
-  const locked = state?.job?.running || Boolean(state?.preview);
+function importAllRow(state, { needsAnilist = false } = {}) {
+  const why = lockReason(state, "all", { needsAnilist });
+  const locked = state?.job?.running || Boolean(state?.preview) || Boolean(why);
   const connected = new Set(state.connected || []);
   connected.add("crunchyroll");
   const ready = SERVICES.filter((s) => s.imports && connected.has(s.id));
@@ -322,7 +337,8 @@ function importAllRow(state) {
   return `<div class="panel"><div class="line"><div class="grow"><b>Import all</b><small>${esc(about)}</small>
     ${runs.length ? `<small class="hint">Last run ${when(runs[0].at)}.</small>` : ""}</div>
     ${runs.length ? `<a class="btn ghost" href="#imports">Past runs <span class="pill">${runs.length}</span></a>` : ""}
-    <button class="btn accent" data-act="import-all" ${locked || !ready.length ? "disabled" : ""}>Import all</button></div></div>`;
+    <button class="btn accent" data-act="import-all" ${locked || !ready.length ? "disabled" : ""}>Import all</button></div>
+    ${why ? `<small class="lock muted">${esc(why)}</small>` : ""}</div>`;
 }
 
 export function renderImportsHistory(state) {
@@ -337,28 +353,30 @@ export function renderImportsHistory(state) {
 }
 
 export function renderImportPane(state, { anilistConnected = false } = {}) {
-  if (!anilistConnected) {
-    return `<div class="set-card"><h3>Import</h3><p>Connect AniList under Account first. That pulls your AniList list into Kivori SekAI; this page is for bringing site history and other trackers <b>into</b> AniList.</p>
-      <p class="muted"><a href="#settings/account">Open Account</a></p></div>`;
-  }
+  const gated = !anilistConnected;
+  const gate = { needsAnilist: gated };
   const status = [
+    gated ? `<div class="panel info">Connect <a href="#settings/account">AniList under Account</a> to apply imports. You can still connect sites and browse this page; Apply and automatic updates stay off until AniList is connected.</div>` : "",
     state?.job?.error ? `<div class="panel warn">${esc(state.job.error)}</div>` : "",
     state?.job?.message && !state.job.running ? `<div class="panel info">${esc(state.job.message)}</div>` : "",
     jobCard(state?.job || {}),
     previewCard(state),
   ].join("");
   const pending = pendingCard(state);
-  return `<div class="set-card"><h3>Import</h3><p>AniList is connected — your list is already here. Use this page to import watch history from streaming sites (and MAL/Kitsu). Imports pick up where the last one stopped, and nothing changes on AniList until you apply the preview.</p>
+  // Browse the full Import UI without AniList; apply / sync / tracking actions stay disabled.
+  return `<div class="set-card"><h3>Import</h3><p>${gated
+    ? "Bring watch history from streaming sites (and MAL/Kitsu) into AniList. Connect AniList under Account when you're ready to apply changes."
+    : "AniList is connected — your list is already here. Use this page to import watch history from streaming sites (and MAL/Kitsu). Imports pick up where the last one stopped, and nothing changes on AniList until you apply the preview."}</p>
     ${status ? `<div class="stack imp-status">${status}</div>` : ""}
     ${pending}
     <h4 class="set-sub">Watch history from sites</h4>
-    <div class="stack">${importAllRow(state)}${serviceRows(state)}</div>
+    <div class="stack">${importAllRow(state, gate)}${serviceRows(state, gate)}</div>
     <h4 class="set-sub">Automatic updates</h4>
-    ${autoRows(state)}
+    ${autoRows(state, gate)}
     <h4 class="set-sub">Trackers (MAL &amp; Kitsu)</h4>
-    <div class="stack">${malApiRow(state)}${trackerSyncRows(state, Boolean(state?.job?.running || state?.preview))}</div>
+    <div class="stack">${malApiRow(state)}${trackerSyncRows(state, Boolean(state?.job?.running || state?.preview), gate)}</div>
     <h4 class="set-sub">Lists from other trackers</h4>
-    <div class="stack">${listRows(state)}</div>
+    <div class="stack">${listRows(state, gate)}</div>
     <p class="muted fold-foot">Sign-ins stay with each site. Titles with no anime match are skipped and counted.</p>
   </div>`;
 }
@@ -397,10 +415,10 @@ export async function handleImportAct(act, target, { send, toast, refresh, confi
     }
   } else if (act === "import-close" || act === "import-dismiss") {
     if (act === "import-dismiss" && !ask("Dismiss this preview? Your AniList stays as it is.")) return;
-    await call("dismissImport");
+    await call("dismissImport", { service: target.dataset.svc || "" });
   } else if (act === "import-cancel") await call("cancelImport");
   else if (act === "import-apply") {
-    const reply = await call("applyImport", { skip: [...skip] });
+    const reply = await call("applyImport", { skip: [...skip], service: target.dataset.svc || "" });
     if (reply?.ok) toast(reply.result?.error ? `Stopped: ${reply.result.error}` : `Updated ${reply.result.applied} on AniList`);
   } else if (act === "import-undo") {
     if (!ask("Put these AniList entries back the way they were?")) return;

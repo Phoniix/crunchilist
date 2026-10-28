@@ -1,5 +1,5 @@
 // The page's only door to the extension: every read and write is a background message.
-const WATCHED_KEYS = ["crCornerState", "crCatalog", "alMedia", "crYoutube"];
+const WATCHED_KEYS = ["crCornerState", "crCatalog", "alMedia", "crYoutube", "ksContinueActivity"];
 
 export function send(type, payload = {}) {
   return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({ ok: false, error: error?.message || "Crunchilist isn't responding. Reload this page." }));
@@ -22,6 +22,7 @@ export function createData() {
       });
       chrome.runtime.onMessage.addListener((message) => {
         if (message?.type === "enriched" && message.view) onChange("view", message.view);
+        if (message?.type === "continueActivityUpdated") onChange("data");
       });
     },
   };

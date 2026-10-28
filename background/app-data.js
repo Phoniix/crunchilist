@@ -6,6 +6,7 @@ import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable,
 import { changeLibrary } from "./anilist-sync.js";
 import { readCatalogs } from "./catalog-reader.js";
 import { loadServiceCatalogs } from "./catalog-store.js";
+import { loadContinueActivity } from "./continue-activity.js";
 import { refreshIdMap } from "./id-map-store.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
@@ -34,7 +35,8 @@ export async function appData() {
   refreshWhereMap().catch(() => {});
   refreshIdMap().catch(() => {});
   readCatalogs(["crunchyroll"]).catch(() => {});
-  return { shows, library: libraryMirror(shows, state.library), view: makeView(state, catalog) };
+  const continueActivity = await loadContinueActivity();
+  return { shows, library: libraryMirror(shows, state.library), continueActivity, view: makeView(state, catalog) };
 }
 
 export async function setSeasonState(showId, changes) {

@@ -14,10 +14,11 @@ export const SITE_BRAND = {
 
 // Bottom insets sit above typical player transport bars so the launcher never covers controls.
 export const SITE_LAYOUT = {
-  netflix: { edge: "right:24px;bottom:96px;", panel: "right:24px;bottom:160px;", radius: 4, fab: 48, fabText: "#fff", align: "flex-end" },
-  hidive: { edge: "right:18px;bottom:88px;", panel: "right:18px;bottom:152px;", radius: 12, fab: 50, fabText: "#041018", align: "flex-end" },
+  // Bottoms clear player chrome; HIDIVE sits higher so cookie consent bars stay reachable.
+  netflix: { edge: "right:24px;bottom:112px;", panel: "right:24px;bottom:176px;", radius: 4, fab: 48, fabText: "#fff", align: "flex-end" },
+  hidive: { edge: "right:18px;bottom:148px;", panel: "right:18px;bottom:212px;", radius: 12, fab: 50, fabText: "#041018", align: "flex-end" },
   tubi: { edge: "right:16px;bottom:84px;", panel: "right:16px;bottom:148px;", radius: 20, fab: 52, fabText: "#fff", align: "flex-end" },
-  prime: { edge: "right:22px;bottom:92px;", panel: "right:22px;bottom:156px;", radius: 8, fab: 48, fabText: "#041018", align: "flex-end" },
+  prime: { edge: "right:22px;bottom:108px;", panel: "right:22px;bottom:172px;", radius: 8, fab: 48, fabText: "#041018", align: "flex-end" },
   hulu: { edge: "right:20px;bottom:88px;", panel: "right:20px;bottom:152px;", radius: 14, fab: 50, fabText: "#041018", align: "flex-end" },
 };
 
@@ -40,10 +41,33 @@ export async function syncSiteScripts() {
   const existing = await chrome.scripting.getRegisteredContentScripts().catch(() => []);
   const wantIds = new Set(wanted.map((script) => script.id));
   const stale = existing.filter((script) => script.id?.startsWith("ks-") && !wantIds.has(script.id)).map((script) => script.id);
-  if (stale.length) await chrome.scripting.unregisterContentScripts({ ids: stale }).catch(() => {});
-  const have = new Set(existing.map((script) => script.id));
-  const fresh = wanted.filter((script) => !have.has(script.id));
-  if (fresh.length) await chrome.scripting.registerContentScripts(fresh).catch(() => {});
+  if (stale.length) {
+    await chrome.scripting.unregisterContentScripts({ ids: stale }).catch((error) => {
+      console.warn("Kivori SekAI: unregisterContentScripts failed", stale, error);
+    });
+  }
+  const have = new Map(existing.map((script) => [script.id, script]));
+  const fresh = [];
+  const changed = [];
+  const sameJs = (a = [], b = []) => a.length === b.length && a.every((file, i) => file === b[i]);
+  const sameMatches = (a = [], b = []) => a.length === b.length && a.every((entry, i) => entry === b[i]);
+  for (const script of wanted) {
+    const prior = have.get(script.id);
+    if (!prior) fresh.push(script);
+    else if (!sameJs(prior.js, script.js) || !sameMatches(prior.matches, script.matches) || prior.world !== script.world) {
+      changed.push(script);
+    }
+  }
+  if (changed.length && chrome.scripting.updateContentScripts) {
+    await chrome.scripting.updateContentScripts(changed).catch((error) => {
+      console.warn("Kivori SekAI: updateContentScripts failed", changed.map((s) => s.id), error);
+    });
+  }
+  if (fresh.length) {
+    await chrome.scripting.registerContentScripts(fresh).catch((error) => {
+      console.warn("Kivori SekAI: registerContentScripts failed", fresh.map((s) => s.id), error);
+    });
+  }
 }
 
 // Registered scripts only run on the next navigation. Tabs already open need an explicit inject.
@@ -98,6 +122,8 @@ export async function panelHello(_message, sender) {
   const state = await loadState();
   const mode = whereFilterMode(state.settings);
   const last = String(state.settings?.lastWhereSite || "").trim().toLowerCase();
+  // remember + empty last → all (no silent host chip). host mode still opens on this site.
+  const siteFilter = mode === "host" ? service.id : (last || "all");
   return {
     show: true,
     service: service.id,
@@ -106,7 +132,7 @@ export async function panelHello(_message, sender) {
     layout: SITE_LAYOUT[service.id] || {},
     whereFilterMode: mode,
     lastWhereSite: last,
-    siteFilter: mode === "remember" && last ? last : service.id,
+    siteFilter,
   };
 }
 

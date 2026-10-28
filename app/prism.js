@@ -115,6 +115,43 @@ function entry(show) {
   return { ...state, index: record.at, season, episodes: season.episodes, multi: seasonsOf(show).length > 1 };
 }
 const inStatus = (status) => SHOWS.filter((show) => entry(show)?.status === status);
+let continueActivity = [];
+// Soft-merge live activity into the Prism library so episode labels match what was just watched.
+function applyContinueActivity(list) {
+  continueActivity = Array.isArray(list) ? list : [];
+  for (const row of continueActivity) {
+    if (!byId.has(row.id)) continue;
+    const rec = library[row.id];
+    const at = rec?.at ?? 0;
+    const cur = rec?.s?.[at]?.progress || 0;
+    if (row.progress < cur) continue;
+    if (row.episodes && row.progress >= row.episodes) continue;
+    library = applySeasonChanges(library, row.id, [{ index: at, status: "watching", progress: row.progress }]);
+  }
+}
+// Continue watching: live activity first, then list watching with episodes left.
+const continueWatching = () => {
+  const watching = inStatus("watching").filter((show) => {
+    const item = entry(show);
+    if (!item) return false;
+    if (item.episodes && item.progress >= item.episodes) return false;
+    return true;
+  });
+  const seen = new Set();
+  const out = [];
+  for (const row of continueActivity) {
+    const show = byId.get(row.id);
+    if (!show || seen.has(show.id)) continue;
+    if (row.episodes && row.progress >= row.episodes) continue;
+    seen.add(show.id);
+    out.push(show);
+  }
+  for (const show of watching) {
+    if (seen.has(show.id)) continue;
+    out.push(show);
+  }
+  return out;
+};
 const nextSeason = (show) => {
   const item = entry(show);
   const next = item && seasonsOf(show)[item.index + 1];
@@ -225,8 +262,8 @@ const CHOICE_ABOUT = {
   },
   dailySyncMode: {
     off: "Daily catch-up is off",
-    preview: "Once a day, catches up and leaves a preview to apply",
-    apply: "Once a day, catches up and sends changes straight to AniList",
+    preview: "Once a day, reads the last few days of history on connected sites and leaves a preview",
+    apply: "Once a day, reads the last few days of history on connected sites and applies to AniList",
   },
 };
 
@@ -240,7 +277,7 @@ function choiceCurrent(key) {
   const s = settings();
   if (key === "openEpisodes") return s.openEpisodes || (s.openIn === "window" ? "window" : s.openIn === "new" ? "new" : s.tabAuto ? "tab-auto" : "tab-ask");
   if (key === "dailySyncMode") return s.dailySyncMode || (s.dailySync ? (s.syncApply ? "apply" : "preview") : "off");
-  if (key === "whereFilterMode") return s.whereFilterMode || "host";
+  if (key === "whereFilterMode") return s.whereFilterMode || "remember";
   if (key === "notificationStyle") return s.notificationStyle || (s.muteNotifications ? "off" : s.episodeDialogs === false ? "silent" : "ask");
   return s[key];
 }
@@ -420,13 +457,13 @@ function card(show, opts = {}) {
 function whereWatchHtml(show, links = streamLinks(show)) {
   if (!links.length) {
     return onCrunchyroll(show)
-      ? `<a class="where on" href="${esc(show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Crunchilist manages. This link opens the show page</small></div>${icon("right")}</a>`
+      ? `<a class="where on" href="${esc(show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`
       : `<p class="muted">AniList doesn't list a streaming site for this one.</p>
          <div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`;
   }
   const rows = links.map((link) => {
     if (link.id === "crunchyroll") {
-      return `<a class="where on" href="${esc(link.url || show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Crunchilist manages. This link opens the show page</small></div>${icon("right")}</a>`;
+      return `<a class="where on" href="${esc(link.url || show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`;
     }
     const note = link.checked && link.seen ? "In your catalog · you've watched it there"
       : link.checked ? "In your catalog · opens in a new tab"
@@ -444,7 +481,7 @@ function wide(show) {
   const places = streamLinks(show).filter((link) => link.id !== "crunchyroll");
   const placeNote = !onCrunchyroll(show) && places[0] ? ` · ${places.map((link) => link.short).slice(0, 2).join(", ")}` : "";
   return `<div class="wide" data-show="${esc(show.id)}" data-crl-card tabindex="0" role="${onCrunchyroll(show) ? "button" : "link"}" aria-label="${onCrunchyroll(show) ? `Play ${esc(show.title)}, ${esc(playLabel(show).toLowerCase())}` : `${esc(show.title)}, ${esc(epLabel(show, true))}`}">
-    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook() })}
+    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook() })}${crBadge(show, "mini")}
       <div class="wide-copy"><b>${esc(show.title)}</b><small>${epLabel(show, true)}${esc(placeNote)}</small>${meter(show)}</div>
     </div>
   </div>`;
@@ -575,6 +612,16 @@ function forYouOrder() {
   return orderForYou({ tasteIds, picks: aiOn() ? forYou.picks : null, tasteMatch: forYou.matches, recentShown }).filter((row) => byId.has(row.id));
 }
 function forYouRail() {
+  // Hold the row until taste or watch history exists so Home doesn't look like generic Top picks.
+  if (!forYou.ids.length && !forYou.picks?.length) {
+    return rail("Picked for you", [], {
+      keep: true,
+      id: "for-you",
+      sub: "Needs a little taste first",
+      href: false,
+      empty: `<div class="empty soft"><p class="muted">Watch a few shows or edit your taste so this row can learn what you like.</p><button class="btn sm" data-act="taste">${icon("sliders")} Edit taste</button></div>`,
+    });
+  }
   const rows = forYouOrder().slice(0, 14);
   rememberForYou(rows.map((row) => row.id));
   const ai = aiOn() && (forYou.ids.length >= 3 || forYou.picks?.length);
@@ -1317,7 +1364,7 @@ function pageShow(id, seasonArg) {
   const playHint = !released(season) ? ""
     : onCr ? `Opens ${esc(playTarget(show, index).label.toLowerCase())} in ${where}${others.length ? ` · also on ${others.join(", ")}` : ""}`
     : playLink ? `Opens ${esc(playLink.site)} in a new tab. Mark episodes below as you watch`
-    : `Crunchyroll doesn't have this show, so it can't play here. Crunchilist still tracks it: mark episodes below as you watch${others.length ? ` on ${others.join(" or ")}` : " elsewhere"}`;
+    : `Crunchyroll doesn't have this show, so it can't play here. Kivori SekAI still tracks it: mark episodes below as you watch${others.length ? ` on ${others.join(" or ")}` : " elsewhere"}`;
   const seasonName = (season.title || "").replace(show.title, "").replace(/^[\s:–-]+/, "").trim();
   const lastYear = seasons.filter((s) => s.year).at(-1)?.year;
   const totalEps = seasons.reduce((sum, s) => sum + (s.episodes || 0), 0);
@@ -1377,6 +1424,7 @@ const SETTINGS_NAV = [
   { id: "badges", label: "Badges", about: "Status badges on Crunchyroll" },
   { id: "notifications", label: "Notifications", about: "Dialogs and toasts" },
   { id: "data", label: "Data", about: "Backups, privacy and diagnostics" },
+  { id: "help", label: "Help", about: "FAQ, feedback and activity log" },
   { id: "about", label: "About", about: "Privacy, version and updates" },
 ];
 const EMBED_SECTIONS = new Set(["account", "ai", "badges", "notifications"]);
@@ -1425,8 +1473,8 @@ function settingsPaneAppearance() {
 function settingsPaneWhere() {
   const s = settings();
   return `<div class="set-card"><h3>Where to watch</h3><p>Connect the sites you use, choose which appear on show pages, and read what each catalog carries. Crunchyroll is always connected. Netflix, Prime and Hulu also use the weekly gap map.</p>
-    <div class="set-row"><div class="grow"><b>Gap map</b><small id="where-map-status">Checking…</small></div><button class="btn ghost" type="button" data-act="refresh-title-feeds">Refresh now</button></div>
-    <div class="set-row"><div class="grow"><b>Master list</b><small id="id-map-status">Checking…</small></div></div>
+    <div class="set-row"><div class="grow"><b>Gap map</b><small>AniList ids known on Netflix, Prime Video and Hulu — not the Crunchyroll catalog. Used for where-to-watch chips and the weekly gap check.</small><small id="where-map-status">Checking…</small></div><button class="btn ghost" type="button" data-act="refresh-title-feeds">Refresh now</button></div>
+    <div class="set-row"><div class="grow"><b>Master list</b><small>Cross-site AniList ↔ streaming id map (far larger than Crunchyroll alone). Powers matching when you import history.</small><small id="id-map-status">Checking…</small></div></div>
     <h4 class="set-sub">Accounts</h4>
     <div id="site-connections" class="site-connections"><p class="muted">Loading sites…</p></div>
     <h4 class="set-sub">Catalogs</h4>
@@ -1438,9 +1486,9 @@ function settingsPaneWhere() {
       <button class="switch" data-setting="hideOffSiteShows" aria-label="Hide shows only on switched-off sites"></button></div>
     <div id="listing-rows" class="listing-rows"><p class="muted">Loading…</p></div>
     <h4 class="set-sub">Search filter on site panels</h4>
-    <div class="set-row"><div class="grow"><b>Where filter default</b><small data-choice-about="whereFilterMode">${esc(CHOICE_ABOUT.whereFilterMode[(s.whereFilterMode || "host") === "remember" ? "remember" : "host"])}</small></div>
-      <div class="seg"><button type="button" class="${(s.whereFilterMode || "host") === "host" ? "on" : ""}" data-choice="whereFilterMode:host">Always this site</button>
-        <button type="button" class="${(s.whereFilterMode || "host") === "remember" ? "on" : ""}" data-choice="whereFilterMode:remember">Remember last</button></div></div>
+    <div class="set-row"><div class="grow"><b>Where filter default</b><small data-choice-about="whereFilterMode">${esc(CHOICE_ABOUT.whereFilterMode[(s.whereFilterMode || "remember") === "host" ? "host" : "remember"])}</small></div>
+      <div class="seg"><button type="button" class="${(s.whereFilterMode || "remember") === "host" ? "on" : ""}" data-choice="whereFilterMode:host">Always this site</button>
+        <button type="button" class="${(s.whereFilterMode || "remember") === "remember" ? "on" : ""}" data-choice="whereFilterMode:remember">Remember last</button></div></div>
   </div>`;
 }
 
@@ -1450,6 +1498,25 @@ function settingsPaneImport() {
 
 let importState = null;
 let importPoll = 0;
+
+async function paintActivityLog() {
+  const root = document.querySelector("#activity-log");
+  if (!root) return;
+  const reply = await send("activityLog", { kind: "all" });
+  if (!reply?.ok) {
+    root.textContent = reply?.error || "Couldn't load the activity log.";
+    return;
+  }
+  const rows = reply.rows || [];
+  if (!rows.length) {
+    root.textContent = "Nothing logged yet. Imports, daily sync and updates will show up here.";
+    return;
+  }
+  root.innerHTML = `<ul class="help-log-list">${rows.slice(0, 40).map((row) => {
+    const when = row.at ? ago(row.at) : "";
+    return `<li><b>${esc(row.title)}</b> <span class="note-time">${esc(row.kind)}${when ? ` · ${esc(when)}` : ""}${row.ok === false ? " · failed" : ""}</span>${row.detail ? `<div class="muted">${esc(row.detail)}</div>` : ""}</li>`;
+  }).join("")}</ul>`;
+}
 
 async function paintImportPane() {
   const onHistory = document.body.dataset.page === "imports";
@@ -1521,18 +1588,42 @@ function settingsPaneData() {
         <label class="btn ghost">Restore…<input type="file" accept=".json,application/json" data-act="backup-restore" hidden></label></div>
       <div class="set-row"><div class="grow"><b>Diagnostics</b><small>Copies a short report (versions, connections, recent imports) for bug reports. No passwords or API keys.</small></div>
         <button class="btn ghost" type="button" data-act="copy-diagnostics">Copy diagnostics</button></div>
-      <p class="muted fold-foot">To forget a site's data on this device, disconnect it under Where to watch and confirm when asked. <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></p>
+      <p class="muted fold-foot">To forget a site's data on this device, disconnect it under Where to watch and confirm when asked. <a class="privacy-link" href="privacy.html" target="_blank" rel="noopener">Privacy</a></p>
     </div></div>`;
+}
+
+function settingsPaneHelp() {
+  const faq = [
+    ["Install", "On Windows, run install.cmd from a GitHub release. Files go to %LOCALAPPDATA%\\KivoriSekAI. In chrome://extensions turn on Developer mode → Load unpacked → pick that folder."],
+    ["Update", "Settings → About → Update now, or double-click update.cmd in the install folder. Updates come only from GitHub Releases."],
+    ["Daily sync", "Once a day, connected sites re-read about the last week of watch history (or since the last checkpoint if that’s newer). A full Import is still how you backfill older history."],
+    ["Notifications", "The bell shows episode asks, new seasons, import/sync previews, applied syncs, and app updates. Details stay in Import and the activity log below."],
+    ["AniList", "Connect under Account. List changes sync to AniList when you mark progress or apply an import."],
+    ["AI", "Off by default for remote keys. Chrome's on-device model can rank on this PC; a saved API key only talks to that provider."],
+    ["Backup", "Data → Download backup. Sign-ins and AI keys are not included."],
+    ["Report a bug", "Send feedback copies diagnostics and the activity log, then opens a GitHub issue. Paste into the issue body."],
+  ];
+  return `<div class="set-card"><h3>Help</h3><p>FAQ, feedback, and a log of imports, syncs and updates on this device.</p>
+    <div class="stack help-faq">${faq.map(([q, a]) => `<details class="help-item"><summary>${esc(q)}</summary><p class="muted">${esc(a)}</p></details>`).join("")}</div>
+    <div class="set-row"><div class="grow"><b>Send feedback</b><small>Copies diagnostics + activity log, then opens GitHub Issues. Paste into the new issue.</small></div>
+      <button class="btn accent" type="button" data-act="send-feedback">Send feedback</button></div>
+    <div class="set-row"><div class="grow"><b>Activity log</b><small>Recent imports, daily sync, tracking and updates. No passwords or API keys.</small></div>
+      <button class="btn ghost" type="button" data-act="export-activity">Export</button>
+      <button class="btn ghost" type="button" data-act="copy-activity">Copy</button>
+      <button class="btn ghost" type="button" data-act="clear-activity">Clear</button></div>
+    <div id="activity-log" class="help-log muted">Loading…</div>
+    <p class="muted fold-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a> · <a href="https://github.com/Phoniix/crunchilist/issues" target="_blank" rel="noopener">GitHub Issues</a></p>
+  </div>`;
 }
 
 function settingsPaneAbout() {
   return `<div class="set-card"><h3>About</h3><p>Version, privacy and updates.</p>
-    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><span>Kivori SekAI ${esc(chrome.runtime.getManifest().version)}</span>${updateHtml()}</p>
+    <p class="set-foot"><a href="privacy.html" target="_blank" rel="noopener">Privacy</a><a href="https://github.com/Phoniix/crunchilist/issues" target="_blank" rel="noopener">Feedback</a><span>Kivori SekAI ${esc(chrome.runtime.getManifest().version)}</span>${updateHtml()}</p>
     ${update?.available ? `<p class="set-foot set-update">${canSelfUpdate()
       ? `Update now installs it into your Kivori SekAI folder and restarts. The first time, Chrome asks you to pick that folder: the one shown under Kivori SekAI on chrome://extensions.${manualUpdate ? " If it can't finish, double-click update.cmd in that folder." : ""} Your list and settings stay.`
       : manualUpdate
-        ? "Double-click update.cmd in your Kivori SekAI folder (the one shown under Kivori SekAI on chrome://extensions), then come back here. Your list and settings stay."
-        : "Download it, unzip it over your Kivori SekAI folder, then press reload on Kivori SekAI in chrome://extensions. Your list and settings stay."}</p>` : ""}
+        ? "Double-click update.cmd in your Kivori SekAI folder (the one shown under Kivori SekAI on chrome://extensions), then come back here. Your list and settings stay. First install: run install.cmd from a GitHub release."
+        : "Download the release zip, unzip it over your Kivori SekAI folder, then press reload on Kivori SekAI in chrome://extensions. Your list and settings stay."}</p>` : ""}
   </div>`;
 }
 
@@ -1546,6 +1637,7 @@ const SETTINGS_PANES = {
   badges: settingsPaneBadges,
   notifications: settingsPaneNotifications,
   data: settingsPaneData,
+  help: settingsPaneHelp,
   about: settingsPaneAbout,
 };
 
@@ -1573,7 +1665,7 @@ async function finishManualUpdate() {
   const { crDiskReload } = await chrome.storage.local.get("crDiskReload");
   if (updating || !reloadForDisk(chrome.runtime.getManifest().version, onDisk, crDiskReload)) return;
   await chrome.storage.local.set({ crDiskReload: onDisk, crReopenApp: true });
-  toast(`Version ${onDisk} is installed. Restarting Crunchilist…`);
+  toast(`Version ${onDisk} is installed. Restarting Kivori SekAI…`);
   setTimeout(() => chrome.runtime.reload(), 900);
 }
 function updateHtml() {
@@ -1593,7 +1685,7 @@ async function checkUpdate(force = false) {
   update = reply.update;
   if (document.body.dataset.page === "settings") rerender(true);
   if (update.announce) {
-    toast(`Crunchilist ${update.latest.version} is out. Update it from Settings`);
+    toast(`Kivori SekAI ${update.latest.version} is out. Update it from Settings`);
     send("updateAnnounced", { version: update.latest.version });
   } else if (force) {
     toast(update.available ? `Version ${update.latest.version} is ready in Settings` : update.error ? "Couldn't reach GitHub. Try again later" : "You have the newest version");
@@ -1607,11 +1699,11 @@ async function runUpdate() {
   paint();
   try {
     const { version } = await installUpdate(update.latest, toast);
-    toast(`Version ${version} installed. Restarting Crunchilist…`);
+    toast(`Version ${version} installed. Restarting Kivori SekAI…`);
     await chrome.storage.local.set({ crReopenApp: true });
     setTimeout(() => chrome.runtime.reload(), 900);
   } catch (error) {
-    toast(error?.message || `The update didn't finish. Try again, ${manualUpdate ? "run update.cmd in your Crunchilist folder, " : ""}or use Download instead`);
+    toast(error?.message || `The update didn't finish. Try again, ${manualUpdate ? "run update.cmd in your Kivori SekAI folder, " : ""}or use Download instead`);
     updating = false;
     paint();
   }
@@ -1676,10 +1768,11 @@ async function paintSiteConnections() {
   }
   if (listings) {
     listings.innerHTML = sites.map((site) => {
-      const on = !hidden.has(site.name.toLowerCase());
-      const link = site.connected ? "Connected · " : "";
-      return `<div class="set-row"><div class="grow"><b>${esc(site.name)}</b><small>${link}${on ? "Shown in where-to-watch" : `Hidden from where-to-watch${site.connected ? " and On my services" : ""}`}</small></div>
-        <button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on}" data-listing="${esc(site.name)}" aria-label="Show ${esc(site.name)}"></button></div>`;
+      const coming = site.untested || site.id === "hulu";
+      const on = !coming && !hidden.has(site.name.toLowerCase());
+      const link = coming ? "Coming later · " : site.connected ? "Connected · " : "";
+      return `<div class="set-row${coming ? " off" : ""}"><div class="grow"><b>${esc(site.name)}</b><small>${link}${coming ? "Hidden from where-to-watch until connection is ready" : on ? "Shown in where-to-watch" : `Hidden from where-to-watch${site.connected ? " and On my services" : ""}`}</small></div>
+        <button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on}" data-listing="${esc(site.name)}" aria-label="Show ${esc(site.name)}" ${coming ? "disabled" : ""}></button></div>`;
     }).join("");
   }
   if (catalogs) {
@@ -1785,7 +1878,7 @@ function account() {
 }
 function avatarHtml(size = "") {
   const { name, avatar } = account();
-  return avatar ? `<img class="avatar ${size}" src="${esc(avatar)}" alt="" referrerpolicy="no-referrer">` : `<span class="avatar ${size}">${esc((name || "?")[0].toUpperCase())}</span>`;
+  return avatar ? `<img class="avatar ${size}" src="${esc(avatar)}" alt="" referrerpolicy="no-referrer">` : `<span class="avatar ${size}">${esc((name || "KS")[0].toUpperCase())}</span>`;
 }
 function ago(time) {
   const minutes = Math.round((Date.now() - time) / 60000);
@@ -1872,21 +1965,30 @@ async function accountAction(type, done) {
   if (done) toast(typeof done === "function" ? done(reply) : done);
 }
 
-// Notifications: episode updates waiting for an answer, plus new seasons of shows you finished.
+// Notifications: episode asks, system sync/import/update notices, plus new seasons of finished shows.
 const DISMISSED_KEY = "cl-dismissed";
 const dismissed = new Set(Object.keys(readJson(DISMISSED_KEY)));
+const SYSTEM_NOTICE = new Set(["sync_preview", "sync_applied", "import_preview", "update", "tracker_preview", "sync_skipped"]);
 function notes() {
-  const asks = (view?.notices || []).map((row) => ({
-    id: row.id,
-    real: true,
-    show: SHOWS.find((show) => show.title === row.title),
-    cover: row.cover,
-    title: row.title,
-    text: row.message,
-    time: row.createdAt,
-    unread: row.kind === "ask",
-    acts: [row.action ? ["update", row.action] : null, ["ignore", row.kind === "ask" ? "Ignore" : "Dismiss"]].filter(Boolean),
-  }));
+  const asks = (view?.notices || []).map((row) => {
+    const system = SYSTEM_NOTICE.has(row.kind);
+    return {
+      id: row.id,
+      real: true,
+      system,
+      href: row.href || "",
+      show: system ? null : SHOWS.find((show) => show.title === row.title),
+      cover: row.cover,
+      title: row.title,
+      text: row.message,
+      time: row.createdAt,
+      unread: row.kind === "ask" || system,
+      acts: [
+        row.action ? [system ? "open" : "update", row.action] : null,
+        ["ignore", row.kind === "ask" ? "Ignore" : "Dismiss"],
+      ].filter(Boolean),
+    };
+  });
   const seasons = SHOWS.filter(nextSeason).map((show) => {
     const next = nextSeason(show);
     return { id: `season:${show.id}:${next.anilistId || next.label}`, show, cover: next.cover || show.cover, title: show.title, text: `${next.label} is out. You finished the last one`, unread: true, acts: [["open", next.format === "MOVIE" ? "See it" : "Start it"], ["dismiss", "Dismiss"]] };
@@ -1895,7 +1997,7 @@ function notes() {
 }
 function drawerList() {
   const list = notes();
-  if (!list.length) return `<div class="drawer-empty"><b>You're all caught up</b><p class="muted">Finished episodes you skip updating, and new seasons of shows you finished, show up here.</p></div>`;
+  if (!list.length) return `<div class="drawer-empty"><b>You're all caught up</b><p class="muted">Episode asks, import and daily sync previews, applied syncs, app updates, and new seasons show up here.</p></div>`;
   return list.map((n) => `<div class="note ${n.unread ? "unread" : ""}" data-note="${esc(n.id)}"${n.show ? ` data-show="${esc(n.show.id)}"` : ""}>${n.cover ? `<img src="${esc(n.cover)}" alt="" referrerpolicy="no-referrer">` : '<span class="ph"></span>'}<div><b>${esc(n.title)}</b><p>${esc(n.text)}${n.time ? ` <span class="note-time">· ${ago(n.time)}</span>` : ""}</p>
     <div class="acts">${n.acts.map(([act, label], i) => `<button class="btn sm ${i ? "ghost" : "accent"}" data-note-act="${act}">${esc(label)}</button>`).join("")}</div></div></div>`).join("");
 }
@@ -1919,14 +2021,23 @@ function paintDrawer() {
 async function noteAction(id, act, button) {
   const note = notes().find((n) => n.id === id);
   if (!note) return;
-  if (act === "open") { document.body.classList.remove("drawer-open"); location.hash = `show/${note.show.id}/${(library[note.show.id]?.at ?? 0) + 2}`; return; }
-  if (act === "dismiss") {
+  if (act === "open") {
+    document.body.classList.remove("drawer-open");
+    if (note.system || note.href) {
+      if (note.real) await send("resolveNotice", { id, action: "ignore" });
+      location.hash = (note.href || "#settings/import").replace(/^#/, "");
+      return;
+    }
+    if (note.show) location.hash = `show/${note.show.id}/${(library[note.show.id]?.at ?? 0) + 2}`;
+    return;
+  }
+  if (act === "dismiss" && !note.real) {
     dismissed.add(id);
     localStorage.setItem(DISMISSED_KEY, JSON.stringify(Object.fromEntries([...dismissed].map((key) => [key, 1]))));
     return paintDrawer();
   }
   if (button) button.disabled = true;
-  const reply = await send("resolveNotice", { id, action: act });
+  const reply = await send("resolveNotice", { id, action: act === "dismiss" || act === "ignore" ? "ignore" : act });
   if (!reply?.ok) { if (button) button.disabled = false; return toast(reply?.error || "Something went wrong"); }
   if (reply.syncNote && !/^Marked episode/.test(reply.syncNote)) toast(reply.syncNote);
   applyView(reply.view);
@@ -2244,7 +2355,7 @@ function openCard(el, show) {
 
 // Lets the background look up the episodes the banner and Continue watching would open, so Play skips the show page.
 function warmPlay() {
-  const shows = [...inStatus("watching").slice(0, 10), ...shownBanner().map((row) => byId.get(row.id))];
+  const shows = [...continueWatching().slice(0, 10), ...shownBanner().map((row) => byId.get(row.id))];
   const seen = new Set();
   const requests = [];
   for (const show of shows) {
@@ -2322,7 +2433,7 @@ function emptyHome() {
   return `<section class="welcome">
     <img src="../icons/crunchilist-logo.svg" alt="Kivori SekAI">
     <h1 class="page-title">Your catalog is on its way</h1>
-    <p class="page-sub">Open Crunchyroll in this browser while signed in. Crunchilist reads the catalog from there, then matches each show on AniList for art, trailers and seasons. This page fills in by itself.</p>
+    <p class="page-sub">Open Crunchyroll in this browser while signed in. Kivori SekAI reads the catalog from there, then matches each show on AniList for art, trailers and seasons. This page fills in by itself.</p>
     <div class="missing-acts"><a class="btn accent" href="https://www.crunchyroll.com/" target="_blank" rel="noopener">Open Crunchyroll</a><a class="btn ghost" href="#settings">Settings</a></div>
   </section>`;
 }
@@ -2349,7 +2460,11 @@ function route() {
   document.querySelectorAll("[data-route]").forEach((el) => el.classList.toggle("on", el.dataset.route === page));
   if (page === "search") mountSearch(searchQuery);
   if (page === "home") { loadHomeRows(); setTimeout(warmPlay, 1500); }
-  if (page === "settings") mountSettings();
+  if (page === "settings") {
+    mountSettings();
+    paintActivityLog();
+    if (document.querySelector("#import-root")) paintImportPane();
+  }
   if (page === "imports") paintImportPane();
   if (page === "browse") paintBrowse();
   if (page === "list" && listView === "grid") {
@@ -2372,7 +2487,10 @@ const rerender = (force = false) => {
   if (!force && (page === "search" || page === "settings")) {
     if (page === "search") paintSide();
     // Settings short-circuits the full remount; still refresh Import when it's on screen.
-    if (page === "settings" && document.querySelector("#import-root")) paintImportPane();
+    if (page === "settings") {
+      if (document.querySelector("#import-root")) paintImportPane();
+      paintActivityLog();
+    }
     return paintChrome();
   }
   route.keep = true;
@@ -2446,13 +2564,14 @@ function setShows(list) {
 async function reload({ first = false } = {}) {
   const reply = await data.load();
   if (!reply?.ok) {
-    if (first) document.querySelector("main").innerHTML = `<div class="loading"><h1 class="page-title">Crunchilist couldn't load</h1><p class="page-sub">${esc(reply?.error || "The extension didn't answer.")}</p><button class="btn accent" data-act="reload">Try again</button></div>`;
+    if (first) document.querySelector("main").innerHTML = `<div class="loading"><h1 class="page-title">Kivori SekAI couldn't load</h1><p class="page-sub">${esc(reply?.error || "The extension didn't answer.")}</p><button class="btn accent" data-act="reload">Try again</button></div>`;
     return;
   }
   const hadShows = SHOWS.length > 0;
   const before = JSON.stringify(library);
   setShows(reply.shows);
   if (!writes) library = reply.library || {};
+  applyContinueActivity(reply.continueActivity);
   loaded = true;
   applyView(reply.view);
   if (first || (!hadShows && SHOWS.length)) {
@@ -2697,6 +2816,43 @@ function bind() {
         navigator.clipboard.writeText(reply.text).then(() => toast("Diagnostics copied"), () => toast("Couldn't reach the clipboard"));
       });
     }
+    if (act === "send-feedback") {
+      return send("openFeedback", { userAgent: navigator.userAgent }).then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't prepare feedback");
+        const paste = () => {
+          if (reply.issueUrl) window.open(reply.issueUrl, "_blank", "noopener");
+          toast("Diagnostics copied — paste into the GitHub issue");
+        };
+        navigator.clipboard.writeText(reply.text).then(paste, () => {
+          toast("Couldn't reach the clipboard — open the issue and paste from Export on Help");
+          if (reply.issueUrl) window.open(reply.issueUrl, "_blank", "noopener");
+        });
+      });
+    }
+    if (act === "export-activity") {
+      return send("exportActivity").then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't export the log");
+        const blob = new Blob([reply.text], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        Object.assign(document.createElement("a"), { href: url, download: `kivori-activity-${new Date().toISOString().slice(0, 10)}.txt` }).click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast("Activity log downloaded");
+      });
+    }
+    if (act === "copy-activity") {
+      return send("exportActivity").then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't copy the log");
+        navigator.clipboard.writeText(reply.text).then(() => toast("Activity log copied"), () => toast("Couldn't reach the clipboard"));
+      });
+    }
+    if (act === "clear-activity") {
+      if (!confirm("Clear the activity log on this device?")) return;
+      return send("clearActivity").then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't clear the log");
+        paintActivityLog();
+        toast("Activity log cleared");
+      });
+    }
     if (act === "watch" && show) return play(show, target.dataset.season != null ? Number(target.dataset.season) : undefined);
     if (target.dataset.choice) {
       const [key, raw] = target.dataset.choice.split(":");
@@ -2862,7 +3018,7 @@ export const api = {
   get SHOWS() { return SHOWS; },
   get byId() { return byId; },
   send: (...args) => send(...args),
-  icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, seasonsOf, epLabel, seasonCount, nextSeason,
+  icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, continueWatching, seasonsOf, epLabel, seasonCount, nextSeason,
   popular, rated, fresh, similar, forYouRail, homeRowsHtml, bannerRows, bannerRoll, aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
   prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, onCrunchyroll, playLabel, crBadge,
   onMyServices, mineServices, homePool, mineHome: () => mineHome, setMineHome,
@@ -2884,13 +3040,24 @@ export function startPrism(source, design) {
   bind();
   route();
   reload({ first: true }).finally(() => setTimeout(startTips, 800));
-  send("getShortcut").then((reply) => { if (reply?.ok) { shortcut = reply.shortcut || ""; if (document.body.dataset.page === "settings") rerender(true); } });
+  send("getShortcut").then(async (reply) => {
+    if (!reply?.ok) return;
+    shortcut = reply.shortcut || "";
+    if (document.body.dataset.page === "settings") rerender(true);
+    if (shortcut === "") {
+      const { ksShortcutHint } = await chrome.storage.local.get("ksShortcutHint");
+      if (!ksShortcutHint) {
+        toast("Tip: set the Switch to Crunchyroll shortcut in Chrome → Extensions → Keyboard shortcuts.");
+        await chrome.storage.local.set({ ksShortcutHint: true });
+      }
+    }
+  });
   setTimeout(() => checkUpdate().catch(() => {}), 3000);
   finishManualUpdate().catch(() => {});
   chrome.storage.local.get("crJustUpdated").then(({ crJustUpdated }) => {
     if (!crJustUpdated) return;
     chrome.storage.local.remove("crJustUpdated");
-    setTimeout(() => toast(`Crunchilist updated to version ${crJustUpdated}`), 600);
+    setTimeout(() => toast(`Kivori SekAI updated to version ${crJustUpdated}`), 600);
   }).catch(() => {});
   source.watch((kind, next) => (kind === "view" ? applyView(next) : reload().finally(() => setTimeout(startTips, 800))));
   takeCatalogKick().catch(() => {});

@@ -10,7 +10,21 @@ import { catalogOnlyShows } from "../lib/catalog-shows.js";
 import { pickPlayLink } from "../lib/play-url.js";
 import { serviceById } from "../lib/services.js";
 import { FOR_YOU_PICKS_TTL_MS, tasteMatches } from "../lib/banner.js";
-import { activitySignature, buildHomeRowsPrompt, cleanNudge, expiryFor, fallbackThemes, fillThemes, HOME_ROWS_SCHEMA, HOME_ROWS_TTL_MS, needsRefresh, parseHomeRows } from "../lib/home-rows.js";
+import {
+  activitySignature,
+  buildHomeRowsPrompt,
+  cleanNudge,
+  cycleHistory,
+  expiryFor,
+  fallbackThemes,
+  fillThemes,
+  HOME_ROWS_SCHEMA,
+  HOME_ROWS_TTL_MS,
+  needsRefresh,
+  parseHomeRows,
+  recentThemeTokens,
+  recordCycle,
+} from "../lib/home-rows.js";
 import { cleanSearches, inspiredRequest, interleave, recentlyWatched } from "../lib/inspired.js";
 import { activeEntries, statusForSeries } from "../lib/library.js";
 import { hasIntent, parseQuery, placeVariants } from "../lib/query.js";
@@ -698,17 +712,21 @@ function likedTags(state, weights, limit = 8) {
     .map(([label]) => label);
 }
 
-async function homeThemes(state, inputs, wantAi) {
+async function homeThemes(state, inputs, wantAi, { recentTokens = [], recentThemes = [], cycle = 0 } = {}) {
   if (wantAi) {
-    const prompt = buildHomeRowsPrompt({ profile: compactProfile(state.taste), ...inputs });
+    const prompt = buildHomeRowsPrompt({
+      profile: compactProfile(state.taste),
+      ...inputs,
+      recentThemes,
+    });
     const answer = await askJson(state, {
       ...prompt,
       schema: HOME_ROWS_SCHEMA,
-      parse: (text) => parseHomeRows(text, state.taste?.hardAvoids),
+      parse: (text) => parseHomeRows(text, state.taste?.hardAvoids, { recentTokens }),
     });
     if (answer.ok) return { themes: answer.parsed.rows, by: answer.by || "", ai: true };
   }
-  return { themes: fallbackThemes(inputs), by: "", ai: false };
+  return { themes: fallbackThemes({ ...inputs, recentTokens, cycle }), by: "", ai: false };
 }
 
 // nudge: text the viewer typed to steer the rows. undefined keeps the current one; "" clears it.
@@ -743,8 +761,21 @@ export async function homeRows(searches, { ai = true, fresh = false, nudge } = {
   if (fresh || inputs.nudge !== (saved?.nudge || "") || needsRefresh(saved, signature, now)) {
     if (typed) await homeRowsInFlight?.catch(() => {});
     homeRowsInFlight ||= (async () => {
-      const made = await homeThemes(state, inputs, wantAi);
-      const record = { ...made, signature, nudge: inputs.nudge, nudgeUntil, createdAt: now, expiresAt: expiryFor({ wantedAi: wantAi, gotAi: made.ai, now }) };
+      const history = cycleHistory(saved);
+      const recentTokens = recentThemeTokens(history);
+      const recentThemes = history.flatMap((entry) => entry.queries || []).slice(-36);
+      const cycle = history.length;
+      const made = await homeThemes(state, inputs, wantAi, { recentTokens, recentThemes, cycle });
+      const nextHistory = recordCycle(made.themes, history, now);
+      const record = {
+        ...made,
+        signature,
+        nudge: inputs.nudge,
+        nudgeUntil,
+        history: nextHistory,
+        createdAt: now,
+        expiresAt: expiryFor({ wantedAi: wantAi, gotAi: made.ai, now }),
+      };
       await chrome.storage.local.set({ [HOME_ROWS_KEY]: record }).catch(() => {});
       return record;
     })().finally(() => { homeRowsInFlight = null; });

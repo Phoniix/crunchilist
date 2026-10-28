@@ -20,10 +20,10 @@ test("top three trackers are AniList (write), MAL (write), Kitsu (pull-only)", (
   assert.equal(trackerById("mal").name, "MyAnimeList");
 });
 
-test("settings default weekly pull and MAL write on", () => {
+test("settings default weekly pull on and MAL write off until connected", () => {
   const defaults = defaultSettings();
   assert.equal(defaults.weeklyTrackerPull, true);
-  assert.equal(defaults.writeMal, true);
+  assert.equal(defaults.writeMal, false);
   assert.equal(applySettingsPatch(defaults, { weeklyTrackerPull: false }).weeklyTrackerPull, false);
 });
 

@@ -10,9 +10,11 @@ const SHELL_CSS = `
   :host { pointer-events: none; }
   .launcher, .backdrop, .panel, .drawer, .gather, .toast { pointer-events: auto; color: var(--text); font: 400 15px/1.45 ${ROUNDED}; }
   .toast {
-    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 10px; padding: 10px 8px 10px 16px;
+    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 14px; padding: 10px 8px 10px 16px;
     border-radius: 18px; animation: shell-toast .26s var(--ease) both;
   }
+  /* Keep catalog gather and episode toasts from stacking on top of each other. */
+  .gather:not([hidden]) ~ .toast, .toast:not([hidden]) ~ .gather { margin-bottom: 18px; }
   @keyframes shell-toast { from { opacity: 0; transform: translateY(8px); } }
   .toast-copy { flex: 1; min-width: 0; }
   .toast-title { margin: 0; font: 800 13.5px/1.3 ${ROUNDED}; }
@@ -145,10 +147,43 @@ export function createPanel(doc, {
     host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
   }
 
+  // Lift the launcher above cookie / consent bars so Accept stays clickable (HIDIVE, etc.).
+  const COOKIE_SEL = [
+    "#onetrust-banner-sdk",
+    "#onetrust-consent-sdk",
+    "#CybotCookiebotDialog",
+    ".osano-cm-window",
+    "[id*='cookie' i][class*='banner' i]",
+    "[class*='cookie' i][class*='banner' i]",
+    "[aria-label*='cookie' i]",
+    "[aria-label*='consent' i]",
+  ].join(",");
+
+  function cookieLiftPx() {
+    if (!corner.startsWith("bottom") || fullscreen) return 0;
+    let lift = 0;
+    for (const node of document.querySelectorAll(COOKIE_SEL)) {
+      if (!(node instanceof HTMLElement)) continue;
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) continue;
+      const box = node.getBoundingClientRect();
+      if (box.height < 36 || box.width < 80) continue;
+      if (box.bottom < window.innerHeight - 8 || box.top > window.innerHeight) continue;
+      lift = Math.max(lift, Math.ceil(window.innerHeight - box.top + 12));
+    }
+    return Math.min(lift, Math.floor(window.innerHeight * 0.45));
+  }
+
+  function withBottomLift(css, lift) {
+    if (!lift) return css;
+    return css.replace(/bottom\s*:\s*(\d+)px/i, (_, px) => `bottom:${Number(px) + lift}px`);
+  }
+
   function place() {
+    const lift = cookieLiftPx();
     const edge = {
-      "bottom-right": layout?.edge || "right:18px;bottom:18px;",
-      "bottom-left": "left:18px;bottom:18px;",
+      "bottom-right": withBottomLift(layout?.edge || "right:18px;bottom:18px;", lift),
+      "bottom-left": withBottomLift("left:18px;bottom:18px;", lift),
       "top-left": "left:18px;top:18px;",
       "top-right": "right:18px;top:18px;",
     };
@@ -301,6 +336,13 @@ export function createPanel(doc, {
 
   place();
   paint();
+  let cookieTimer = 0;
+  const cookieWatch = new MutationObserver(() => {
+    window.clearTimeout(cookieTimer);
+    cookieTimer = window.setTimeout(place, 120);
+  });
+  cookieWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
+  window.addEventListener("resize", place);
 
   return {
     host,

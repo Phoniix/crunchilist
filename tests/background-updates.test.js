@@ -121,17 +121,33 @@ test("a background sync needs AniList", async () => {
   await assert.rejects(backgroundSync(["netflix"], { trigger: "tracking", apply: true }), /Connect AniList/);
 });
 
-test("a site never imported for that profile is skipped, so a sync never starts a whole-history read", async () => {
+test("catch-up reads a profile with no prior import using the recent window, and never marks end", async () => {
   reset();
   signedIn();
-  stored[KEYS.checkpoints] = { "netflix:other-profile": { newestAt: 1 } };
+  stored[KEYS.checkpoints] = { "netflix:other-profile": { newestAt: 1, end: true } };
   replies.push({ type: "netflixProfile", reply: { ok: true, guid: "kid-profile", name: "Kids" } });
-  replies.push({ type: "netflixActivity", reply: { ok: false, error: "should not be read" } });
+  replies.push({ type: "netflixActivity", reply: { ok: true, payload: { viewedItems: [], vhSize: 0 } } });
   const result = await backgroundSync(["netflix"], { trigger: "tracking", apply: true });
   assert.equal(result.ran, true);
-  assert.match(result.message, /Tracking: Skipped: Netflix \(not imported yet for Kids/);
+  assert.match(result.message, /Tracking: Netflix: nothing new/);
+  assert.equal(stored[KEYS.checkpoints]["netflix:kid-profile"]?.end, false);
   assert.equal(stored[KEYS.importDraft], undefined);
   assert.equal(stored[KEYS.importPreview], undefined);
+});
+
+test("catch-up runs on a partial import without waiting for end", async () => {
+  reset();
+  signedIn();
+  const newestAt = Date.now() - 24 * 60 * 60 * 1000;
+  stored[KEYS.checkpoints] = { "netflix:kid-profile": { newestAt, newestKey: "prior", end: false, resume: { page: 3 } } };
+  replies.push({ type: "netflixProfile", reply: { ok: true, guid: "kid-profile", name: "Kids" } });
+  replies.push({ type: "netflixActivity", reply: { ok: true, payload: { viewedItems: [], vhSize: 0 } } });
+  const result = await backgroundSync(["netflix"], { trigger: "daily", apply: true });
+  assert.equal(result.ran, true);
+  assert.match(result.message, /Daily sync: Netflix: nothing new/);
+  assert.equal(stored[KEYS.checkpoints]["netflix:kid-profile"].end, false);
+  assert.deepEqual(stored[KEYS.checkpoints]["netflix:kid-profile"].resume, { page: 3 });
+  assert.equal(stored[KEYS.importDraft], undefined);
 });
 
 test("tracked sites need no earlier import, and an empty log just moves on", async () => {
@@ -140,6 +156,7 @@ test("tracked sites need no earlier import, and an empty log just moves on", asy
   const result = await backgroundSync(["tubi"], { trigger: "tracking", apply: true });
   assert.equal(result.ran, true);
   assert.match(result.message, /^Tracking: Tubi: nothing new/);
-  assert.equal(stored[KEYS.checkpoints]["tubi:main"].end, true);
+  assert.ok(stored[KEYS.checkpoints]["tubi:main"]);
+  assert.equal(stored[KEYS.checkpoints]["tubi:main"].end, false);
   assert.equal(stored[KEYS.importDraft], undefined);
 });

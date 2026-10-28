@@ -35,7 +35,7 @@
       if (!headers) return { ok: false, error: "HIDIVE hasn't finished loading in that tab. Wait a moment, or reload it, then try again." };
       const response = await originalFetch(`${API}api/v2/customer/history/vod?p=${page}&rpp=25`, { headers }).catch(() => null);
       if (!response) return { ok: false, error: "HIDIVE didn't answer. Check your connection." };
-      if (response.status === 401 || response.status === 403) return { ok: false, error: "HIDIVE asked you to sign in again. Reload the HIDIVE tab, then continue the import." };
+      if (response.status === 401 || response.status === 403) return { ok: false, error: "Reload the HIDIVE tab and try again (the page may need a fresh session)." };
       if (!response.ok) return { ok: false, error: `HIDIVE didn't answer (${response.status}). Reload the HIDIVE tab and try again.` };
       return { ok: true, body: await response.json().catch(() => null), profile: profile() };
     }

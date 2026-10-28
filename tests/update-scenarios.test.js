@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { FakeDir, crlf, filesOf, folderWith, makeUser, manifestText, read } from "./update-env.js";
 
-const MANIFEST = { name: "Crunchilist", version: "1.0.108", content_scripts: [{ js: ["content/crunchilist.js"] }] };
+const MANIFEST = { name: "Kivori SekAI", version: "1.0.108", content_scripts: [{ js: ["content/crunchilist.js"] }] };
 const OLD = {
   "manifest.json": manifestText(MANIFEST),
   "app/app.html": "<main></main>\n",
@@ -34,8 +34,8 @@ const windowsCopy = (files) => Object.fromEntries(Object.entries(files).map(([pa
 const untouched = async (user) => {
   assert.equal(await user.version(), "1.0.108");
   assert.equal(await read(user.dir, "app/prism.js"), "render(1);\n");
-  assert.equal(user.env.log.filter((path) => !path.includes(".crunchilist-update")).length, 0, `wrote ${user.env.log.join(", ")}`);
-  assert.ok(!user.dir.children.has(".crunchilist-update"), "staging folder left behind");
+  assert.equal(user.env.log.filter((path) => !path.includes(".kivori-update")).length, 0, `wrote ${user.env.log.join(", ")}`);
+  assert.ok(!user.dir.children.has(".kivori-update"), "staging folder left behind");
 };
 
 test("Mia, a Windows zip user a few versions behind: only real changes are written and her own files stay", async () => {
@@ -70,7 +70,7 @@ test("Jon picks the copy in his Downloads folder instead of the one Chrome loade
   assert.equal(user.remembered.value, null, "the wrong folder is not remembered");
 });
 
-test("Priya runs Crunchilist from a git clone", async () => {
+test("Priya runs Kivori SekAI from a git clone", async () => {
   const user = await makeUser({ installed: { ...OLD, ".git/HEAD": "ref: refs/heads/master" }, repo: NEXT });
   await assert.rejects(user.update(), { code: "git", message: /git pull/ });
   await untouched(user);
@@ -114,7 +114,7 @@ test("Rosa turned off folder access in Chrome's site settings since her last upd
   assert.equal(user.remembered.forgets, 1);
 });
 
-test("Tom moved his Crunchilist folder, so the remembered one is empty now", async () => {
+test("Tom moved his Kivori SekAI folder, so the remembered one is empty now", async () => {
   const user = await makeUser({ installed: OLD, repo: NEXT });
   user.remembered.value = new FakeDir(user.env, "old-place/");
   assert.equal((await user.update()).version, "1.0.112");
@@ -152,9 +152,10 @@ test("Raj's first try is interrupted by his antivirus; pressing Update again fin
   assert.equal(await read(user.dir, "app/prism.js"), "render(2);\n");
 });
 
-test("Nora's saved notice is from before versions carried a source", async () => {
+test("Nora's saved notice is from before releases carried a ref, so Update asks her to check again", async () => {
   const user = await makeUser({ installed: OLD, repo: NEXT });
-  assert.equal((await user.update({ version: "1.0.112" })).version, "1.0.112");
+  await assert.rejects(user.update({ version: "1.0.112" }), /No GitHub release zip yet/);
+  assert.equal((await user.update({ version: "1.0.112", ref: "v1.0.112" })).version, "1.0.112");
 });
 
 test("Leo uses Brave, which switches folder access off, and Kim installed from a store", async () => {
@@ -177,9 +178,9 @@ test("Ivy's new version drops the whole options page", async () => {
 });
 
 test("Max's browser crashed mid-update last time and left the staging folder behind", async () => {
-  const user = await makeUser({ installed: { ...OLD, ".crunchilist-update/app/prism.js": "half-written" }, repo: NEXT });
+  const user = await makeUser({ installed: { ...OLD, ".kivori-update/app/prism.js": "half-written" }, repo: NEXT });
   assert.equal((await user.update()).version, "1.0.112");
-  assert.ok(!user.dir.children.has(".crunchilist-update"));
+  assert.ok(!user.dir.children.has(".kivori-update"));
 });
 
 test("Every user sees what the updater is doing", async () => {
@@ -224,14 +225,14 @@ test("Lee tries again once his Wi-Fi is back", async () => {
   assert.equal((await user.update()).version, "1.0.112");
 });
 
-test("Gus has Crunchilist open in two tabs and presses Update in both", async () => {
+test("Gus has Kivori SekAI open in two tabs and presses Update in both", async () => {
   const user = await makeUser({ installed: OLD, repo: NEXT, slowWrites: 5 });
   const results = await Promise.allSettled([user.update(), user.update()]);
   assert.deepEqual(results.map((result) => result.status), ["fulfilled", "rejected"]);
   assert.equal(results[1].reason.code, "busy");
-  assert.match(results[1].reason.message, /another Crunchilist tab/);
+  assert.match(results[1].reason.message, /another Kivori SekAI tab/);
   assert.equal(await user.version(), "1.0.112");
   assert.equal(await read(user.dir, "app/prism.js"), "render(2);\n");
   assert.equal(await read(user.dir, "app/old.js"), null);
-  assert.ok(!user.dir.children.has(".crunchilist-update"));
+  assert.ok(!user.dir.children.has(".kivori-update"));
 });

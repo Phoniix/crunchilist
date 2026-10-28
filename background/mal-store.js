@@ -51,6 +51,10 @@ export async function connectMal() {
   if (!clientId) {
     throw new Error("Add a MyAnimeList API client id first (Settings → Accounts, or set MAL_CLIENT_ID). Create one at myanimelist.net/apiconfig with redirect https://<extension-id>.chromiumapp.org/");
   }
+  const allowed = await chrome.permissions.request({
+    origins: ["https://api.myanimelist.net/*", "https://myanimelist.net/*"],
+  }).catch(() => false);
+  if (!allowed) throw new Error("Allow MyAnimeList access when Chrome asks, then try again.");
   const redirectUri = chrome.identity.getRedirectURL();
   const { verifier, challenge } = makePkce();
   const state = crypto.randomUUID();

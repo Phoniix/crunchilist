@@ -3,19 +3,58 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { contentFiles, localRefs, storeManifest } from "../scripts/package.mjs";
+import { contentFiles, localRefs, sideloadManifest, storeManifest } from "../scripts/package.mjs";
 import { SERVICES, contentScriptsFor } from "../lib/services.js";
+import {
+  PACKAGE_FOLDERS, PACKAGE_ROOT_FILES, RAW_GITHUB_HOST,
+  STORE_OMIT_FILES, STORE_PACKAGE_FOLDERS, STORE_PACKAGE_ROOT_FILES, storeUpdaterStub,
+} from "../lib/update-files.js";
+import { STORE_CHANNEL, allowsRemoteFeeds, isStoreChannel } from "../lib/build-channel.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-test("store manifest drops the localhost dev bridge and keeps everything else", () => {
+test("store manifest drops the localhost bridge, marks the channel, and strips the updater host", () => {
   const out = storeManifest(manifest);
   assert.equal(out.externally_connectable, undefined);
+  assert.equal(out.ks_channel, STORE_CHANNEL);
   assert.ok(manifest.externally_connectable, "the source manifest is not modified");
+  assert.ok(manifest.host_permissions.includes(RAW_GITHUB_HOST));
+  assert.equal(out.host_permissions.includes(RAW_GITHUB_HOST), false);
   assert.deepEqual(out.permissions, manifest.permissions);
-  assert.deepEqual(out.host_permissions, manifest.host_permissions);
-  assert.deepEqual(out.optional_host_permissions, manifest.optional_host_permissions);
+  assert.ok(isStoreChannel(out));
+  assert.equal(allowsRemoteFeeds(out), false);
+  assert.equal(allowsRemoteFeeds(manifest), true);
+});
+
+test("store package omits sideload updater files", () => {
+  assert.deepEqual(STORE_PACKAGE_ROOT_FILES, []);
+  assert.equal(STORE_PACKAGE_FOLDERS.includes("tools"), false);
+  assert.ok(STORE_OMIT_FILES.includes("app/updater.js"));
+  assert.match(storeUpdaterStub(), /Chrome Web Store/);
+  assert.match(storeUpdaterStub(), /canSelfUpdate = \(\) => false/);
+});
+
+test("sideload package keeps the updater, install tools, and GitHub feeds host", () => {
+  assert.ok(PACKAGE_FOLDERS.includes("tools"));
+  assert.deepEqual(PACKAGE_ROOT_FILES, ["update.cmd", "install.cmd", "INSTALL.txt"]);
+  const out = sideloadManifest(manifest);
+  assert.equal(out.externally_connectable, undefined);
+  assert.equal(out.ks_channel, undefined);
+  assert.ok(out.host_permissions.includes(RAW_GITHUB_HOST));
+  assert.equal(allowsRemoteFeeds(out), true);
+  assert.equal(isStoreChannel(out), false);
+});
+
+test("dev bridge matches only fixed lab ports", () => {
+  const matches = manifest.externally_connectable.matches;
+  assert.deepEqual(matches.sort(), [
+    "http://127.0.0.1:5178/*",
+    "http://127.0.0.1:5391/*",
+    "http://localhost:5178/*",
+    "http://localhost:5391/*",
+  ].sort());
+  assert.equal(matches.some((entry) => entry.includes("localhost/*") && !entry.includes(":")), false);
 });
 
 test("package ships manifest content scripts plus injected site scripts", () => {

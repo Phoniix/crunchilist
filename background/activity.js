@@ -35,7 +35,10 @@ export function currentActivity() {
 
 async function importPreviewPending() {
   const row = await chrome.storage.local.get(KEYS.importPreview).catch(() => ({}));
-  return Boolean(row?.[KEYS.importPreview]);
+  const raw = row?.[KEYS.importPreview];
+  if (!raw) return false;
+  if (raw.version === 2 && raw.services) return Object.keys(raw.services).length > 0;
+  return Boolean(raw.service || raw.changes);
 }
 
 async function broadcast(message) {

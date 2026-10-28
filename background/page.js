@@ -13,6 +13,7 @@ import { describeNotice, liveNotices } from "../lib/notices.js";
 import { publicSettings } from "../lib/settings.js";
 import { collectTagSuggestions } from "../lib/taste.js";
 import { retryPendingSync, syncStatus } from "./anilist-sync.js";
+import { noteContinueFromCrObservation } from "./continue-activity.js";
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
 
 let enrichToken = 0;
@@ -80,7 +81,7 @@ export function makeView(state, catalog, observation = state.lastObservation) {
     notices: liveNotices(state.notices, state.library).map((row) => ({
       id: row.id,
       kind: row.kind,
-      cover: row.show.cover,
+      cover: row.show?.cover || "",
       createdAt: row.createdAt,
       ...describeNotice(row),
     })),
@@ -97,6 +98,7 @@ export async function pageUpdate(observation, sender) {
   const state = await loadState();
   state.lastObservation = observation;
   await saveState(state);
+  if (observation.kind === "watch") noteContinueFromCrObservation(observation).catch(() => {});
   const tabId = sender?.tab?.id;
   retryPendingSync().then(async (result) => {
     if (result && tabId != null) await chrome.tabs.sendMessage(tabId, { type: "enriched", view: await currentView(result.state) });

@@ -3,13 +3,14 @@
 // dismissed, so nothing read is ever lost, and history already read is never read again.
 import { anilist } from "../lib/anilist-api.js";
 import { readEntry, readList, saveEntry, deleteEntry } from "../lib/anilist-list.js";
-import { ACCOUNT_URL, groupRows, historyPageUrl, newerThan, parsePage } from "../lib/crunchyroll-history.js";
+import { ACCOUNT_URL, CATCH_UP_DAYS, catchUpCheckpoint, groupRows, historyPageUrl, newerThan, parsePage } from "../lib/crunchyroll-history.js";
 import { groupEpisodes } from "../lib/episode-groups.js";
 import { readAllShows } from "../lib/idb.js";
 import { LIVE_ACTION_NAMES, groupNetflix, parseActivity, parseNetflixCsv } from "../lib/netflix-history.js";
 import { GENERAL_RULES, checkGeneral, matchGroups, planChanges, watchedParts } from "../lib/import-plan.js";
 import { keepLogs } from "../lib/import-log.js";
 import { KEYS } from "../lib/keys.js";
+import { anyPreview, asPreviewMap, blockingPreview, packPreviewMap } from "../lib/import-previews.js";
 import { LIST_SOURCES, kitsuLibraryUrl, kitsuUserUrl, mergeRows, parseKitsuPage, parseMalXml, resolveIds } from "../lib/list-import.js";
 import { createMatcher } from "../lib/match-engine.js";
 import { matchKey, matchWithMemory, remember } from "../lib/remembered.js";
@@ -19,6 +20,7 @@ import { listChange, safeChange, sameDate } from "../lib/safe-change.js";
 import { anilistSession } from "../lib/settings.js";
 import { connectedIds, serviceById } from "../lib/services.js";
 import { cleanKitsuLink } from "../lib/trackers.js";
+import { mirrorAppliedChanges } from "./continue-activity.js";
 import { pullMalRows, pushMalChange } from "./mal-store.js";
 import { findOpenServiceTab, injectSiteScripts } from "./site-scripts.js";
 import { loadState } from "./store.js";
@@ -59,6 +61,24 @@ const WRITE_GAP_MS = 700;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const load = async (key, fallback) => (await chrome.storage.local.get(key))[key] ?? fallback;
 const save = (key, value) => chrome.storage.local.set({ [key]: value });
+
+async function previewMap() {
+  return asPreviewMap(await load(KEYS.importPreview, null));
+}
+
+async function writePreview(preview) {
+  const services = await previewMap();
+  services[preview.service] = preview;
+  await save(KEYS.importPreview, packPreviewMap(services));
+}
+
+async function clearPreview(service) {
+  const services = await previewMap();
+  if (service) delete services[service];
+  else Object.keys(services).forEach((key) => delete services[key]);
+  if (Object.keys(services).length) await save(KEYS.importPreview, packPreviewMap(services));
+  else await chrome.storage.local.remove(KEYS.importPreview);
+}
 
 let job = { phase: "idle", running: false, service: "", note: "", done: 0, total: 0, error: "" };
 let cancelled = false;
@@ -129,8 +149,15 @@ export async function crGet(url) {
     const response = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }).catch((error) => ({ ok: false, status: 0, error }));
     if (response.ok) return response.json();
     if (response.status === 401 || response.status === 403) {
+      if (attempt === 1) {
+        await chrome.storage.session.remove([KEYS.crunchyrollAuth, "crCatalogToken"]).catch(() => {});
+        const tabId = await findOpenServiceTab("crunchyroll");
+        if (tabId != null) await injectSiteScripts("crunchyroll", tabId).catch(() => {});
+        await sleep(2000);
+        continue;
+      }
       if (attempt < 3) { await sleep(4000); continue; }
-      throw Object.assign(new Error("Your Crunchyroll sign-in ran out. Reload a Crunchyroll tab, then continue the import."), { code: "auth" });
+      throw Object.assign(new Error("Reload the Crunchyroll tab and try the import again (the page may need a fresh token)."), { code: "auth" });
     }
     if (attempt >= 4) throw new Error(`Crunchyroll didn't answer (${response.status || "offline"}).`);
     await sleep(attempt * 3000);
@@ -310,6 +337,7 @@ async function readPages({ draft, source, cursor, newest, checkpoint, phase }) {
   let reachedCheckpoint = false;
   let ended = false;
   let failed = "";
+  let hitPageCap = false;
   for (let count = 0; cursor && cursor.page <= MAX_PAGES; count += 1) {
     if (cancelled) throw new DOMException("Cancelled", "AbortError");
     let parsed;
@@ -328,31 +356,38 @@ async function readPages({ draft, source, cursor, newest, checkpoint, phase }) {
     setJob({ note: `Reading your ${source.name} history… ${draft.seen.toLocaleString()} entries`, done: draft.seen, total: parsed.total || 0 });
     if (kept.reached) { reachedCheckpoint = true; break; }
     if (!parsed.more) { ended = true; cursor = null; break; }
+    if (cursor.page >= MAX_PAGES) {
+      hitPageCap = true;
+      cursor = null;
+      break;
+    }
     cursor = parsed.next;
     if (phase === "older") draft.cursor = cursor;
     if (count % DRAFT_EVERY === 0) await save(KEYS.importDraft, draft);
     await sleep(PAGE_GAP_MS);
   }
-  return { reachedCheckpoint, ended, failed, cursor };
+  return { reachedCheckpoint, ended, failed, cursor, hitPageCap };
 }
 
-// catchUp: only history newer than the checkpoint; an unfinished older read is left for a manual import.
+// catchUp: last few days (or since the last checkpoint if newer); never walks older history / never marks end.
 async function readHistory(source, { full, catchUp = false }) {
   const { service, account } = source;
   const checkpoints = await load(KEYS.checkpoints, {});
   const ckey = `${service}:${account}`;
-  const checkpoint = full ? {} : checkpoints[ckey] || {};
+  const stored = full ? {} : checkpoints[ckey] || {};
+  const checkpoint = catchUp ? catchUpCheckpoint(stored) : stored;
   let draft = await load(KEYS.importDraft, null);
-  if (!draft || draft.service !== service || draft.account !== account || draft.full !== Boolean(full) || (draft.rules || 0) !== (source.rules || 0)) {
-    draft = { service, account, full: Boolean(full), rules: source.rules || 0, rows: [], seen: 0, fresh: 0, newer: null, cursor: null, oldestAt: 0, startedAt: Date.now() };
+  if (!draft || draft.service !== service || draft.account !== account || draft.full !== Boolean(full) || (draft.rules || 0) !== (source.rules || 0) || Boolean(draft.catchUp) !== Boolean(catchUp)) {
+    draft = { service, account, full: Boolean(full), catchUp: Boolean(catchUp), rules: source.rules || 0, rows: [], seen: 0, fresh: 0, newer: null, cursor: null, oldestAt: 0, startedAt: Date.now() };
   }
   const newest = { value: draft.newer?.newest || null };
   const notes = [];
 
-  // 1. Newer than the checkpoint (everything, the first time).
+  // 1. Newer than the checkpoint (everything, the first time; catch-up stops at the recent window).
   let stopped = false;
   if (!draft.newer?.done) {
     const read = await readPages({ draft, source, cursor: source.first, newest, checkpoint, phase: "newer" });
+    if (read.hitPageCap) notes.push(`Reached the import page cap (${MAX_PAGES} pages). Older history was not read; run a full rescan later if needed.`);
     if (read.failed) {
       // A short catch-up read simply runs again; a long first read keeps what it has and continues later.
       if (checkpoint.newestAt || !draft.rows.length) {
@@ -363,29 +398,33 @@ async function readHistory(source, { full, catchUp = false }) {
       notes.push(`Stopped early: ${read.failed} The next import continues from there.`);
     }
     draft.newer = { done: true, newest: newest.value };
-    if (!checkpoint.newestAt && !read.ended && !read.reachedCheckpoint) draft.cursor = read.cursor;
+    if (!catchUp && !stored.newestAt && !read.ended && !read.reachedCheckpoint) draft.cursor = read.cursor;
     // A recent-only source ends where its page ends, not where the history does.
-    if (read.ended && !source.recentOnly) draft.reachedEnd = true;
-    if (source.recentOnly && checkpoint.newestAt && !read.reachedCheckpoint) {
-      notes.push(`The recent history didn't reach back to the last import (${new Date(checkpoint.newestAt).toLocaleDateString()}), so some episodes in between may be missing. Upload a Google Takeout file to fill them in.`);
+    if (!catchUp && read.ended && !source.recentOnly) draft.reachedEnd = true;
+    if (source.recentOnly && stored.newestAt && !read.reachedCheckpoint) {
+      notes.push(`The recent history didn't reach back to the last import (${new Date(stored.newestAt).toLocaleDateString()}), so some episodes in between may be missing. Upload a Google Takeout file to fill them in.`);
+    }
+    if (catchUp && !(Number(stored.newestAt) > checkpoint.newestAt)) {
+      notes.push(`Catch-up reads the last ${CATCH_UP_DAYS} days of history.`);
     }
     await save(KEYS.importDraft, draft);
   }
   // 2. An older read left unfinished last time (or this time) continues from its cursor.
-  const resume = draft.cursor || (!draft.reachedEnd && checkpoint.resume) || null;
-  if (resume && Number.isInteger(resume.page) && !checkpoint.end && !stopped && !catchUp) {
+  const resume = draft.cursor || (!draft.reachedEnd && stored.resume) || null;
+  if (resume && Number.isInteger(resume.page) && !stored.end && !stopped && !catchUp) {
     const read = await readPages({ draft, source, cursor: resume, newest, checkpoint: null, phase: "older" });
     if (read.ended) { draft.reachedEnd = true; draft.cursor = null; }
     else if (read.failed) { draft.cursor = read.cursor; notes.push(`Stopped early: ${read.failed} The next import continues from there.`); }
     await save(KEYS.importDraft, draft);
   }
   const nextCheckpoint = {
-    newestAt: newest.value?.newestAt || checkpoint.newestAt || 0,
-    newestKey: newest.value?.newestKey || checkpoint.newestKey || "",
-    end: Boolean(checkpoint.end || draft.reachedEnd),
-    oldestAt: draft.reachedEnd ? draft.oldestAt : checkpoint.oldestAt || 0,
-    resume: draft.reachedEnd ? null : draft.cursor || checkpoint.resume || null,
-    label: source.label || checkpoint.label || "",
+    newestAt: newest.value?.newestAt || stored.newestAt || 0,
+    newestKey: newest.value?.newestKey || stored.newestKey || "",
+    // Catch-up never claims a full archive; keep any prior end flag only.
+    end: Boolean(catchUp ? stored.end : (stored.end || draft.reachedEnd)),
+    oldestAt: catchUp ? stored.oldestAt || 0 : (draft.reachedEnd ? draft.oldestAt : stored.oldestAt || 0),
+    resume: catchUp ? stored.resume || null : (draft.reachedEnd ? null : draft.cursor || stored.resume || null),
+    label: source.label || stored.label || "",
   };
   return { ckey, rows: draft.rows, seen: draft.fresh || 0, checkpoint: nextCheckpoint, notes };
 }
@@ -466,8 +505,28 @@ async function buildPreview({ service, groups, checkpoints = [], seen, notes, tr
     rules: GENERAL_RULES,
     notes,
   };
-  await save(KEYS.importPreview, preview);
+  await writePreview(preview);
+  await notifyPreviewReady(preview).catch(() => {});
   return preview;
+}
+
+async function notifyPreviewReady(preview) {
+  if (!preview?.changes?.length) return;
+  const { pushSystemNotice } = await import("./app-notices.js");
+  const n = preview.changes.length;
+  const fromSync = preview.trigger === "daily" || preview.trigger === "tracking";
+  const label = TRIGGERS[preview.trigger] || "Import";
+  await pushSystemNotice({
+    kind: fromSync ? "sync_preview" : preview.trigger === "tracker" ? "tracker_preview" : "import_preview",
+    title: fromSync ? `${label} found changes` : "Import preview ready",
+    message: `${n} change${n === 1 ? "" : "s"} ready to review in Import.`,
+    href: "#settings/import",
+    count: n,
+  }, {
+    kind: fromSync ? (preview.trigger === "tracking" ? "tracking" : "sync") : "import",
+    title: `${label}: ${n} change${n === 1 ? "" : "s"} to review`,
+    ok: true,
+  });
 }
 
 function watchedFor(watched, anilistId) {
@@ -485,15 +544,19 @@ const SOURCES = {
   hidive: hidiveSource,
 };
 
-async function readyToStart() {
+async function readyToStart(service = "") {
   if (job.running) throw new Error("An import is already running.");
-  if (await load(KEYS.importPreview, null)) throw new Error("Apply or dismiss the current preview first.");
+  const blocked = blockingPreview(await previewMap(), service || "all");
+  if (blocked) {
+    const name = blocked.service === "all" ? "Import all" : (serviceById(blocked.service)?.name || blocked.service);
+    throw new Error(`Apply or dismiss the ${name} preview first.`);
+  }
   await anilistAuth();
 }
 
 export async function startImport({ service = "crunchyroll", full = false } = {}) {
   if (!SOURCES[service]) throw new Error("That service's import isn't ready yet.");
-  await readyToStart();
+  await readyToStart(service);
   if (service === "crunchyroll") await crunchyrollToken();
   else if (TAB_KEYS[service] && (await boundTabId(service)) == null) {
     throw Object.assign(new Error(`Open ${serviceById(service)?.name || service} in a tab (reload it if it's already open), then try again.`), { code: "tab" });
@@ -511,7 +574,7 @@ export async function startImport({ service = "crunchyroll", full = false } = {}
 export async function importNetflixCsv(text) {
   if (typeof text !== "string" || !text.trim()) throw new Error("That file is empty.");
   if (text.length > 30_000_000) throw new Error("That file is too big.");
-  await readyToStart();
+  await readyToStart("netflix");
   const rows = parseNetflixCsv(text);
   if (!rows.length) throw new Error("That doesn't look like Netflix's viewing activity file (NetflixViewingHistory.csv).");
   cancelled = false;
@@ -600,7 +663,8 @@ async function buildListPreview(source, rows, label) {
     rules: GENERAL_RULES,
     notes: [`From ${label ? `${label}'s ` : "your "}${name} list. Shows already further along on AniList are left alone, and nothing is ever lowered.${missing.length ? ` ${missing.length} couldn't be found on AniList and are listed below.` : ""}`],
   };
-  await save(KEYS.importPreview, preview);
+  await writePreview(preview);
+  await notifyPreviewReady({ ...preview, trigger: "tracker" }).catch(() => {});
   return preview;
 }
 
@@ -621,7 +685,7 @@ async function runListImport(source, read) {
 export async function importMalFile(text) {
   if (typeof text !== "string" || !text.trim()) throw new Error("That file is empty.");
   if (text.length > 60_000_000) throw new Error("That file is too big.");
-  await readyToStart();
+  await readyToStart("mal");
   const rows = parseMalXml(text);
   if (!rows.length) throw new Error("That doesn't look like a MyAnimeList anime list export (animelist_….xml).");
   cancelled = false;
@@ -631,7 +695,7 @@ export async function importMalFile(text) {
 
 // Connected MAL account: pull the live animelist via OAuth (weekly pull / Accounts → Pull now).
 export async function importMalApi() {
-  await readyToStart();
+  await readyToStart("mal");
   cancelled = false;
   setJob({ phase: "reading", running: true, service: "mal", note: "Reading your MyAnimeList…", done: 0, total: 0, error: "", message: "" });
   return runListImport("mal", async () => {
@@ -644,7 +708,7 @@ export async function importMalApi() {
 export async function importKitsu(username) {
   const name = String(username || "").trim().replace(/^https?:\/\/kitsu\.(app|io)\/users\//i, "").replace(/\/.*$/, "");
   if (!/^[\w.-]{2,40}$/.test(name)) throw new Error("Enter your Kitsu username, as in kitsu.app/users/NAME.");
-  await readyToStart();
+  await readyToStart("kitsu");
   cancelled = false;
   setJob({ phase: "reading", running: true, service: "kitsu", note: "Connecting to Kitsu…", done: 0, total: 0, error: "", message: "" });
   runListImport("kitsu", () => readKitsu(name));
@@ -678,7 +742,7 @@ async function runImport(read, service) {
 
 // Sites are read one after another, never opened by the extension: a site whose tab isn't ready is skipped and listed.
 export async function startImportAll() {
-  await readyToStart();
+  await readyToStart("all");
   const connected = new Set(connectedIds((await chrome.permissions.getAll()).origins));
   connected.add("crunchyroll");
   const services = Object.keys(SOURCES).filter((id) => connected.has(id));
@@ -692,10 +756,9 @@ export async function startImportAll() {
 }
 
 // Reads each site in turn; a site that fails is skipped and listed, the rest carry on.
-// catchUp: only sites already imported for that account, and only their newer history.
+// catchUp: last few days of history (or since the last checkpoint if newer) — no full-import gate.
 async function readSites(services, { catchUp = false } = {}) {
   const out = { groups: [], checkpoints: [], notes: [], skipped: [], summary: [], seen: 0 };
-  const known = catchUp ? await load(KEYS.checkpoints, {}) : null;
   for (const service of services) {
     if (cancelled) throw new DOMException("Cancelled", "AbortError");
     const name = serviceById(service)?.name || service;
@@ -704,7 +767,6 @@ async function readSites(services, { catchUp = false } = {}) {
       setSite(service, { state: "reading" });
       if (service === "crunchyroll") await crunchyrollToken();
       const source = await SOURCES[service]();
-      if (known && !source.tracked && !known[`${service}:${source.account}`]) throw new Error(`not imported yet${source.label ? ` for ${source.label}` : ""}. Import it once from Import first.`);
       const read = await readHistory(source, { full: false, catchUp });
       const found = source.group(read.rows).map((group) => ({ ...group, service, key: matchKey(service, group.seriesId, group.seasonId) }));
       out.groups.push(...found);
@@ -747,7 +809,7 @@ export const TRIGGERS = { daily: "Daily sync", tracking: "Tracking" };
 // Returns { ran, why?, attempted, message }.
 export async function backgroundSync(services, { trigger, apply }) {
   if (job.running) return { ran: false, why: "busy" };
-  if (await load(KEYS.importPreview, null)) return { ran: false, why: "preview" };
+  if (anyPreview(await previewMap())) return { ran: false, why: "preview" };
   if (await load(KEYS.importDraft, null)) return { ran: false, why: "draft" };
   await anilistAuth();
   const ids = services.filter((id) => SOURCES[id]);
@@ -770,17 +832,32 @@ export async function backgroundSync(services, { trigger, apply }) {
     setJob({ phase: "preview", running: false, note: "" });
     if (!apply) {
       await chrome.action.setBadgeText({ text: "!" }).catch(() => {});
-      return { ran: true, attempted: ids, message: `${label}: found ${preview.changes.length} change${preview.changes.length === 1 ? "" : "s"} to review.` };
+      const n = preview.changes.length;
+      const message = `${label}: found ${n} change${n === 1 ? "" : "s"} to review.`;
+      return { ran: true, attempted: ids, message };
     }
+    const { noteActivity, pushSystemNotice } = await import("./app-notices.js");
     if (!preview.changes.length) {
       await commitCheckpoint(preview);
       const message = `${label}: AniList was already up to date.`;
       setJob({ phase: "idle", message });
+      noteActivity({ kind: "sync", title: message, ok: true }).catch(() => {});
       return { ran: true, attempted: ids, message };
     }
     const result = await applyImport();
     const message = result.error ? `${label} stopped: ${result.error}` : `${label}: updated ${result.applied} on AniList.`;
     setJob({ message });
+    if (!result.error && result.applied > 0) {
+      pushSystemNotice({
+        kind: "sync_applied",
+        title: `${label} updated AniList`,
+        message: `Updated ${result.applied} on AniList. Open Past imports to undo if needed.`,
+        href: "#imports",
+        count: result.applied,
+      }, { kind: trigger === "tracking" ? "tracking" : "sync", title: message, ok: true }).catch(() => {});
+    } else if (result.error) {
+      noteActivity({ kind: "error", title: message, ok: false }).catch(() => {});
+    }
     return { ran: true, attempted: ids, message };
   } catch (error) {
     const message = error.name === "AbortError" ? `${label} was stopped.` : `${label} stopped: ${error.message}`;
@@ -805,15 +882,18 @@ async function commitCheckpoint(preview) {
     await save(KEYS.checkpoints, checkpoints);
   }
   // A preview from picks or a file isn't a history read, so an unfinished read's draft stays.
-  await chrome.storage.local.remove(points.length ? [KEYS.importDraft, KEYS.importPreview] : [KEYS.importPreview]);
-  await chrome.action.setBadgeText({ text: "" }).catch(() => {});
+  if (points.length) await chrome.storage.local.remove(KEYS.importDraft);
+  if (preview?.service) await clearPreview(preview.service);
+  else await clearPreview();
+  if (!anyPreview(await previewMap())) await chrome.action.setBadgeText({ text: "" }).catch(() => {});
 }
 
 // ---- Apply and undo ----
 
-export async function applyImport({ skip = [] } = {}) {
+export async function applyImport({ skip = [], service = "" } = {}) {
   if (job.running) throw new Error("Something is already running.");
-  const preview = await load(KEYS.importPreview, null);
+  const map = await previewMap();
+  const preview = (service && map[service]) || map.all || Object.values(map)[0] || null;
   if (!preview) throw new Error("There's no preview to apply.");
   const auth = await anilistAuth();
   const chosen = preview.changes.filter((change) => !skip.includes(change.anilistId));
@@ -843,16 +923,19 @@ export async function applyImport({ skip = [] } = {}) {
     if (!cancelled && !job.error) await commitCheckpoint(preview);
     else if (log.changes.length) {
       const done = new Set(log.changes.map((change) => change.anilistId));
-      await save(KEYS.importPreview, { ...preview, changes: preview.changes.filter((change) => !done.has(change.anilistId)) });
+      await writePreview({ ...preview, changes: preview.changes.filter((change) => !done.has(change.anilistId)) });
     }
     setJob({ phase: "idle", running: false, note: "" });
   }
+  // Keep Prism Continue watching / My list in step without waiting for an AniList list pull.
+  if (log.changes.length) await mirrorAppliedChanges(log.changes, preview.changes).catch(() => {});
   return { applied: log.changes.length, skipped: log.skipped.length, error: job.error };
 }
 
 // Dismissing still moves the checkpoint: those entries were read, and their shows stay remembered.
-export async function dismissImport() {
-  const preview = await load(KEYS.importPreview, null);
+export async function dismissImport({ service = "" } = {}) {
+  const map = await previewMap();
+  const preview = (service && map[service]) || map.all || Object.values(map)[0] || null;
   if (preview?.stats) await save(KEYS.importLog, keepLogs([{ ...reportOf(preview, preview.changes.length ? "dismissed" : "nothing"), changes: [], skipped: [] }, ...(await load(KEYS.importLog, []))]));
   await commitCheckpoint(preview);
 }
@@ -931,17 +1014,33 @@ export async function resolvePending(key, choice) {
   await save(KEYS.pending, rest);
   const { changes } = planChanges(watched, entries, media);
   const added = changes.map((change) => ({ ...change, media: media.get(change.anilistId), watched: { progress: change.after.progress, ...watchedFor(watched, change.anilistId) } }));
-  const current = await load(KEYS.importPreview, null);
+  const map = await previewMap();
+  const current = map[item.service] || null;
   if (!added.length) return { added: 0 };
   const preview = current || { id: `${item.service}-picks-${Date.now()}`, service: item.service, createdAt: Date.now(), ckey: null, checkpoint: null, changes: [], stats: null, notes: [], rules: GENERAL_RULES };
   const others = preview.changes.filter((change) => !added.some((next) => next.anilistId === change.anilistId));
-  await save(KEYS.importPreview, { ...preview, changes: [...added, ...others] });
+  await writePreview({ ...preview, changes: [...added, ...others] });
   return { added: added.length };
 }
 
 function describe(engine, id) {
   const row = engine?.row(id);
-  return row ? { anilistId: id, title: row.title, english: (row.synonyms || []).find((name) => /^[\x20-\x7e’]+$/.test(name) && name !== row.title) || "", format: row.format || "", year: row.year || null, episodes: row.episodes || null } : { anilistId: id, title: `AniList ${id}` };
+  if (!row) return { anilistId: id, title: `AniList ${id}` };
+  const ascii = (name) => /^[\x20-\x7e’''\-:.!?&,]+$/.test(String(name || "").trim());
+  const synonyms = row.synonyms || [];
+  // Prefer an English / romaji synonym when the stored title is localized (e.g. Caderno da Morte → Death Note).
+  const latin = synonyms.find((name) => ascii(name) && name !== row.title) || "";
+  const titleLooksLatin = ascii(row.title);
+  const english = latin || (titleLooksLatin ? row.title : "");
+  const native = english && english !== row.title ? row.title : "";
+  return {
+    anilistId: id,
+    title: english || row.title,
+    english: native,
+    format: row.format || "",
+    year: row.year || null,
+    episodes: row.episodes || null,
+  };
 }
 
 // "Frieren — Season 1", with the site in front when one preview holds several sites.
@@ -994,18 +1093,52 @@ export function importActivity() {
   }];
 }
 
+function slimPreview(preview) {
+  if (!preview) return null;
+  return {
+    id: preview.id,
+    service: preview.service,
+    trigger: preview.trigger || "",
+    createdAt: preview.createdAt,
+    stats: preview.stats,
+    notes: preview.notes || [],
+    droppedNames: preview.droppedNames || [],
+    animeMissed: preview.animeMissed || [],
+    changes: preview.changes.map(({ anilistId, title, before, after, notes, sources, episodes }) => ({
+      anilistId, title, before, after, notes, episodes,
+      from: sources?.map((source) => fromText(source, preview.service === "all")).slice(0, 3) || [],
+    })),
+  };
+}
+
 export async function importStatus() {
-  const [stored, pendingStore, logs, checkpoints] = await Promise.all([load(KEYS.importPreview, null), loadPending(), load(KEYS.importLog, []), load(KEYS.checkpoints, {})]);
-  // A general-service preview built under older rules is dropped; its read stays in the draft, so the next import is quick.
-  const stale = stored && stored.service !== "crunchyroll" && (stored.rules || 0) < GENERAL_RULES;
-  if (stale) await chrome.storage.local.remove(KEYS.importPreview);
-  const preview = stale ? null : stored;
+  let services = await previewMap();
+  // Drop general-service previews built under older rules; their reads stay in the draft.
+  let changed = false;
+  for (const [id, preview] of Object.entries(services)) {
+    if (preview && id !== "crunchyroll" && (preview.rules || 0) < GENERAL_RULES) {
+      delete services[id];
+      changed = true;
+    }
+  }
+  if (changed) {
+    if (Object.keys(services).length) await save(KEYS.importPreview, packPreviewMap(services));
+    else await chrome.storage.local.remove(KEYS.importPreview);
+  }
+  const previews = Object.values(services).map(slimPreview).filter(Boolean)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  // Prefer the job's service preview, else newest — keeps one-card UI working while multiple can exist.
+  const preview = (job.service && services[job.service] && slimPreview(services[job.service]))
+    || previews[0]
+    || null;
+  const [pendingStore, logs, checkpoints] = await Promise.all([loadPending(), load(KEYS.importLog, []), load(KEYS.checkpoints, {})]);
   const open = Object.entries(pendingStore).filter(([, item]) => !item.skipped);
   let engine = null;
   if (open.length) engine = await matcher().catch(() => null);
   return {
     job,
-    preview: preview && { id: preview.id, service: preview.service, trigger: preview.trigger || "", createdAt: preview.createdAt, stats: preview.stats, notes: preview.notes || [], droppedNames: preview.droppedNames || [], animeMissed: preview.animeMissed || [], changes: preview.changes.map(({ anilistId, title, before, after, notes, sources, episodes }) => ({ anilistId, title, before, after, notes, episodes, from: sources?.map((source) => fromText(source, preview.service === "all")).slice(0, 3) || [] })) },
+    preview,
+    previews,
     pending: open.sort(([, a], [, b]) => (b.lastPlayed || 0) - (a.lastPlayed || 0)).slice(0, 200).map(([key, item]) => ({
       key, service: item.service, series: item.input.series, season: item.input.season, episodes: item.input.episodes.length, reason: item.reason,
       candidates: (item.candidates || []).slice(0, 6).map((id) => describe(engine, id)),

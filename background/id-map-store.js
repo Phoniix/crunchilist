@@ -1,5 +1,6 @@
 // Keeps the master list in IndexedDB fresh: a tiny meta file is checked first, and the full list is only
 // downloaded when it changed. A failed or malformed download never replaces the copy already stored.
+import { allowsRemoteFeeds } from "../lib/build-channel.js";
 import { countShows, readShow, replaceShows } from "../lib/idb.js";
 import { FEED_VERSION, ID_MAP_META_URL, ID_MAP_URL, decodeRow, validFeed } from "../lib/id-map.js";
 
@@ -44,6 +45,25 @@ async function packagedFeed(fetchImpl = fetch) {
 async function runRefresh({ force = false, fetchImpl = fetch } = {}) {
   const stored = await metaState();
   if (!force && !checkDue(stored) && (await countShows()) > 0) return stored;
+  if (!allowsRemoteFeeds()) {
+    if (!(await countShows())) {
+      const packed = await packagedFeed(fetchImpl);
+      if (packed) {
+        const { rows, ...header } = packed;
+        await replaceShows(rows, header);
+        await saveIdMapState({
+          updated: packed.updated,
+          count: rows.length,
+          sources: packed.sources || ["packaged"],
+          checkedAt: Date.now(),
+          error: "",
+        });
+      }
+    } else {
+      await saveIdMapState({ checkedAt: Date.now(), error: "" });
+    }
+    return metaState();
+  }
   try {
     const metaResponse = await fetchImpl(ID_MAP_META_URL, { cache: "no-cache" });
     if (!metaResponse.ok) throw new Error(`The master list check answered ${metaResponse.status}`);

@@ -297,7 +297,9 @@ export async function switchTabs(openApp) {
       await save(player);
     }
     await focus(main);
+    return {};
   }
+  if (typeof openApp === "function") await openApp();
   return {};
 }
 

@@ -1068,7 +1068,7 @@
       id: "hidive",
       name: "HIDIVE",
       origins: ["https://www.hidive.com/*"],
-      home: "https://www.hidive.com/",
+      home: "https://www.hidive.com/login",
       sites: ["HIDIVE"],
       imports: true,
       why: "Reads your HIDIVE watch history and notices what you play, using your own sign-in. Nothing is changed on HIDIVE.",
@@ -1163,7 +1163,10 @@
   }
   .sv-bar.is-busy::after { opacity: 1; animation: sv-sweep 1.1s var(--ease) infinite; }
   @keyframes sv-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
-  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; }
+  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; position: relative; width: 22px; height: 22px; }
+  .sv-lead .sv-loader-mark { position: absolute; inset: -2px; width: 26px; height: 26px; opacity: 0; pointer-events: none; }
+  .sv-bar.is-busy .sv-lead > svg:not(.sv-loader-mark) { opacity: 0; }
+  .sv-bar.is-busy .sv-lead .sv-loader-mark { opacity: 1; }
   .sv-input {
     flex: 1; min-width: 0; height: 52px; padding: 0 4px; border: 0; border-radius: 0; background: transparent;
     font: 700 17px/1.2 ${ROUNDED}; color: var(--text);
@@ -1318,12 +1321,46 @@
     border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); color: var(--text);
   }
   .sv-more { height: 1px; }
-  .sv-more.is-loading { height: 44px; display: grid; place-items: center; }
-  .sv-more.is-loading::after {
-    content: ""; width: 22px; height: 22px; border-radius: 50%;
-    border: 2px solid rgba(255, 226, 196, .14); border-top-color: var(--accent); animation: sv-spin .8s linear infinite;
+  .sv-more.is-loading { height: 56px; display: grid; place-items: center; }
+  .sv-more.is-loading .sv-loader { padding: 0; min-height: 0; }
+  .sv-more.is-loading .sv-loader-mark { width: 36px; height: 36px; }
+  .sv-loader {
+    display: grid; place-items: center; gap: 14px; padding: 48px 16px; min-height: 160px;
+    color: var(--muted); font: 600 13px/1.4 ${ROUNDED}; text-align: center;
   }
-  @keyframes sv-spin { to { transform: rotate(360deg); } }
+  .sv-loader-mark {
+    width: 64px; height: 64px; display: block;
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 28%, transparent));
+  }
+  .sv-loader-ring {
+    fill: none; stroke: color-mix(in srgb, var(--text) 14%, transparent); stroke-width: 2.5;
+  }
+  .sv-loader-arc {
+    fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round;
+    stroke-dasharray: 42 88; transform-origin: 34px 34px;
+    animation: sv-loader-spin 1.1s cubic-bezier(.45, .05, .55, .95) infinite;
+  }
+  .sv-loader-globe {
+    fill: none; stroke: color-mix(in srgb, var(--text) 78%, transparent); stroke-width: 2.2;
+  }
+  .sv-loader-meridian {
+    fill: none; stroke: color-mix(in srgb, var(--text) 42%, transparent); stroke-width: 1.6;
+  }
+  .sv-loader-slash {
+    transform-origin: 34px 34px;
+    animation: sv-loader-orbit 2.4s cubic-bezier(.4, .0, .2, 1) infinite;
+  }
+  .sv-loader-slash path { fill: none; stroke: #4fd1ff; stroke-width: 3.2; stroke-linecap: round; }
+  .sv-loader-slash circle { fill: #4fd1ff; }
+  .sv-loader.is-sm { padding: 18px 12px; min-height: 72px; gap: 8px; font-size: 12px; }
+  .sv-loader.is-sm .sv-loader-mark { width: 40px; height: 40px; }
+  .sv-drop .sv-loader { padding: 20px 12px; min-height: 88px; }
+  @keyframes sv-loader-spin { to { transform: rotate(360deg); } }
+  @keyframes sv-loader-orbit {
+    0% { transform: rotate(0deg); opacity: .85; }
+    50% { opacity: 1; }
+    100% { transform: rotate(360deg); opacity: .85; }
+  }
   .sv-note {
     position: relative; overflow: hidden; margin: 0; padding: 9px 12px; border-radius: 12px;
     background: var(--pane); border: 1px solid var(--line); color: var(--muted); font: 600 13px/1.4 ${ROUNDED};
@@ -1437,6 +1474,10 @@
   }
   .sv-empty { padding: 36px 12px; text-align: center; color: var(--muted); font: 600 14px/1.5 ${ROUNDED}; }
   .sv-empty strong { display: block; margin-bottom: 4px; color: var(--text); font: 800 16px/1.3 ${ROUNDED}; }
+  @media (prefers-reduced-motion: reduce) {
+    .sv-loader-arc, .sv-loader-slash { animation: none; }
+    .sv-loader-arc { stroke-dasharray: 70 60; }
+  }
 `;
   var CHIPS = [
     ["in-progress", "Watching", "Shows you have started"],
@@ -1510,8 +1551,9 @@
       el("span", { class: "sv-ai-dot", "aria-hidden": "true" })
     ]);
     const drop = el("div", { class: "sv-drop glass", role: "listbox", hidden: true });
+    const lead = el("span", { class: "sv-lead", "aria-hidden": "true" }, [icon("search", 19)]);
     const form = el("form", { class: "sv-bar", role: "search" }, [
-      el("span", { class: "sv-lead" }, [icon("search", 19)]),
+      lead,
       input,
       clearButton,
       aiButton,
@@ -1545,6 +1587,8 @@
       button.addEventListener("click", () => {
         currentSite = currentSite === platform.id ? "all" : platform.id;
         paintToggles();
+        send2("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {
+        });
         run();
       });
       siteButtons.set(platform.id, button);
@@ -1823,6 +1867,35 @@
     function empty(title, detail) {
       return el("div", { class: "sv-empty" }, [el("strong", { text: title }), el("span", { text: detail })]);
     }
+    function logoMark() {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", "sv-loader-mark");
+      svg.setAttribute("viewBox", "0 0 68 68");
+      svg.setAttribute("aria-hidden", "true");
+      svg.innerHTML = `
+      <circle class="sv-loader-ring" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-arc" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-globe" cx="34" cy="34" r="14"/>
+      <ellipse class="sv-loader-meridian" cx="34" cy="34" rx="6" ry="14"/>
+      <path class="sv-loader-meridian" d="M20 34h28"/>
+      <g class="sv-loader-slash">
+        <path d="M23 42L45 26"/>
+        <circle cx="45" cy="26" r="2.8"/>
+      </g>`;
+      return svg;
+    }
+    function logoLoader({ label = "Searching\u2026", size = "" } = {}) {
+      return el("div", {
+        class: size ? `sv-loader ${size}` : "sv-loader",
+        role: "status",
+        "aria-live": "polite",
+        "aria-label": label
+      }, [logoMark(), el("span", { text: label })]);
+    }
+    function showResultsLoader(label = "Searching\u2026") {
+      results.replaceChildren(logoLoader({ label }));
+    }
+    lead.append(logoMark());
     function renderHome(payload, picked = null, by = "") {
       results.replaceChildren();
       const forYouRow = (payload.sections || []).find((row) => row.rerank);
@@ -1909,10 +1982,12 @@
       const current = pager;
       if (!current || current.loading || !current.hasMore || current.id !== seq || !current.target?.isConnected) return;
       current.loading = true;
+      sentinel.replaceChildren(logoLoader({ label: "Loading more\u2026", size: "is-sm" }));
       sentinel.classList.add("is-loading");
       const response = await send2("catalogSearch", { ...current.params, offset: current.offset });
       current.loading = false;
       sentinel.classList.remove("is-loading");
+      sentinel.replaceChildren();
       if (current !== pager || current.id !== seq || !response?.ok) return;
       const items = response.results || [];
       current.loaded.push(...items);
@@ -2059,13 +2134,17 @@
       const query2 = input.value.trim();
       const browse = browsingCatalog();
       pager = null;
+      sentinel.classList.remove("is-loading");
+      sentinel.replaceChildren();
       form.classList.add("is-busy");
+      showResultsLoader(query2 ? "Searching\u2026" : browse ? "Loading titles\u2026" : "Loading\u2026");
       const params = { query: query2, chip, site: currentSite, sort, tags: include.values, without: exclude.values, browse };
       const response = await send2("catalogSearch", params);
       if (id !== seq) return;
       form.classList.remove("is-busy");
       if (!response?.ok) {
         writeNote(response?.error || "Could not search.");
+        results.replaceChildren(empty("Couldn't search", response?.error || "Try again in a moment."));
         return;
       }
       lastRun = { query: query2, response };
@@ -2125,13 +2204,23 @@
       clearButton.hidden = !input.value;
       window.clearTimeout(suggestTimer);
       if (!query2) {
+        form.classList.remove("is-busy");
         closeDrop();
         return;
       }
       const token = ++suggestSeq;
+      form.classList.add("is-busy");
+      if (!suggestions.length) {
+        drop.replaceChildren(logoLoader({ label: "Looking up\u2026", size: "is-sm" }));
+        drop.hidden = false;
+      }
+      if (!results.querySelector(".sv-card, .sv-poster, .sv-section")) {
+        showResultsLoader("Looking up\u2026");
+      }
       suggestTimer = window.setTimeout(async () => {
         const response = await send2("catalogSuggest", { query: query2, chip, site: currentSite });
         if (token !== suggestSeq || input.value.trim() !== query2) return;
+        form.classList.remove("is-busy");
         suggestions = response?.suggestions || [];
         activeSuggestion = -1;
         paintDrop();
@@ -2843,9 +2932,24 @@
   .st-link { margin-left: auto; color: var(--accent-text); font: 700 12.5px/1.2 ${ROUNDED}; text-decoration: none; }
   .st-link:hover { text-decoration: underline; }
   .st-provider + .switch, .st-actions + .switch { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .st-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .st-seg button {
+    border: 0; border-radius: 9px; padding: 7px 12px; cursor: pointer;
+    background: transparent; color: var(--muted); font: 700 12.5px/1.2 ${ROUNDED};
+    position: relative; z-index: 0;
+  }
+  .st-seg button.is-on {
+    background: var(--accent);
+    /* Contrast on the fill \u2014 not --accent-text (that tracks the accent hue in Prism embeds). */
+    color: var(--on-accent, var(--p-on-accent, #1a0d05));
+    z-index: 1;
+  }
+  .st-seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .st-card.is-soon { opacity: .55; pointer-events: none; }
+  .st-soon { margin: 0; color: var(--faint); font: 700 11.5px/1.3 ${ROUNDED}; letter-spacing: .06em; text-transform: uppercase; }
 `;
   function createSettingsView({ send: send2, onView = () => {
-  }, pageContext = false, extras = [] } = {}) {
+  }, pageContext = false, extras = [], section = null } = {}) {
     let view = null;
     let catalogPoll = 0;
     const focused = () => root.getRootNode()?.activeElement || document.activeElement;
@@ -2882,6 +2986,7 @@
     const tasteBox = el("div");
     const taste = el("details", { class: "st-card" }, [el("summary", { text: "Taste preferences" }), tasteBox]);
     const modelLine = el("p", { class: "st-model" });
+    let lastModelStatus = null;
     const service = el("select", { "aria-label": "AI service" });
     service.append(el("option", { value: "auto", text: "Auto (recommended)" }));
     for (const provider of PROVIDERS) service.append(el("option", { value: provider.id, text: provider.free ? `${provider.label} (free)` : provider.label }));
@@ -2915,7 +3020,7 @@
       return { provider, input, remove, state, row };
     });
     service.addEventListener("change", () => act("setSettings", { patch: { aiService: service.value } }, "Saved."));
-    const ai = el("details", { class: "st-card" }, [
+    const ai = el("details", { class: "st-card", "data-st": "ai", open: true }, [
       el("summary", { text: "AI preferences" }),
       modelLine,
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "AI service" }), service, serviceHint]),
@@ -2931,11 +3036,18 @@
         el("span", { class: "switch-copy" }, [el("span", { class: "switch-label", text: label }), el("span", { class: "switch-hint", text: hint })])
       ]);
     }
-    ai.append(switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB."));
-    const tracking = el("details", { class: "st-card" }, [
+    const askDownloadRow = switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB.");
+    ai.append(askDownloadRow);
+    const notifySeg = el("div", { class: "st-seg", role: "group", "aria-label": "Notification style" });
+    for (const [value, label] of [["ask", "Ask"], ["silent", "Silent"], ["off", "Off toasts"]]) {
+      const button = el("button", { type: "button", text: label, "data-notify": value });
+      button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
+      notifySeg.append(button);
+    }
+    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups and the Find badge count." });
+    const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
       el("summary", { text: "Notification preferences" }),
-      switchRow("episodeDialogs", "Episode update dialogs", "Ask before updating your list when you finish an episode, and confirm automatic updates. When off, updates happen without a dialog and show up in Notifications."),
-      switchRow("muteNotifications", "Mute notifications", "No pop-ups on Crunchyroll and no count on the Find button. Notifications still collect under the bell.")
+      el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint])
     ]);
     const badgeSelect = (key, label, choices) => {
       const select = el("select", { "aria-label": label });
@@ -2948,7 +3060,9 @@
     const badgeSize = badgeSelect("badgeSize", "Badge size", [["normal", "Normal"], ["small", "Small"]]);
     const badgeUnwatched = badgeSelect("badgeUnwatched", "Unwatched shows", [["hover", "Show on hover"], ["always", "Always show"], ["never", "Never show"]]);
     const badgeMotion = badgeSelect("badgeMotion", "Badge animation", [["animated", "Animated"], ["static", "Static"]]);
+    const badgeMotionField = el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion]);
     const cornerHint = el("span", { class: "st-hint", text: "The glass footer always sits along the bottom.", hidden: true });
+    const liteMotionHint = el("span", { class: "st-hint", text: "Performance mode forces static badges.", hidden: true });
     const previewPosters = PREVIEW_SHOWS.map((show) => {
       const badge = el("span");
       badge.addEventListener("click", (event) => event.preventDefault());
@@ -2966,7 +3080,7 @@
         badge.title = "";
       }
     }
-    const badges = el("details", { class: "st-card" }, [
+    const badges = el("details", { class: "st-card", "data-st": "badges", open: true }, [
       el("summary", { text: "Status badge preferences" }),
       el("span", { class: "st-hint", text: "Hover a poster to preview. On Crunchyroll, click a badge to change the show's status." }),
       el("div", { class: "st-preview" }, previewPosters.map((item) => item.poster)),
@@ -2975,12 +3089,13 @@
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Corner" }), badgeCorner]),
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Size" }), badgeSize]),
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Unwatched shows" }), badgeUnwatched]),
-        el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion])
+        badgeMotionField
       ]),
       cornerHint,
+      liteMotionHint,
       switchRow("badgeProgress", "Show episode progress", "Adds the episode you're on, like 7/24, to in-progress and dropped shows.")
     ]);
-    const search = el("details", { class: "st-card" }, [
+    const search = el("details", { class: "st-card", "data-st": "account", open: true }, [
       el("summary", { text: "Search preferences" }),
       switchRow("favorNamed", "Favor the named show", "In searches like \u201Clike Frieren but sadder,\u201D being close to the named show counts more than the other words.")
     ]);
@@ -2991,10 +3106,16 @@
       title: "Cuts blur, glow, and transitions; skips AI ranking and model downloads; slows Crunchyroll page scans; holds background AniList cover matching. Try it if things feel slow."
     }, [liteBox, el("span", { class: "switch-label", text: "Performance mode" })]);
     const refreshCatalog = el("button", { class: "btn", type: "button", title: "Update Crunchyroll titles and AniList details" }, [icon("refresh", 15), el("span", { text: "Refresh catalog" })]);
-    const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "" });
+    const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "", "data-st": "account" });
+    const catalogActions = el("div", { class: "st-actions", "data-st": "account" }, [refreshCatalog, ...extras]);
     const statusMeter = progressMeter("Catalog progress");
     const statusBar = statusMeter.root;
+    statusBar.setAttribute("data-st", "account");
     const status = el("p", { class: "st-status", role: "status" });
+    account.setAttribute("data-st", "account");
+    context.setAttribute("data-st", "account");
+    taste.setAttribute("data-st", "account");
+    taste.open = true;
     const root = el("div", { class: "st" }, [
       el("div", { class: "st-head" }, [el("h2", { class: "st-title", text: "Settings" }), liteSwitch]),
       account,
@@ -3005,10 +3126,11 @@
       badges,
       ai,
       refreshedLine,
-      el("div", { class: "st-actions" }, [refreshCatalog, ...extras]),
+      catalogActions,
       statusBar,
       status
     ]);
+    let activeSection = section;
     const history = createHistoryView({ send: send2, onView, onClose: () => checkHistory() });
     root.append(history.root);
     async function checkHistory() {
@@ -3173,6 +3295,7 @@
     async function refreshModel() {
       const response = await send2("modelStatus");
       const state = response?.ok ? response.status : { label: "Unknown" };
+      lastModelStatus = state;
       modelLine.replaceChildren(
         document.createTextNode(`${view?.settings?.modelLabel || "Chrome"} model: `),
         el("strong", { text: state.label || "Unknown" }),
@@ -3180,8 +3303,22 @@
       );
     }
     ai.addEventListener("toggle", () => ai.open && refreshModel());
+    function applySection(nextSection) {
+      activeSection = nextSection || null;
+      const showAll = !activeSection;
+      for (const node of root.querySelectorAll("[data-st]")) {
+        node.hidden = !(showAll || node.getAttribute("data-st") === activeSection);
+      }
+      if (activeSection) {
+        for (const card of root.querySelectorAll(`details.st-card[data-st="${activeSection}"]`)) card.open = true;
+      }
+    }
+    applySection(activeSection);
     return {
       root,
+      focus(nextSection) {
+        applySection(nextSection);
+      },
       setView(next) {
         view = next || view;
         if (!view) return;
@@ -3233,19 +3370,27 @@
         liteBox.checked = Boolean(settings.liteMode);
         const themeHost = root.closest(".cl-theme") || root.getRootNode()?.host;
         themeHost?.classList.toggle("cl-lite", Boolean(settings.liteMode));
+        const style = settings.notificationStyle || (settings.muteNotifications ? "off" : settings.episodeDialogs === false ? "silent" : "ask");
+        for (const button of notifySeg.querySelectorAll("button")) button.classList.toggle("is-on", button.dataset.notify === style);
+        askDownloadRow.hidden = Boolean(settings.hasKey);
         const badgeChoices = badgeOptions(settings);
         for (const [select, value] of [[badgeStyle, badgeChoices.style], [badgeCorner, badgeChoices.corner], [badgeSize, badgeChoices.size], [badgeUnwatched, badgeChoices.unwatched], [badgeMotion, badgeChoices.motion]]) {
           if (focused() !== select) select.value = value;
         }
         badgeCorner.disabled = badgeChoices.style === "footer";
         cornerHint.hidden = badgeChoices.style !== "footer";
+        badgeMotionField.hidden = Boolean(settings.liteMode);
+        liteMotionHint.hidden = !settings.liteMode;
+        if (settings.liteMode) badgeMotion.value = "static";
         paintPreview(settings);
+        applySection(activeSection);
         for (const [field, tokens] of Object.entries(fields)) tokenList(tokens, view.taste?.[field], field);
         if (focused() !== audio) audio.value = view.taste?.subDub || "any";
         const keys = settings.keys || {};
         const savedCount = Object.values(keys).filter(Boolean).length;
         if (focused() !== service) service.value = settings.aiService || "auto";
-        serviceHint.textContent = !savedCount ? "No key saved, so Chrome's built-in model runs on this PC. A free key from Gemini, Groq, or OpenRouter is faster." : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
+        const chromeHint = lastModelStatus?.label === "Unavailable here" || /not supported|unavailable here/i.test(lastModelStatus?.detail || "") ? "No key saved, and Chrome's on-device model isn't available here. Add a free key from Gemini, Groq, or OpenRouter to rank results." : lastModelStatus?.label === "Not downloaded" || lastModelStatus?.needsDownload ? "No key saved. Chrome can download its on-device model the first time you let AI rank results, or add a free API key instead." : "No key saved, so Chrome's built-in model runs on this PC when it's available. A free key from Gemini, Groq, or OpenRouter is faster.";
+        serviceHint.textContent = !savedCount ? chromeHint : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
         for (const item of providerRows) {
           const saved = Boolean(keys[item.provider.id]);
           item.remove.hidden = !saved;
@@ -3381,9 +3526,11 @@
   :host { pointer-events: none; }
   .launcher, .backdrop, .panel, .drawer, .gather, .toast { pointer-events: auto; color: var(--text); font: 400 15px/1.45 ${ROUNDED}; }
   .toast {
-    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 10px; padding: 10px 8px 10px 16px;
+    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 14px; padding: 10px 8px 10px 16px;
     border-radius: 18px; animation: shell-toast .26s var(--ease) both;
   }
+  /* Keep catalog gather and episode toasts from stacking on top of each other. */
+  .gather:not([hidden]) ~ .toast, .toast:not([hidden]) ~ .gather { margin-bottom: 18px; }
   @keyframes shell-toast { from { opacity: 0; transform: translateY(8px); } }
   .toast-copy { flex: 1; min-width: 0; }
   .toast-title { margin: 0; font: 800 13.5px/1.3 ${ROUNDED}; }
@@ -3513,10 +3660,39 @@
       host.style.setProperty("--accent-text", accent);
       host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
     }
+    const COOKIE_SEL = [
+      "#onetrust-banner-sdk",
+      "#onetrust-consent-sdk",
+      "#CybotCookiebotDialog",
+      ".osano-cm-window",
+      "[id*='cookie' i][class*='banner' i]",
+      "[class*='cookie' i][class*='banner' i]",
+      "[aria-label*='cookie' i]",
+      "[aria-label*='consent' i]"
+    ].join(",");
+    function cookieLiftPx() {
+      if (!corner.startsWith("bottom") || fullscreen) return 0;
+      let lift = 0;
+      for (const node of document.querySelectorAll(COOKIE_SEL)) {
+        if (!(node instanceof HTMLElement)) continue;
+        const style2 = getComputedStyle(node);
+        if (style2.display === "none" || style2.visibility === "hidden" || Number(style2.opacity) === 0) continue;
+        const box = node.getBoundingClientRect();
+        if (box.height < 36 || box.width < 80) continue;
+        if (box.bottom < window.innerHeight - 8 || box.top > window.innerHeight) continue;
+        lift = Math.max(lift, Math.ceil(window.innerHeight - box.top + 12));
+      }
+      return Math.min(lift, Math.floor(window.innerHeight * 0.45));
+    }
+    function withBottomLift(css, lift) {
+      if (!lift) return css;
+      return css.replace(/bottom\s*:\s*(\d+)px/i, (_, px) => `bottom:${Number(px) + lift}px`);
+    }
     function place() {
+      const lift = cookieLiftPx();
       const edge = {
-        "bottom-right": layout?.edge || "right:18px;bottom:18px;",
-        "bottom-left": "left:18px;bottom:18px;",
+        "bottom-right": withBottomLift(layout?.edge || "right:18px;bottom:18px;", lift),
+        "bottom-left": withBottomLift("left:18px;bottom:18px;", lift),
         "top-left": "left:18px;top:18px;",
         "top-right": "right:18px;top:18px;"
       };
@@ -3658,6 +3834,13 @@
     });
     place();
     paint();
+    let cookieTimer = 0;
+    const cookieWatch = new MutationObserver(() => {
+      window.clearTimeout(cookieTimer);
+      cookieTimer = window.setTimeout(place, 120);
+    });
+    cookieWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
+    window.addEventListener("resize", place);
     return {
       host,
       setView(view, { syncOpen = false } = {}) {

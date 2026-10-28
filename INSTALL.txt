@@ -1,0 +1,19 @@
+Kivori SekAI — install (Windows)
+
+1. Double-click install.cmd
+   It downloads the newest GitHub release into:
+   %LOCALAPPDATA%\KivoriSekAI
+
+2. Chrome opens chrome://extensions
+   - Turn on Developer mode (top right)
+   - Click "Load unpacked"
+   - Choose the KivoriSekAI folder above
+
+3. Later updates
+   Open Kivori SekAI → Settings → Update now
+   Or double-click update.cmd in that same folder
+
+Your list and settings live in Chrome, not in the folder, so they stay
+when you update.
+
+Releases: https://github.com/Phoniix/crunchilist/releases

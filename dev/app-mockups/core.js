@@ -981,7 +981,7 @@
       const runtime = window.chrome?.runtime;
       if (!runtime?.sendMessage) return resolve(null);
       try {
-        runtime.sendMessage(EXTENSION_ID, message, (reply) => {
+        runtime.sendMessage(EXTENSION_ID, { ...message, token: "kivori-lab-bridge" }, (reply) => {
           void runtime.lastError;
           resolve(reply || null);
         });

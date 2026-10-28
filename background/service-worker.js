@@ -1,8 +1,9 @@
+import { DEV_BRIDGE_TOKEN, allowsDevBridge, isDevBridgeSender } from "../lib/build-channel.js";
 import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { currentActivity, watchActivity } from "./activity.js";
 import { appData, setSeasonState } from "./app-data.js";
 import { entryForSeries } from "../lib/library.js";
-import { providerById } from "../lib/providers.js";
+import { providerById, providerOrigin } from "../lib/providers.js";
 import { applySettingsPatch } from "../lib/settings.js";
 import { sanitizeTaste } from "../lib/taste.js";
 import {
@@ -116,6 +117,8 @@ async function updateSettings(patch) {
   const provider = saved?.key ? providerById(saved.id) : null;
   let keyNote = "";
   if (provider) {
+    const origin = providerOrigin(provider);
+    if (origin) await chrome.permissions.request({ origins: [origin] }).catch(() => false);
     try {
       const picked = await resolveModel(provider, state.settings.apiKeys[provider.id]);
       if (picked) state.settings = applySettingsPatch(state.settings, { providerModel: { id: provider.id, model: picked } });
@@ -336,26 +339,32 @@ async function openShortcuts() {
   return {};
 }
 
-// Development bridge: the app page mockup served from localhost can start playback through the extension.
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(sender?.url || "")) return false;
-  const playback = async () => {
-    const view = await currentView();
-    const { openIn, tabManage, tabAuto, backButton, showTips, anilistConnected, anilistExpired, anilistViewerName } = view.settings || {};
-    const name = anilistConnected || anilistExpired ? anilistViewerName || "" : view.importMeta?.username || "";
-    const account = { name, connected: Boolean(anilistConnected && anilistViewerName), expired: Boolean(anilistExpired), avatar: name && view.importMeta?.username === name ? view.importMeta.avatar || "" : "", importedAt: view.importMeta?.importedAt || 0 };
-    return { version: chrome.runtime.getManifest().version, shortcut: await switchShortcut(), account, playback: { openIn, tabManage, tabAuto, backButton, showTips } };
-  };
-  const pick = (patch) => Object.fromEntries(["openIn", "tabManage", "tabAuto", "backButton", "showTips"].filter((key) => patch?.[key] !== undefined).map((key) => [key, patch[key]]));
-  const run = message?.type === "playEpisode" ? playEpisode(message, sender)
-    : message?.type === "ping" ? playback()
-    : message?.type === "setPlayback" ? updateSettings(pick(message.patch)).then(playback)
-    : message?.type === "openShortcuts" ? openShortcuts()
-    : Promise.reject(new Error("Unknown message"));
-  run.then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }));
-  return true;
-});
+// Lab bridge (unpacked only): npm run lab on port 5391. Store builds strip externally_connectable.
+if (allowsDevBridge()) {
+  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    if (!isDevBridgeSender(sender?.url || "")) return false;
+    if (message?.token !== DEV_BRIDGE_TOKEN) {
+      sendResponse({ ok: false, error: "Unauthorized" });
+      return true;
+    }
+    const playback = async () => {
+      const view = await currentView();
+      const { openIn, tabManage, tabAuto, backButton, showTips, anilistConnected, anilistExpired, anilistViewerName } = view.settings || {};
+      const name = anilistConnected || anilistExpired ? anilistViewerName || "" : view.importMeta?.username || "";
+      const account = { name, connected: Boolean(anilistConnected && anilistViewerName), expired: Boolean(anilistExpired), avatar: name && view.importMeta?.username === name ? view.importMeta.avatar || "" : "", importedAt: view.importMeta?.importedAt || 0 };
+      return { version: chrome.runtime.getManifest().version, shortcut: await switchShortcut(), account, playback: { openIn, tabManage, tabAuto, backButton, showTips } };
+    };
+    const pick = (patch) => Object.fromEntries(["openIn", "tabManage", "tabAuto", "backButton", "showTips"].filter((key) => patch?.[key] !== undefined).map((key) => [key, patch[key]]));
+    const run = message?.type === "playEpisode" ? playEpisode(message, sender)
+      : message?.type === "ping" ? playback()
+      : message?.type === "setPlayback" ? updateSettings(pick(message.patch)).then(playback)
+      : message?.type === "openShortcuts" ? openShortcuts()
+      : Promise.reject(new Error("Unknown message"));
+    run.then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }));
+    return true;
+  });
+}
 
 chrome.runtime.onInstalled.addListener((details) => {
   loadState().then(saveState).catch(() => {});

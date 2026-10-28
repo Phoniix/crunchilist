@@ -1,7 +1,7 @@
 // The Update button: writes a newer version from GitHub into the folder this copy was loaded from, then reloads.
 // Every file is downloaded and checked against GitHub's fingerprint before the first one is written.
 import { REPO, compareVersions } from "../lib/update-check.js";
-import { PACKAGE_FOLDERS, contentFiles, gitBlobSha, packageFiles, rawUrl, sameAsGitHub, staleFiles, storeManifest } from "../lib/update-files.js";
+import { PACKAGE_FOLDERS, contentFiles, gitBlobSha, packageFiles, rawUrl, sameAsGitHub, sideloadManifest, staleFiles } from "../lib/update-files.js";
 
 const API = `https://api.github.com/repos/${REPO}`;
 const DOWNLOADS_AT_ONCE = 6;
@@ -13,7 +13,11 @@ export class UpdateError extends Error {
   }
 }
 
-export const canSelfUpdate = () => typeof window.showDirectoryPicker === "function" && !chrome.runtime.getManifest().update_url;
+export const canSelfUpdate = () => {
+  const manifest = chrome.runtime.getManifest();
+  if (manifest.update_url || manifest.ks_channel === "store") return false;
+  return typeof window.showDirectoryPicker === "function";
+};
 
 // The chosen folder is remembered so later updates only need the button.
 const DB = "cl-updater";
@@ -56,8 +60,8 @@ async function hasFolder(dir, name) {
 async function checkFolder(dir) {
   const running = await (await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" })).text();
   const there = await readText(dir, "manifest.json");
-  if (there == null) throw new UpdateError("That folder has no manifest.json. Pick the folder you loaded Crunchilist from.", "folder");
-  if (there !== running) throw new UpdateError("That isn't the folder this copy of Crunchilist runs from. Pick the one shown under Crunchilist on chrome://extensions.", "folder");
+  if (there == null) throw new UpdateError("That folder has no manifest.json. Pick the folder you loaded Kivori SekAI from.", "folder");
+  if (there !== running) throw new UpdateError("That isn't the folder this copy of Kivori SekAI runs from. Pick the one shown under Kivori SekAI on chrome://extensions.", "folder");
   if (await hasFolder(dir, ".git")) throw new UpdateError("This copy is a git checkout. Update it with git pull, then press reload on chrome://extensions.", "git");
 }
 
@@ -168,12 +172,12 @@ async function installedFiles(dir, manifest) {
 
 // Antivirus (Windows Defender especially) scans each file Chrome writes and can quarantine one as a false
 // positive. Changed files are written to this folder first and read back; only if all of them survive is
-// the working copy touched, so a blocked file can never leave Crunchilist half-installed.
-const STAGING = ".crunchilist-update";
+// the working copy touched, so a blocked file can never leave Kivori SekAI half-installed.
+const STAGING = ".kivori-update";
 const SETTLE_MS = 1500;
 
 const sameBytes = (a, b) => Boolean(a && b) && a.length === b.length && a.every((byte, index) => byte === b[index]);
-const blocked = (file) => new UpdateError(`Your antivirus blocked ${file} while it was being written, so nothing was changed. ${/Windows/.test(globalThis.navigator?.userAgent || "") ? "Double-click update.cmd in your Crunchilist folder, use" : "Use"} Download instead, or allow the Crunchilist folder in your antivirus.`, "blocked");
+const blocked = (file) => new UpdateError(`Your antivirus blocked ${file} while it was being written, so nothing was changed. ${/Windows/.test(globalThis.navigator?.userAgent || "") ? "Double-click update.cmd in your Kivori SekAI folder, use" : "Use"} Download instead, or allow the KivoriSekAI folder in your antivirus.`, "blocked");
 // Chrome reports an antivirus block as AbortError or SecurityError; anything else is a plain write failure.
 function writeFailure(file, error) {
   if (error instanceof UpdateError) return error;
@@ -202,11 +206,12 @@ async function stageAndCheck(dir, writes, settleMs) {
 
 // latest: { version, ref } from the update check. onStep(text) reports progress.
 // folders: where the chosen folder is remembered (IndexedDB unless a test swaps it).
-// locks: one update at a time across every open Crunchilist tab.
+// locks: one update at a time across every open Kivori SekAI tab.
 export async function installUpdate(latest, onStep = () => {}, { locks = globalThis.navigator?.locks, ...options } = {}) {
+  if (!latest?.ref) throw new UpdateError("No GitHub release zip yet. Check again after the next release.", "failed");
   if (!locks) return install(latest, onStep, options);
-  return locks.request("crunchilist-update", { ifAvailable: true }, (lock) => {
-    if (!lock) throw new UpdateError("An update is already running in another Crunchilist tab.", "busy");
+  return locks.request("kivori-update", { ifAvailable: true }, (lock) => {
+    if (!lock) throw new UpdateError("An update is already running in another Kivori SekAI tab.", "busy");
     return install(latest, onStep, options);
   });
 }
@@ -214,14 +219,14 @@ export async function installUpdate(latest, onStep = () => {}, { locks = globalT
 async function install(latest, onStep, { settleMs = SETTLE_MS, folders = savedFolders } = {}) {
   const dir = await chooseFolder(folders);
   onStep("Checking the new version…");
-  const { sha } = await getJson(`${API}/commits/${encodeURIComponent(latest.ref || "master")}`);
+  const { sha } = await getJson(`${API}/commits/${encodeURIComponent(latest.ref)}`);
   const { tree, truncated } = await getJson(`${API}/git/trees/${sha}?recursive=1`);
   if (truncated) throw new UpdateError("GitHub's file list came back incomplete. Use the download link instead.", "failed");
   const manifestEntry = tree.find((entry) => entry.path === "manifest.json" && entry.type === "blob");
   if (!manifestEntry) throw new UpdateError("That version has no manifest.json.", "failed");
   const manifest = JSON.parse(new TextDecoder().decode(await download(sha, manifestEntry)));
   const running = chrome.runtime.getManifest();
-  if (manifest.name !== running.name) throw new UpdateError("GitHub's copy isn't Crunchilist.", "failed");
+  if (manifest.name !== running.name) throw new UpdateError("GitHub's copy isn't Kivori SekAI.", "failed");
   if (compareVersions(manifest.version, running.version) <= 0) throw new UpdateError("You already have the newest version.", "current");
 
   const files = packageFiles(tree, manifest).filter((file) => file.path !== "manifest.json");
@@ -238,7 +243,7 @@ async function install(latest, onStep, { settleMs = SETTLE_MS, folders = savedFo
     bytes.set(file.path, await download(sha, file));
     onStep(`Downloading ${bytes.size} of ${changed.length}…`);
   });
-  const manifestBytes = new TextEncoder().encode(`${JSON.stringify(storeManifest(manifest), null, 2)}\n`);
+  const manifestBytes = new TextEncoder().encode(`${JSON.stringify(sideloadManifest(manifest), null, 2)}\n`);
   const writes = [...changed.map((file) => [file.path, bytes.get(file.path)]), ["manifest.json", manifestBytes]];
 
   onStep("Checking the files with your antivirus…");

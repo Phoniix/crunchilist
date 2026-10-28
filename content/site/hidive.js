@@ -77,7 +77,7 @@
       id: "hidive",
       name: "HIDIVE",
       origins: ["https://www.hidive.com/*"],
-      home: "https://www.hidive.com/",
+      home: "https://www.hidive.com/login",
       sites: ["HIDIVE"],
       imports: true,
       why: "Reads your HIDIVE watch history and notices what you play, using your own sign-in. Nothing is changed on HIDIVE.",

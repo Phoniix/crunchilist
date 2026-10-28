@@ -31,7 +31,7 @@ import { refreshMediaExtras } from "./app-data.js";
 import { clearModelStall, modelDownloadNote, modelProgress, preloadChromeModel } from "./model.js";
 import { anilist, delay, loadCatalog, loadState, saveCatalog, saveState } from "./store.js";
 
-const OWED_RETRY_MS = 10 * 60 * 1000;
+const OWED_RETRY_MS = 6 * 60 * 60 * 1000;
 
 let catalogToken = "";
 let catalogLocale = "en-US";

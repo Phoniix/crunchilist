@@ -11,19 +11,26 @@
     "https://anilist.co/*",
     "https://graphql.anilist.co/*",
     "https://*.chromiumapp.org/*",
+    "https://www.youtube-nocookie.com/*",
+    "https://raw.githubusercontent.com/Phoniix/crunchilist/*"
+  ],
+  "optional_host_permissions": [
+    "https://www.netflix.com/*",
+    "https://www.primevideo.com/*",
+    "https://www.amazon.com/gp/video/*",
+    "https://www.hulu.com/*",
+    "https://tubitv.com/*",
+    "https://www.hidive.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
     "https://openrouter.ai/*",
-    "https://www.youtube-nocookie.com/*",
-    "https://raw.githubusercontent.com/Phoniix/crunchilist/*",
     "https://api.myanimelist.net/*",
-    "https://myanimelist.net/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://myanimelist.net/*",
+    "http://127.0.0.1:5178/*",
+    "http://localhost:5178/*",
+    "http://127.0.0.1:5391/*",
+    "http://localhost:5391/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
@@ -52,8 +59,14 @@
     }
   },
   "externally_connectable": {
-    "matches": ["http://localhost/*", "http://127.0.0.1/*"]
+    "matches": [
+      "http://127.0.0.1:5178/*",
+      "http://localhost:5178/*",
+      "http://127.0.0.1:5391/*",
+      "http://localhost:5391/*"
+    ]
   },
+
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true

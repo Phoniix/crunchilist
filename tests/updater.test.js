@@ -66,7 +66,7 @@ async function read(dir, path) {
   }
 }
 
-const RUNNING = { name: "Crunchilist", version: "1.0.108", content_scripts: [{ js: ["content/crunchilist.js"] }] };
+const RUNNING = { name: "Kivori SekAI", version: "1.0.108", content_scripts: [{ js: ["content/crunchilist.js"] }] };
 const RUNNING_TEXT = `${JSON.stringify(RUNNING, null, 2)}\n`;
 const NEXT = { ...RUNNING, version: "1.0.200", externally_connectable: { matches: ["http://localhost/*"] } };
 const REPO_FILES = {
@@ -103,8 +103,8 @@ test("an update writes the new files, drops removed ones, and writes the manifes
   const { dir, run } = await setUp({ local: { "lib/a.js": "new lib", "content/crunchilist.js": "bundle" } });
   assert.deepEqual(await run(), { version: "1.0.200", changed: 1 });
   assert.ok(!dir.log.includes("lib/a.js"), "files that already match are not rewritten");
-  assert.ok(dir.log.includes(".crunchilist-update/app/app.js"), "changed files are test-written first");
-  assert.ok(!dir.children.has(".crunchilist-update"), "the test folder is removed");
+  assert.ok(dir.log.includes(".kivori-update/app/app.js"), "changed files are test-written first");
+  assert.ok(!dir.children.has(".kivori-update"), "the test folder is removed");
   assert.equal(await read(dir, "app/app.js"), "new app");
   assert.equal(await read(dir, "lib/a.js"), "new lib");
   assert.equal(await read(dir, "content/crunchilist.js"), "bundle");
@@ -134,12 +134,12 @@ test("files checked out with Windows line endings are not rewritten", async () =
 });
 
 test("a file the antivirus removes during the test write leaves the working copy untouched", async () => {
-  const { dir, run } = await setUp({ block: (path) => path === ".crunchilist-update/lib/a.js" });
+  const { dir, run } = await setUp({ block: (path) => path === ".kivori-update/lib/a.js" });
   await assert.rejects(run(), { code: "blocked", message: /lib\/a\.js/ });
   assert.equal(await read(dir, "app/app.js"), "old app");
   assert.equal(await read(dir, "app/old.js"), "gone next version");
   assert.equal(JSON.parse(await read(dir, "manifest.json")).version, "1.0.108");
-  assert.ok(!dir.children.has(".crunchilist-update"));
+  assert.ok(!dir.children.has(".kivori-update"));
 });
 
 test("a file blocked while installing puts the old files back and keeps the old version", async () => {
@@ -150,7 +150,7 @@ test("a file blocked while installing puts the old files back and keeps the old 
   assert.equal(JSON.parse(await read(dir, "manifest.json")).version, "1.0.108");
 });
 
-test("a folder that isn't this copy of Crunchilist is refused", async () => {
+test("a folder that isn't this copy of Kivori SekAI is refused", async () => {
   const { dir, run } = await setUp({ local: { "manifest.json": "{\"name\":\"Something else\"}" } });
   await assert.rejects(run(), { code: "folder" });
   assert.deepEqual(dir.log, []);

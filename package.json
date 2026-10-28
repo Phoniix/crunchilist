@@ -10,6 +10,7 @@
     "ai-bench": "node scripts/ai-bench.mjs",
     "anilist-dump": "node scripts/anilist-dump.mjs",
     "package": "node scripts/package.mjs",
+    "package:sideload": "node scripts/package.mjs --sideload",
     "lab": "node lab/serve.mjs",
     "bundle": "npx --yes esbuild content/main.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist.js && npx --yes esbuild content/frame.js --bundle --format=iife --target=chrome114 --outfile=content/crunchilist-frame.js",
     "bundle:panel": "npx --yes esbuild content/site-boot.js --bundle --format=iife --target=chrome114 --outfile=content/site-panel.js",

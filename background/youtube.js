@@ -1,4 +1,5 @@
 import { cacheKeyForSeries, readCache } from "../lib/anilist.js";
+import { allowsRemoteFeeds } from "../lib/build-channel.js";
 import {
   YOUTUBE_FEED_URL,
   YOUTUBE_KEY,
@@ -23,6 +24,11 @@ export async function loadYoutube() {
 export async function refreshYoutube({ force = false, fetchImpl = fetch } = {}) {
   const stored = (await chrome.storage.local.get(YOUTUBE_KEY))[YOUTUBE_KEY] || {};
   if (!feedDue(stored, Date.now(), force)) return stored;
+  if (!allowsRemoteFeeds()) {
+    const next = { ...stored, checkedAt: Date.now(), error: "" };
+    await chrome.storage.local.set({ [YOUTUBE_KEY]: next });
+    return next;
+  }
   running ||= (async () => {
     const next = { ...stored, checkedAt: Date.now() };
     try {
