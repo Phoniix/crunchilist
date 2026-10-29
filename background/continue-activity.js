@@ -161,6 +161,7 @@ export async function noteContinueFromCrObservation(observation) {
     provisional: false,
   });
   if (row) await upsertContinueRow(row);
+  return row || null;
 }
 
 /**

@@ -15,6 +15,7 @@ import { watchActivity } from "./activity.js";
 import { clearActivityLog, exportActivityText, listActivity, noteActivity } from "./app-notices.js";
 import { appData } from "./app-data.js";
 import { expireProvisionalContinueActivity, noteContinueFromTrackedPlay } from "./continue-activity.js";
+import { sendWatchGuide } from "./watch-guide.js";
 import { checkShowLinks } from "./dead-links.js";
 import { idMapStatus } from "./id-map-store.js";
 import { loadCatalogs, readCatalogs } from "./catalog-reader.js";
@@ -132,8 +133,26 @@ export async function openSites({ services }) {
   connected.add("crunchyroll");
   const ids = (Array.isArray(services) ? services : []).map(String).filter((id) => serviceById(id) && connected.has(id));
   await syncSiteScripts();
-  for (const id of ids) await chrome.tabs.create({ url: serviceById(id).home, active: false });
-  return { opened: ids };
+  const tabIds = [];
+  for (const id of ids) {
+    const tab = await chrome.tabs.create({ url: serviceById(id).home, active: false });
+    if (tab?.id != null) tabIds.push(tab.id);
+  }
+  return { opened: ids, tabIds };
+}
+
+export async function closeTabs({ tabIds } = {}) {
+  const ids = [...new Set((Array.isArray(tabIds) ? tabIds : []).map(Number).filter((id) => id > 0))];
+  let closed = 0;
+  for (const id of ids) {
+    try {
+      await chrome.tabs.remove(id);
+      closed += 1;
+    } catch {
+      /* tab already gone */
+    }
+  }
+  return { closed, requested: ids.length };
 }
 
 async function openSite({ service: id, purpose = "" }) {
@@ -253,23 +272,68 @@ async function bumpFromNetflixMeta(meta, { provisional }) {
   });
 }
 
+// Activity page 0 is only ~50 rows. Phone watches of the same show often sit on later pages;
+// numbering 1..n inside a short page-0 window undercounts (e.g. browser eps 3–4 look like 1–2).
+const NETFLIX_ACTIVITY_PAGES = 6;
+
 // Track-while-watching rule (Netflix + HIDIVE): when the player URL names a video id, history may
 // only bump that title (or its series group). Never promote whatever is still sitting at the top.
+function netflixVideoId(videoId) {
+  const raw = String(videoId || "").trim();
+  return /^\d+$/.test(raw) ? Number(raw) : NaN;
+}
+
 async function bumpFromNetflixActivity({ provisional, videoId, tabId }) {
-  const payload = await askSiteTab("netflix", { type: "netflixActivity", page: 0 }, tabId);
-  if (!payload) return null;
-  const wanted = Number(videoId);
-  let items = Array.isArray(payload.viewedItems) ? payload.viewedItems : [];
-  if (Number.isInteger(wanted)) {
-    const hit = items.find((row) => row?.movieID === wanted);
-    if (!hit) return null;
-    // Keep the whole series so groupNetflix can number episodes; drop every other show.
-    const seriesId = hit.series;
-    items = seriesId != null ? items.filter((row) => row?.series === seriesId) : [hit];
+  const wanted = netflixVideoId(videoId);
+  const collected = [];
+  let seriesId = null;
+  let seen = 0;
+  let foundWanted = !Number.isInteger(wanted);
+
+  for (let page = 0; page < NETFLIX_ACTIVITY_PAGES; page += 1) {
+    const payload = await askSiteTab("netflix", { type: "netflixActivity", page }, tabId);
+    if (!payload) break;
+    const pageItems = Array.isArray(payload.viewedItems) ? payload.viewedItems : [];
+    if (!pageItems.length) break;
+
+    if (Number.isInteger(wanted) && seriesId == null) {
+      const hit = pageItems.find((row) => row?.movieID === wanted);
+      if (!hit) {
+        // Current /watch/id should be on page 0; don't scan the whole history for a stale id.
+        if (page === 0) return null;
+        break;
+      }
+      seriesId = hit.series;
+      foundWanted = true;
+    }
+
+    collected.push(...pageItems);
+    const parsed = parseActivity(payload, seen);
+    seen += pageItems.length;
+    if (!parsed.more) break;
   }
-  const { rows } = parseActivity({ ...payload, viewedItems: items }, 0);
-  // Starts may still be mid-bookmark; include unfinished rows for provisional only.
-  const all = rows.length ? groupNetflix(provisional ? rows.map((row) => ({ ...row, watched: true })) : rows) : [];
+
+  if (Number.isInteger(wanted) && !foundWanted) return null;
+
+  // Keep the whole series so groupNetflix can number episodes across devices; drop every other show.
+  let items = collected;
+  if (seriesId != null) items = collected.filter((row) => row?.series === seriesId);
+  else if (Number.isInteger(wanted)) items = collected.filter((row) => row?.movieID === wanted);
+  if (!items.length) return null;
+
+  // Player already crossed FINISHED for this videoId — bookmark may still look mid-episode.
+  if (!provisional && Number.isInteger(wanted)) {
+    items = items.map((item) => (item?.movieID === wanted ? { ...item, bookmark: 0 } : item));
+  }
+
+  const { rows } = parseActivity({ viewedItems: items, vhSize: items.length }, 0);
+  // Starts: count in-progress rows. Finishes: force the just-finished movieID watched (bookmark lag).
+  const ranked = rows.map((row) => {
+    if (provisional) return { ...row, watched: true };
+    if (Number.isInteger(wanted) && String(row.key || "").startsWith(`${wanted}:`)) return { ...row, watched: true };
+    return row;
+  });
+  const all = ranked.length ? groupNetflix(ranked) : [];
   const groups = all.filter((group) => group.anime !== false && group.episodes?.length);
   const newest = groups.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))[0];
   if (!newest) return null;
@@ -294,21 +358,37 @@ async function bumpContinueFromNetflix({ provisional = false, videoId = "", labe
     };
     const fromActivity = () => bumpFromNetflixActivity({ provisional, videoId, tabId });
     // Prefer Netflix APIs (seriesTitle) over page labels — mediaSession.title is often only the episode name.
-    // Finishes: activity first (real episode count). Starts: watchNow, then activity, labels last.
+    // Finishes: activity only (watchNow/labels hardcode episode:1 and would fake a successful undercount).
+    // Starts: watchNow, then activity, labels last.
     const order = provisional
       ? [fromWatchNow, fromActivity, fromLabels]
-      : [fromActivity, fromWatchNow, fromLabels];
+      : [fromActivity];
     for (const step of order) {
       const row = await step().catch(() => null);
       if (row) return row;
     }
     return null;
   };
-  // Early starts often beat Netflix writing activity — retry once. Finishes still get the track alarm.
+  const hasTab = tabId != null || (await chrome.storage.session.get(KEYS.netflixTab))[KEYS.netflixTab] != null;
   const first = await tryBump();
-  if (first) return first;
-  if (!provisional) return null;
-  if (tabId == null && (await chrome.storage.session.get(KEYS.netflixTab))[KEYS.netflixTab] == null) return null;
+  if (provisional) {
+    if (first) return first;
+    if (!hasTab) return null;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    return (await tryBump()) || null;
+  }
+  // Finishes: bump now when activity is ready; one delayed retry can raise an undercount (Math.max in noteContinue).
+  if (first) {
+    if (hasTab) {
+      const retry = setTimeout(() => {
+        tryBump().catch(() => {});
+      }, 2500);
+      retry.unref?.();
+    }
+    return first;
+  }
+  // No video id → nothing useful to retry; history catch-up still runs from the handler.
+  if (!hasTab || !Number.isInteger(netflixVideoId(videoId))) return null;
   await new Promise((resolve) => setTimeout(resolve, 2500));
   return (await tryBump()) || null;
 }
@@ -365,14 +445,22 @@ async function noteWatchedStart({ service: id, item }, sender) {
   if (!(await loadImportSettings())[TRACK_SETTING[service.id]]) return {};
   const clean = cleanItem(item);
   if (!clean || clean.anime === false) return {};
-  await noteContinueFromTrackedPlay({
+  const bumped = await noteContinueFromTrackedPlay({
     service: service.id,
     series: clean.series,
     season: clean.season ? `Season ${clean.season}` : "",
     seasonNumber: clean.season,
     episode: clean.episode,
     provisional: true,
-  }).catch(() => {});
+  }).catch(() => null);
+  if (bumped) {
+    sendWatchGuide(sender.tab?.id, {
+      kind: "tracked",
+      title: bumped.title || clean.series,
+      episode: clean.episode,
+      service: service.id,
+    }).catch(() => {});
+  }
   return {};
 }
 
@@ -389,14 +477,22 @@ async function noteWatched({ service: id, item, miss }, sender) {
     if (added) {
       await chrome.storage.local.set({ [KEYS.watchLog]: log });
       await chrome.alarms.create(WATCH_ALARM, { delayInMinutes: WATCH_DELAY_MIN });
-      noteContinueFromTrackedPlay({
+      const bumped = await noteContinueFromTrackedPlay({
         service: service.id,
         series: clean.series,
         season: clean.season ? `Season ${clean.season}` : "",
         seasonNumber: clean.season,
         episode: clean.episode,
         provisional: false,
-      }).catch(() => {});
+      }).catch(() => null);
+      if (bumped) {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "watched",
+          title: bumped.title || clean.series,
+          episode: clean.episode,
+          service: service.id,
+        }).catch(() => {});
+      }
     }
     note = added ? `${itemText(clean)} finished.` : `${itemText(clean)} finished again; already noted.`;
   }
@@ -551,6 +647,7 @@ const pageHandlers = {
   },
   importAllNeeds,
   openSites,
+  closeTabs,
   openSite: async (message) => openSite(message),
   importNetflixCsv: async ({ text }) => { await importNetflixCsv(text); return importSnapshot(); },
   importMalFile: async ({ text }) => { await importMalFile(text); return importSnapshot(); },
@@ -683,6 +780,14 @@ const contentHandlers = {
         title: bumped ? `Netflix: watching ${bumped.title || "a show"}` : "Netflix: playback noticed (naming Continue Watching…)",
         ok: Boolean(bumped),
       }).catch(() => {});
+      if (bumped) {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "tracked",
+          title: bumped.title,
+          episode: bumped.progress != null ? bumped.progress + 1 : null,
+          service: "netflix",
+        }).catch(() => {});
+      }
     }
     return {};
   },
@@ -700,6 +805,14 @@ const contentHandlers = {
         title: bumped ? `Netflix: finished ${bumped.title || "an episode"} — catching up AniList` : "Netflix: episode finished — catching up AniList",
         ok: true,
       }).catch(() => {});
+      if (bumped) {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "watched",
+          title: bumped.title,
+          episode: bumped.progress || bumped.next ? (bumped.progress || (bumped.next - 1)) : null,
+          service: "netflix",
+        }).catch(() => {});
+      }
       await trackHistory("netflix");
     }
     return {};
@@ -709,14 +822,30 @@ const contentHandlers = {
   hidiveStarted: async (message, sender) => {
     if (onSite(sender, "https://www.hidive.com/") && sender.frameId === 0 && (await loadImportSettings()).trackHidive) {
       const hint = message?.entry && typeof message.entry === "object" ? message.entry : null;
-      await bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: true }).catch(() => {});
+      const bumped = await bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: true }).catch(() => null);
+      if (bumped) {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "tracked",
+          title: bumped.title,
+          episode: bumped.progress != null ? bumped.progress + 1 : hint?.episode || null,
+          service: "hidive",
+        }).catch(() => {});
+      }
     }
     return {};
   },
   hidiveWatched: async (message, sender) => {
     if (onSite(sender, "https://www.hidive.com/") && sender.frameId === 0 && (await loadImportSettings()).trackHidive) {
       const hint = message?.entry && typeof message.entry === "object" ? message.entry : null;
-      bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: false }).catch(() => {});
+      const bumped = await bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: false }).catch(() => null);
+      if (bumped) {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "watched",
+          title: bumped.title,
+          episode: bumped.progress || hint?.episode || null,
+          service: "hidive",
+        }).catch(() => {});
+      }
       await trackHistory("hidive");
     }
     return {};

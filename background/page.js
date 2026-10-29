@@ -14,6 +14,9 @@ import { publicSettings } from "../lib/settings.js";
 import { collectTagSuggestions } from "../lib/taste.js";
 import { retryPendingSync, syncStatus } from "./anilist-sync.js";
 import { noteContinueFromCrObservation } from "./continue-activity.js";
+import { sendWatchGuide } from "./watch-guide.js";
+
+const guidedCrKeys = new Set();
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
 import { loadUnrecommended } from "./unrecommended.js";
 
@@ -101,8 +104,22 @@ export async function pageUpdate(observation, sender) {
   const state = await loadState();
   state.lastObservation = observation;
   await saveState(state);
-  if (observation.kind === "watch") noteContinueFromCrObservation(observation).catch(() => {});
   const tabId = sender?.tab?.id;
+  if (observation.kind === "watch") {
+    noteContinueFromCrObservation(observation).then((row) => {
+      if (!row || tabId == null) return;
+      const key = `${row.id}:${row.progress ?? row.next ?? ""}`;
+      if (guidedCrKeys.has(key)) return;
+      guidedCrKeys.add(key);
+      if (guidedCrKeys.size > 80) guidedCrKeys.clear();
+      sendWatchGuide(tabId, {
+        kind: "tracked",
+        title: row.title,
+        episode: Number(row.progress) >= 0 ? Number(row.progress) + 1 : null,
+        service: "crunchyroll",
+      }).catch(() => {});
+    }).catch(() => {});
+  }
   retryPendingSync().then(async (result) => {
     if (result && tabId != null) await chrome.tabs.sendMessage(tabId, { type: "enriched", view: await currentView(result.state) });
   }).catch(() => {});

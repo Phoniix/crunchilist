@@ -520,6 +520,120 @@ test("HIDIVE start with known videoId does not fall back to newest history when 
   assert.equal(activity.length, 0, "missing /video/id must not promote another history title");
 });
 
+test("Netflix Continue Watching counts series episodes across activity pages", async () => {
+  // Page 0 only has the two browser finishes; phone watches of eps 1–2 sit on page 1.
+  // Old code numbered page-0 rows as 1..2 and stuck progress at 2.
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "love through a prism", "s1")]: {
+      anilistId: 999001,
+      how: "auto",
+      confidence: "high",
+      names: ["Love Through a Prism — Season 1"],
+    },
+  };
+  stored.crCatalog = {
+    items: [{ id: "GPRISM", title: "Love Through a Prism", anilistId: 999001, url: "https://www.crunchyroll.com/series/GPRISM", episodes: 12 }],
+  };
+  stored[KEYS.continueActivity] = [{
+    id: "GPRISM",
+    title: "Love Through a Prism",
+    progress: 2,
+    next: 3,
+    episodes: 12,
+    service: "netflix",
+    at: Date.now() - 1000,
+    anilistId: 999001,
+  }];
+  const series = 800001;
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type !== "netflixActivity") return null;
+    const page = Number(message.page) || 0;
+    if (page === 0) {
+      return {
+        ok: true,
+        payload: {
+          vhSize: 4,
+          viewedItems: [
+            {
+              seriesTitle: "Love Through a Prism",
+              series,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 4",
+              movieID: 104,
+              date: Date.now(),
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Love Through a Prism: Season 1: Episode 4",
+            },
+            {
+              seriesTitle: "Love Through a Prism",
+              series,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 3",
+              movieID: 103,
+              date: Date.now() - 3600_000,
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Love Through a Prism: Season 1: Episode 3",
+            },
+          ],
+        },
+      };
+    }
+    if (page === 1) {
+      return {
+        ok: true,
+        payload: {
+          vhSize: 4,
+          viewedItems: [
+            {
+              seriesTitle: "Love Through a Prism",
+              series,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 2",
+              movieID: 102,
+              date: Date.now() - 86_400_000,
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Love Through a Prism: Season 1: Episode 2",
+            },
+            {
+              seriesTitle: "Love Through a Prism",
+              series,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 1",
+              movieID: 101,
+              date: Date.now() - 172_800_000,
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Love Through a Prism: Season 1: Episode 1",
+            },
+          ],
+        },
+      };
+    }
+    return { ok: true, payload: { vhSize: 4, viewedItems: [] } };
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "104" },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/104", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(stored[KEYS.continueActivity][0].progress, 4);
+  assert.equal(stored[KEYS.continueActivity][0].next, 5);
+});
+
 test("Netflix Continue Watching bump never regresses when activity page undercounts", async () => {
   reset();
   withTracking();

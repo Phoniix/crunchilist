@@ -3,6 +3,7 @@ import { addNotice, liveNotices, removeNotices } from "../lib/notices.js";
 import { setShowProgress } from "./anilist-sync.js";
 import { currentView, showForSeries } from "./page.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
+import { buildWatchGuidePayload } from "./watch-guide.js";
 
 async function broadcast(view) {
   chrome.runtime.sendMessage({ type: "enriched", view }).catch(() => {});
@@ -43,7 +44,15 @@ export async function episodeFinished(id, episode) {
       result.state.notices = addNotice(result.state.notices, { ...notice, kind: "done" }, Date.now());
       await saveState(result.state);
     }
-    return finishWith(result.state, { mode: "auto", toast, offer, syncNote: result.syncNote });
+    const watchGuide = toast
+      ? await buildWatchGuidePayload({
+        kind: "watched",
+        title: show.title,
+        episode: offer.to,
+        service: "crunchyroll",
+      }).catch(() => null)
+      : null;
+    return finishWith(result.state, { mode: "auto", toast, offer, syncNote: result.syncNote, watchGuide });
   }
   state.notices = addNotice(state.notices, { ...notice, kind: "ask" }, Date.now());
   await saveState(state);

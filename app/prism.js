@@ -20,7 +20,11 @@ import { KEYS } from "../lib/keys.js";
 import { SERVICE_BRAND, SERVICE_SHORT, pickPlayLink } from "../lib/play-url.js";
 import { serviceById, serviceForSite, visibleLink } from "../lib/services.js";
 import { handleImportAct, noteImportState, onImportPick, onImportToggle, renderImportPane, renderImportsHistory } from "./import-pane.js";
-import { DEFAULT_CHARACTER_ID, characterById, composeLine } from "../lib/characters.js";
+import { DEFAULT_CHARACTER_ID, characterById } from "../lib/characters.js";
+import { activeCharacterId, guideLine } from "../lib/guide.js";
+import { NOTICE_SECTIONS, noticeSection } from "../lib/notices.js";
+import { guideBubbleHtml } from "./guide-bubble.js";
+import { createWelcome } from "./prism-welcome.js";
 
 let SHOWS = [];
 let byId = new Map();
@@ -1257,7 +1261,7 @@ function pageList(tab) {
       <div class="lib-prog">${item.progress} of ${item.episodes || "?"} episodes<div class="meter"><i style="width:${pct}%"></i></div></div>
       <div class="lib-acts">${listTab === "watching" ? `<button class="btn sm" data-act="plus-one">+1 ep</button>` : ""}${onCrunchyroll(show) ? `<button class="btn sm accent" data-act="watch" aria-label="Play">${icon("play")}</button>` : ""}</div></div>`;
   }).join("")}</div>`;
-  const body = !items.length ? `<div class="empty"><p class="muted">${listTab === "watching" ? "Nothing in progress. Press Play on any show and it lands here." : "Nothing here yet."}</p><a class="btn" href="#browse">Browse shows</a></div>`
+  const body = !items.length ? `<div class="empty">${listTab === "watching" ? emptyGuideTip("empty-cw", "Press Play on a show and it lands in Continue watching.") : ""}<p class="muted">${listTab === "watching" ? "Nothing in progress. Press Play on any show and it lands here." : "Nothing here yet."}</p><a class="btn" href="#browse">Browse shows</a></div>`
     : listView === "grid" ? '<div id="list-grid"></div>' : rows();
   return `<h1 class="page-title">My list</h1><p class="page-sub">Sorted by last watched. Saved here first, then synced to AniList in the background.</p>
     ${syncLine()}
@@ -1576,14 +1580,15 @@ function settingsSection(id) {
 }
 
 function favoriteCharacterStub() {
-  const pack = characterById(DEFAULT_CHARACTER_ID);
-  const sample = composeLine({ characterId: DEFAULT_CHARACTER_ID, kind: "welcome", seed: "settings-stub" });
+  const id = activeCharacterId(null, settings().favoriteCharacterId || "");
+  const pack = characterById(id) || characterById(DEFAULT_CHARACTER_ID);
+  const sample = guideLine({ characterId: id, kind: "welcome", seed: "settings-stub" });
   const name = pack?.name || "Kivi";
   const about = pack
-    ? `${name} is our original anime guide (first fave when this ships) — short welcome and look-here lines in her voice. Sample: “${sample.text}” Not selectable yet.`
+    ? `${name} is the active guide (first fave when selection ships) — welcome, look-here, and in-player watch lines. Sample: “${sample.text}” Not selectable yet.`
     : "Coming soon — short welcome and look-here lines from a character you pick.";
   return `<div class="set-row off fave-stub" aria-disabled="true" title="Coming soon">
-      <img class="fave-stub-art" src="../icons/kivi.png" alt="" width="40" height="40" decoding="async">
+      <img class="fave-stub-art" src="../${esc(sample.portraitPath || "icons/kivi.png")}" alt="" width="40" height="40" decoding="async">
       <div class="grow"><b>Favorite character</b><small>${esc(about)}</small></div>
       <div class="seg"><button type="button" disabled tabindex="-1">${esc(name)} · soon</button></div>
     </div>`;
@@ -1735,8 +1740,11 @@ function unrecommendedSettingsHtml() {
 }
 
 function settingsPaneData() {
+  const done = Boolean(settings().setupDone);
   return `<div class="set-card"><h3>Data &amp; privacy</h3><p>Backups and diagnostics for this browser. Sign-ins stay on this device. List sync and optional AI keys only leave when you connect AniList or save a remote model key.</p>
     <div class="stack">
+      <div class="set-row"><div class="grow"><b>Guided setup</b><small>${done ? "Finished. Run it again any time with Kivi." : "Not finished yet — Kivi will walk you through AniList, sites, and import."}</small></div>
+        <a class="btn ${done ? "ghost" : "accent"}" href="#welcome?reset">${done ? "Run setup again" : "Continue setup"}</a></div>
       <div class="set-row"><div class="grow"><b>My unrecommended titles</b><small>Hidden from every Home row. Still searchable and openable from Search.</small></div></div>
       <div id="unrecommended-list">${unrecommendedSettingsHtml()}</div>
       <div class="set-row"><div class="grow"><b>Backup</b><small>Saves your matches, picks, import history and settings to a file.</small></div>
@@ -2132,6 +2140,7 @@ function notes() {
       id: row.id,
       real: true,
       system,
+      section: noticeSection(row),
       href: row.href || "",
       show: system ? null : SHOWS.find((show) => show.title === row.title),
       cover: row.cover,
@@ -2147,15 +2156,53 @@ function notes() {
   });
   const seasons = SHOWS.filter(nextSeason).map((show) => {
     const next = nextSeason(show);
-    return { id: `season:${show.id}:${next.anilistId || next.label}`, show, cover: next.cover || show.cover, title: show.title, text: `${next.label} is out. You finished the last one`, unread: true, acts: [["open", next.format === "MOVIE" ? "See it" : "Start it"], ["dismiss", "Dismiss"]] };
+    return {
+      id: `season:${show.id}:${next.anilistId || next.label}`,
+      show,
+      section: "seasons",
+      cover: next.cover || show.cover,
+      title: show.title,
+      text: `${next.label} is out. You finished the last one`,
+      unread: true,
+      acts: [["open", next.format === "MOVIE" ? "See it" : "Start it"], ["dismiss", "Dismiss"]],
+    };
   }).filter((note) => !dismissed.has(note.id)).slice(0, 8);
   return [...asks, ...seasons];
 }
+function noteCardHtml(n) {
+  return `<div class="note ${n.unread ? "unread" : ""}" data-note="${esc(n.id)}"${n.show ? ` data-show="${esc(n.show.id)}"` : ""}>${n.cover ? `<img src="${esc(n.cover)}" alt="" referrerpolicy="no-referrer">` : '<span class="ph"></span>'}<div><b>${esc(n.title)}</b><p>${esc(n.text)}${n.time ? ` <span class="note-time">· ${ago(n.time)}</span>` : ""}</p>
+    <div class="acts">${n.acts.map(([act, label], i) => `<button class="btn sm ${i ? "ghost" : "accent"}" data-note-act="${act}">${esc(label)}</button>`).join("")}</div></div></div>`;
+}
+function drawerGuideHtml(list) {
+  const newest = list.find((n) => n.unread) || list[0];
+  if (!newest) return "";
+  const line = guideLine({
+    kind: "look_here",
+    seed: `drawer:${newest.section || "app"}:${newest.id}`,
+    hint: newest.title,
+    characterId: activeCharacterId(null, settings().favoriteCharacterId || ""),
+  });
+  return `<div class="drawer-guide">${guideBubbleHtml({
+    text: line.text,
+    name: line.name,
+    portraitSrc: `../${line.portraitPath}`,
+    layout: "drawer",
+  }, esc)}</div>`;
+}
 function drawerList() {
   const list = notes();
-  if (!list.length) return `<div class="drawer-empty"><b>You're all caught up</b><p class="muted">Episode asks, import and daily sync previews, applied syncs, app updates, and new seasons show up here.</p></div>`;
-  return list.map((n) => `<div class="note ${n.unread ? "unread" : ""}" data-note="${esc(n.id)}"${n.show ? ` data-show="${esc(n.show.id)}"` : ""}>${n.cover ? `<img src="${esc(n.cover)}" alt="" referrerpolicy="no-referrer">` : '<span class="ph"></span>'}<div><b>${esc(n.title)}</b><p>${esc(n.text)}${n.time ? ` <span class="note-time">· ${ago(n.time)}</span>` : ""}</p>
-    <div class="acts">${n.acts.map(([act, label], i) => `<button class="btn sm ${i ? "ghost" : "accent"}" data-note-act="${act}">${esc(label)}</button>`).join("")}</div></div></div>`).join("");
+  if (!list.length) {
+    return `<div class="drawer-empty"><b>You're all caught up</b><p class="muted">Episode asks, import and daily sync previews, applied syncs, app updates, and new seasons show up here — grouped by Import, Episodes, New seasons, and App.</p></div>`;
+  }
+  const sections = NOTICE_SECTIONS.map((section) => {
+    const rows = list.filter((n) => (n.section || noticeSection(n)) === section.id);
+    if (!rows.length) return "";
+    return `<section class="drawer-section" data-section="${esc(section.id)}">
+      <h4 class="drawer-section-title">${esc(section.label)}</h4>
+      ${rows.map(noteCardHtml).join("")}
+    </section>`;
+  }).filter(Boolean).join("");
+  return `${drawerGuideHtml(list)}${sections}`;
 }
 function drawer() {
   return `<div class="scrim" data-act="close-drawer"></div>
@@ -2214,7 +2261,7 @@ async function resolveAll(action) {
 // "by Phoniix" under the wordmark.
 function nav() {
   return `<nav class="nav">
-    <a class="brand" href="#"><img class="brand-logo" src="../icons/crunchilist-logo.svg" alt="Kivori SekAI"><span class="brand-word">Kivori SekAI<small>by Phoniix</small></span></a>
+    <a class="brand" href="#"><img class="brand-logo" src="../icons/kivori-logo.svg" alt="Kivori SekAI"><span class="brand-word">Kivori SekAI<small>by Phoniix</small></span></a>
     <a class="nav-link" data-route="home" href="#">${icon("home")}<span>Home</span></a>
     <a class="nav-link" data-route="search" href="#search">${icon("search")}<span>Search</span></a>
     <a class="nav-link" data-route="browse" href="#browse">${icon("compass")}<span>Browse</span></a>
@@ -2499,8 +2546,9 @@ function welcomeLine() {
   let h = 0;
   for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   const text = bank[h % bank.length];
-  const character = characterById(DEFAULT_CHARACTER_ID);
-  return { text, character, line: text, kind: "welcome", source: "local", period };
+  const id = activeCharacterId(null, settings().favoriteCharacterId || "");
+  const character = characterById(id) || characterById(DEFAULT_CHARACTER_ID);
+  return { text, character, line: text, kind: "welcome", source: "local", period, portraitPath: character?.portrait || "icons/kivi.png" };
 }
 
 // Which season and episode Play should open: the next unwatched episode of the season in view, or of the show.
@@ -2629,17 +2677,45 @@ function toggleList(show) {
 function loadingPage() {
   return `<div class="loading"><span class="spinner"></span><p class="muted">Loading your catalog…</p></div>`;
 }
+function emptyGuideTip(seed, tip) {
+  const line = guideLine({
+    kind: "tip",
+    seed,
+    tip,
+    characterId: activeCharacterId(null, settings().favoriteCharacterId || ""),
+  });
+  return guideBubbleHtml({
+    text: line.text,
+    name: line.name,
+    portraitSrc: `../${line.portraitPath}`,
+    layout: "compact",
+  }, esc);
+}
 function emptyHome() {
   return `<section class="welcome">
-    <img src="../icons/crunchilist-logo.svg" alt="Kivori SekAI">
+    <img src="../icons/kivori-logo.svg" alt="Kivori SekAI">
+    ${emptyGuideTip("empty-home", "Open Crunchyroll signed in so the catalog can fill in.")}
     <h1 class="page-title">Your catalog is on its way</h1>
     <p class="page-sub">Open Crunchyroll in this browser while signed in. Kivori SekAI reads the catalog from there, then matches each show on AniList for art, trailers and seasons. This page fills in by itself.</p>
-    <div class="missing-acts"><a class="btn accent" href="https://www.crunchyroll.com/" target="_blank" rel="noopener">Open Crunchyroll</a><a class="btn ghost" href="#settings">Settings</a></div>
+    <div class="missing-acts"><a class="btn accent" href="https://www.crunchyroll.com/" target="_blank" rel="noopener">Open Crunchyroll</a><a class="btn ghost" href="#welcome">Guided setup</a><a class="btn ghost" href="#settings">Settings</a></div>
   </section>`;
+}
+
+function welcomeApi() {
+  return {
+    esc,
+    toast,
+    send: (...args) => send(...args),
+    settings,
+    setSettings,
+    applyView,
+    rerender,
+  };
 }
 
 // Router
 let home = null;
+let welcome = null;
 function route() {
   stopPreview();
   closeBadgeMenu();
@@ -2650,10 +2726,19 @@ function route() {
   const main = document.querySelector("main");
   const decode = (text) => { try { return decodeURIComponent(text); } catch { return text; } };
   const searchQuery = query?.startsWith("q=") ? decode(query.slice(2)) : null;
-  const pages = { search: () => pageSearch(searchQuery), list: () => pageList(arg), show: () => pageShow(decode(arg || ""), sub), settings: () => pageSettings(arg), browse: () => pageBrowse(arg ? decode(arg) : route.keep ? undefined : ""), airing: pageAiring, imports: () => (importState ? renderImportsHistory(importState) : `<p class="muted">Loading import history…</p>`) };
+  const pages = {
+    search: () => pageSearch(searchQuery),
+    list: () => pageList(arg),
+    show: () => pageShow(decode(arg || ""), sub),
+    settings: () => pageSettings(arg),
+    browse: () => pageBrowse(arg ? decode(arg) : route.keep ? undefined : ""),
+    airing: pageAiring,
+    imports: () => (importState ? renderImportsHistory(importState) : `<p class="muted">Loading import history…</p>`),
+    welcome: () => welcome.render(welcomeApi()),
+  };
   const page = pages[name] ? name : "home";
   document.body.dataset.page = page;
-  const needsShows = page !== "settings" && page !== "search" && page !== "imports";
+  const needsShows = page !== "settings" && page !== "search" && page !== "imports" && page !== "welcome";
   main.innerHTML = !loaded && needsShows ? loadingPage()
     : !SHOWS.length && needsShows ? emptyHome()
     : page === "home" ? home.render(api) : pages[page]();
@@ -2675,6 +2760,7 @@ function route() {
   const on = strip?.querySelector(".season.on");
   if (on) strip.scrollLeft = on.offsetLeft - strip.offsetLeft - (strip.clientWidth - on.offsetWidth) / 2;
   home.after(SHOWS.length ? page : "", api);
+  welcome?.after(page, welcomeApi());
   applyTheme();
   const where = `${name}/${arg}`;
   if (!route.keep && where !== route.last) window.scrollTo({ top: 0 });
@@ -2939,7 +3025,16 @@ function bind() {
     }
     if (target.closest("#profile-pop") && target.tagName === "A") document.querySelector("#profile-pop").classList.remove("open");
     if (act === "refresh-catalog") return refreshCatalog();
-    if (act === "anilist-connect") return send("openOptions");
+    if (act === "anilist-connect") {
+      return send("startAnilistOneClick").then((reply) => {
+        if (reply?.view) applyView(reply.view);
+        if (!reply?.ok && reply?.error) return toast(reply.error);
+        toast(reply?.viewerName ? `Connected as ${reply.viewerName}` : "AniList connected");
+      });
+    }
+    if (act?.startsWith("tour-")) {
+      return welcome?.handleAct(act, target, event);
+    }
     if (act === "anilist-refresh") return accountAction("refreshAnilist", "AniList list refreshed");
     if (act === "sync-now") return accountAction("syncNow", (reply) => reply.syncNote || "Done");
     if (act === "history") {
@@ -3258,12 +3353,14 @@ export const api = {
   aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
   prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, openTrailer, welcomeLine, onCrunchyroll, playLabel, crBadge,
   onMyServices, mineServices, homePool, mineHome: () => mineHome, setMineHome,
+  guideBubbleHtml, emptyGuideTip,
 };
 
 export function startPrism(source, design) {
   data = source;
   send = source.send;
   home = design;
+  welcome = createWelcome();
   loadTheme();
   const badgeStyle = document.createElement("style");
   badgeStyle.textContent = `${BADGE_CSS}${BADGE_MENU_CSS}`;
@@ -3275,7 +3372,10 @@ export function startPrism(source, design) {
   paintAccount();
   bind();
   route();
-  reload({ first: true }).finally(() => setTimeout(startTips, 800));
+  reload({ first: true }).finally(async () => {
+    await welcome.maybeOpen(welcomeApi());
+    setTimeout(startTips, 800);
+  });
   send("getShortcut").then(async (reply) => {
     if (!reply?.ok) return;
     shortcut = reply.shortcut || "";

@@ -208,7 +208,7 @@ function themePop() {
 
 export function nav() {
   return `<nav class="nav">
-    <a class="brand" href="#"><img class="brand-logo" src="../icons/crunchilist-logo.svg" alt=""><span class="brand-word">Crunchilist<small>Search</small></span></a>
+    <a class="brand" href="#"><img class="brand-logo" src="../icons/kivori-logo.svg" alt="Kivori SekAI"><span class="brand-word">Kivori SekAI<small>Search</small></span></a>
     <a class="nav-link" data-route="home" href="#">${icon("home")}<span>Home</span></a>
     <a class="nav-link" data-route="browse" href="#browse">${icon("compass")}<span>Browse</span></a>
     <a class="nav-link" data-route="airing" href="#airing">${icon("calendar")}<span>Airing</span></a>

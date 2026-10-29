@@ -74,9 +74,13 @@ function heroWelcomeHtml() {
   const line = m.welcomeLine?.() || { text: "Good evening. What are we finding today?" };
   const who = line.character?.name || "Kivi";
   const text = line.text || "Good evening.";
+  const portrait = line.portraitPath ? `../${line.portraitPath}` : "../icons/kivi.png";
+  if (m.guideBubbleHtml) {
+    return m.guideBubbleHtml({ text, name: who, portraitSrc: portrait, layout: "hero" }, m.esc);
+  }
   return `<div class="hero-welcome" aria-label="${m.esc(who)} says: ${m.esc(text)}">
       <div class="hero-kivi" aria-hidden="true">
-        <img src="../icons/kivi.png" alt="" width="160" height="160" decoding="async">
+        <img src="${m.esc(portrait)}" alt="" width="160" height="160" decoding="async">
       </div>
       <figure class="hero-bubble">
         <figcaption class="hero-bubble-name">${m.esc(who)}</figcaption>
@@ -115,7 +119,12 @@ function render(api) {
   // Banner off still leaves a short top strip (with the switch) before Continue watching.
   const head = !bannerOn() ? heroHtml([]) : (spots.length ? heroHtml(spots) : "");
   return `${head}
-    ${m.rail("Continue watching", pool(m.continueWatching()), { render: m.wide, href: "#list/watching" })}
+    ${m.rail("Continue watching", pool(m.continueWatching()), {
+      render: m.wide,
+      href: "#list/watching",
+      keep: true,
+      empty: `<div class="empty soft">${m.emptyGuideTip?.("empty-cw-home", "Start an episode on a connected site and it shows up here.") || ""}<p class="muted">Nothing in progress yet.</p></div>`,
+    })}
     ${m.newForYouRail()}
     ${m.forYouRail()}
     ${m.homeRowsHtml()}

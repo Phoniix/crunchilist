@@ -1,3 +1,4 @@
+import { KIVORI_LOGO_SVG } from "../lib/brand-logo.js";
 import { ROUNDED, roundedFontFace } from "../ui/dom.js";
 
 const CSS = `
@@ -64,7 +65,7 @@ const CSS = `
   [hidden] { display: none !important; }
 `;
 
-const LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="clb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f3f"/><stop offset="1" stop-color="#ef5418"/></linearGradient></defs><path fill="url(#clb)" d="M406.51,82.09A230,230 0 1 0 406.51,429.91A190,190 0 1 1 406.51,82.09Z"/><path transform="translate(210 116) scale(.153)" fill="#ffc54d" stroke="#ffc54d" stroke-width="60" stroke-linejoin="round" fill-rule="evenodd" d="M68.98,29.53l1862.04,315.6L952.66,692.29V1970.47L116.32,234.67l867.9,110.46H305.68L873.76,1591.75V613.39l710.1-268.26Z"/></svg>`;
+const LOGO = KIVORI_LOGO_SVG;
 
 const PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
 const IDLE_MS = 3000;

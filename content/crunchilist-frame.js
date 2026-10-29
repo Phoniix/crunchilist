@@ -1,4 +1,14 @@
 (() => {
+  // lib/brand-logo.js
+  var KIVORI_LOGO_SVG = `<svg viewBox="0 0 68 68" width="20" height="20" aria-hidden="true">
+  <rect width="68" height="68" rx="15" fill="#5b4bff"/>
+  <circle cx="34" cy="34" r="18" fill="none" stroke="#eef0ff" stroke-width="3.5"/>
+  <ellipse cx="34" cy="34" rx="8" ry="18" fill="none" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M16 34h36" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M20 46L48 22" stroke="#4fd1ff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="48" cy="22" r="4" fill="#4fd1ff"/>
+</svg>`;
+
   // ui/dom.js
   var ROUNDED = '"Crunchilist Rounded", "Trebuchet MS", Candara, sans-serif';
   function roundedFontFace() {
@@ -75,7 +85,7 @@
   .ask .later:hover { color: #f7efe9; background: rgba(255, 226, 196, .1); }
   [hidden] { display: none !important; }
 `;
-  var LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="clb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f3f"/><stop offset="1" stop-color="#ef5418"/></linearGradient></defs><path fill="url(#clb)" d="M406.51,82.09A230,230 0 1 0 406.51,429.91A190,190 0 1 1 406.51,82.09Z"/><path transform="translate(210 116) scale(.153)" fill="#ffc54d" stroke="#ffc54d" stroke-width="60" stroke-linejoin="round" fill-rule="evenodd" d="M68.98,29.53l1862.04,315.6L952.66,692.29V1970.47L116.32,234.67l867.9,110.46H305.68L873.76,1591.75V613.39l710.1-268.26Z"/></svg>`;
+  var LOGO = KIVORI_LOGO_SVG;
   var PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
   var IDLE_MS = 3e3;
   var GAP = 12;

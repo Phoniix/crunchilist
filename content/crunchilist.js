@@ -3074,7 +3074,7 @@
       button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
       notifySeg.append(button);
     }
-    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups and the Find badge count." });
+    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups, in-player Continue watching / marked-watched guide bubbles on connected sites, and the Find badge count." });
     const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
       el("summary", { text: "Notification preferences" }),
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint])
@@ -3279,7 +3279,8 @@
         say("Refreshing AniList\u2026");
         act("refreshAnilist", {}, (response) => `Refreshed ${response.imported} anime from AniList.`);
       } else {
-        send2("openOptions");
+        say("Opening AniList\u2026");
+        act("startAnilistOneClick", {}, (response) => response.viewerName ? `Connected as ${response.viewerName}.` : "AniList connected.");
       }
     });
     publicRow.addEventListener("submit", (event) => {
@@ -3918,6 +3919,16 @@
     };
   }
 
+  // lib/brand-logo.js
+  var KIVORI_LOGO_SVG = `<svg viewBox="0 0 68 68" width="20" height="20" aria-hidden="true">
+  <rect width="68" height="68" rx="15" fill="#5b4bff"/>
+  <circle cx="34" cy="34" r="18" fill="none" stroke="#eef0ff" stroke-width="3.5"/>
+  <ellipse cx="34" cy="34" rx="8" ry="18" fill="none" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M16 34h36" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M20 46L48 22" stroke="#4fd1ff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="48" cy="22" r="4" fill="#4fd1ff"/>
+</svg>`;
+
   // content/player-bar.js
   var CSS = `
   ${roundedFontFace()}
@@ -3982,7 +3993,7 @@
   .ask .later:hover { color: #f7efe9; background: rgba(255, 226, 196, .1); }
   [hidden] { display: none !important; }
 `;
-  var LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="clb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f3f"/><stop offset="1" stop-color="#ef5418"/></linearGradient></defs><path fill="url(#clb)" d="M406.51,82.09A230,230 0 1 0 406.51,429.91A190,190 0 1 1 406.51,82.09Z"/><path transform="translate(210 116) scale(.153)" fill="#ffc54d" stroke="#ffc54d" stroke-width="60" stroke-linejoin="round" fill-rule="evenodd" d="M68.98,29.53l1862.04,315.6L952.66,692.29V1970.47L116.32,234.67l867.9,110.46H305.68L873.76,1591.75V613.39l710.1-268.26Z"/></svg>`;
+  var LOGO = KIVORI_LOGO_SVG;
   var PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
   var IDLE_MS = 3e3;
   var GAP = 12;
@@ -4067,7 +4078,7 @@
     let canPip = false;
     let frameRoom = 0;
     let sentRoom = -1;
-    function adopt() {
+    function adopt2() {
       if (!host.parentNode) return;
       const element = doc.fullscreenElement || doc.webkitFullscreenElement;
       covered = Boolean(element && /^(IFRAME|VIDEO)$/.test(element.tagName));
@@ -4385,7 +4396,7 @@
         awake = false;
         hovered = false;
         win.clearTimeout(idleTimer);
-        adopt();
+        adopt2();
         paint();
       },
       clear() {
@@ -4506,9 +4517,171 @@
     return stored[ENABLED_KEY] !== false;
   }
 
+  // content/watch-guide.js
+  var HOST_ID = "ks-watch-guide";
+  var SHOW_MS = 3500;
+  var CSS2 = `
+:host {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  pointer-events: none;
+  font-family: "Nunito", system-ui, sans-serif;
+}
+.card {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.card.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.portrait {
+  flex: none;
+  width: 64px;
+  height: 72px;
+  border-radius: 12px;
+  border: 3px solid #1a1210;
+  background: #fffaf4;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+  overflow: hidden;
+}
+.portrait img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+.bubble {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  background: #fffaf4;
+  color: #1a1210;
+  border: 3px solid #1a1210;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+}
+.bubble::before,
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  bottom: 16px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+.bubble::before {
+  left: -17px;
+  bottom: 14px;
+  border-width: 8px 16px 8px 0;
+  border-color: transparent #1a1210 transparent transparent;
+}
+.bubble::after {
+  border-width: 6px 12px 6px 0;
+  border-color: transparent #fffaf4 transparent transparent;
+}
+.name {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 2px solid #1a1210;
+  background: #ff9a4a;
+  color: #1a0d05;
+  font: 800 10px/1.2 system-ui, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.text {
+  margin: 0;
+  font: 750 15px/1.35 system-ui, sans-serif;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+`;
+  function esc(value) {
+    return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function ensureHost(doc = document) {
+    let host = doc.getElementById(HOST_ID);
+    if (host) return host;
+    host = doc.createElement("div");
+    host.id = HOST_ID;
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `<style>${CSS2}</style><div class="card" part="card"></div>`;
+    (doc.documentElement || doc.body).append(host);
+    return host;
+  }
+  function adopt(host, doc = document) {
+    const element = doc.fullscreenElement || doc.webkitFullscreenElement;
+    const parent = element || doc.documentElement || doc.body;
+    if (host.parentNode !== parent) parent.append(host);
+  }
+  function createWatchGuide(doc = document) {
+    let hideTimer = 0;
+    const host = ensureHost(doc);
+    const card = host.shadowRoot.querySelector(".card");
+    function onFs() {
+      adopt(host, doc);
+    }
+    doc.addEventListener("fullscreenchange", onFs);
+    doc.addEventListener("webkitfullscreenchange", onFs);
+    function show(payload = {}) {
+      const text2 = String(payload.text || "").trim();
+      if (!text2) return;
+      adopt(host, doc);
+      const name = String(payload.name || "Kivi").trim() || "Kivi";
+      const portrait = String(payload.portraitUrl || "").trim();
+      card.innerHTML = `${portrait ? `<div class="portrait"><img src="${esc(portrait)}" alt=""></div>` : ""}
+      <figure class="bubble">
+        <figcaption class="name">${esc(name)}</figcaption>
+        <blockquote class="text">${esc(text2)}</blockquote>
+      </figure>`;
+      card.classList.remove("show");
+      void card.offsetWidth;
+      card.classList.add("show");
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        card.classList.remove("show");
+      }, SHOW_MS);
+    }
+    function destroy() {
+      clearTimeout(hideTimer);
+      doc.removeEventListener("fullscreenchange", onFs);
+      doc.removeEventListener("webkitfullscreenchange", onFs);
+      host.remove();
+    }
+    return { show, destroy };
+  }
+  function bootWatchGuide(doc = document) {
+    if (globalThis.__ksWatchGuideBooted) return globalThis.__ksWatchGuide;
+    globalThis.__ksWatchGuideBooted = true;
+    const guide = createWatchGuide(doc);
+    globalThis.__ksWatchGuide = guide;
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "watchGuide") guide.show(message);
+    });
+    return guide;
+  }
+
   // content/main.js
   if (!globalThis.__crCornerBooted) {
     globalThis.__crCornerBooted = true;
+    bootWatchGuide();
     boot();
   }
   function boot() {
@@ -4734,6 +4907,7 @@
         return;
       }
       if (!response.toast || response.mode === "none") return;
+      if (response.watchGuide) globalThis.__ksWatchGuide?.show(response.watchGuide);
       showEpisodeToast(response);
     });
   }

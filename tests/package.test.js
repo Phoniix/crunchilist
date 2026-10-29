@@ -115,6 +115,8 @@ test("import pane, Kivi portrait, and title feeds ship with the package", () => 
   for (const file of [
     "app/import-pane.js",
     "icons/kivi.png",
+    "icons/kivori-logo.svg",
+    "icons/icon48.png",
     "feeds/id-map.json",
     "feeds/id-map-meta.json",
     "feeds/where-map.json",

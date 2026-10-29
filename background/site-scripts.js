@@ -1,4 +1,5 @@
 // Registers site content scripts (history/catalog helpers + panels) after optional host permission is granted.
+import { ENABLED_KEY, PANEL_ENABLED_KEY, isPanelEnabled } from "../lib/enabled.js";
 import { whereFilterMode } from "../lib/settings.js";
 import { LISTING_SITES, SERVICES, connectedIds, contentScriptsFor, onService, serviceById } from "../lib/services.js";
 import { loadState } from "./store.js";
@@ -119,6 +120,8 @@ export async function panelHello(_message, sender) {
   if (!service) return { show: false };
   const connected = connectedIds(await grantedOrigins());
   if (!connected.includes(service.id)) return { show: false };
+  const enabledStore = await chrome.storage.local.get([ENABLED_KEY, PANEL_ENABLED_KEY]);
+  if (!isPanelEnabled(service.id, enabledStore)) return { show: false, service: service.id, disabled: true };
   const state = await loadState();
   const mode = whereFilterMode(state.settings);
   const last = String(state.settings?.lastWhereSite || "").trim().toLowerCase();

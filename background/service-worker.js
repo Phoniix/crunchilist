@@ -17,6 +17,7 @@ import {
   setShowProgress,
   setShowStatus,
   startAnilistAuth,
+  startAnilistOneClick,
   syncStatus,
 } from "./anilist-sync.js";
 import { catalogProgress, catalogSession, runCatalogProtocol } from "./catalog-sync.js";
@@ -259,6 +260,8 @@ async function handle(message, sender) {
       return withView(importAnilist(message.username));
     case "startAnilistAuth":
       return withView(startAnilistAuth(message));
+    case "startAnilistOneClick":
+      return withView(startAnilistOneClick());
     case "connectAnilist":
       return withView(connectAnilist(message));
     case "disconnectAnilist":
@@ -392,6 +395,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   refreshIdMap({ force: true }).catch(() => {});
   syncSiteScripts().catch(() => {});
   setupImportAlarms();
+  if (details?.reason === "install") openApp("#welcome").catch(() => {});
   if (details?.reason === "update") reopenAfterUpdate().catch(() => {});
 });
 

@@ -204,7 +204,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
     button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
     notifySeg.append(button);
   }
-  const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups and the Find badge count." });
+  const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups, in-player Continue watching / marked-watched guide bubbles on connected sites, and the Find badge count." });
   const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
     el("summary", { text: "Notification preferences" }),
     el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint]),
@@ -425,7 +425,8 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       say("Refreshing AniList…");
       act("refreshAnilist", {}, (response) => `Refreshed ${response.imported} anime from AniList.`);
     } else {
-      send("openOptions");
+      say("Opening AniList…");
+      act("startAnilistOneClick", {}, (response) => (response.viewerName ? `Connected as ${response.viewerName}.` : "AniList connected."));
     }
   });
   publicRow.addEventListener("submit", (event) => {

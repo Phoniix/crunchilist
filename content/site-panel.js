@@ -2397,7 +2397,7 @@
       button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
       notifySeg.append(button);
     }
-    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups and the Find badge count." });
+    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups, in-player Continue watching / marked-watched guide bubbles on connected sites, and the Find badge count." });
     const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
       el("summary", { text: "Notification preferences" }),
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint])
@@ -2602,7 +2602,8 @@
         say("Refreshing AniList\u2026");
         act("refreshAnilist", {}, (response) => `Refreshed ${response.imported} anime from AniList.`);
       } else {
-        send("openOptions");
+        say("Opening AniList\u2026");
+        act("startAnilistOneClick", {}, (response) => response.viewerName ? `Connected as ${response.viewerName}.` : "AniList connected.");
       }
     });
     publicRow.addEventListener("submit", (event) => {
@@ -3241,69 +3242,270 @@
     };
   }
 
+  // lib/enabled.js
+  var ENABLED_KEY = "crEnabled";
+  var PANEL_ENABLED_KEY = "ksPanelEnabled";
+  function isPanelEnabled(siteId, stored = {}) {
+    const id = String(siteId || "").trim().toLowerCase();
+    if (!id) return true;
+    if (id === "crunchyroll") return stored[ENABLED_KEY] !== false;
+    const map = stored[PANEL_ENABLED_KEY];
+    if (!map || typeof map !== "object") return true;
+    return map[id] !== false;
+  }
+
+  // content/watch-guide.js
+  var HOST_ID = "ks-watch-guide";
+  var SHOW_MS = 3500;
+  var CSS = `
+:host {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  pointer-events: none;
+  font-family: "Nunito", system-ui, sans-serif;
+}
+.card {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.card.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.portrait {
+  flex: none;
+  width: 64px;
+  height: 72px;
+  border-radius: 12px;
+  border: 3px solid #1a1210;
+  background: #fffaf4;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+  overflow: hidden;
+}
+.portrait img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+.bubble {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  background: #fffaf4;
+  color: #1a1210;
+  border: 3px solid #1a1210;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+}
+.bubble::before,
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  bottom: 16px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+.bubble::before {
+  left: -17px;
+  bottom: 14px;
+  border-width: 8px 16px 8px 0;
+  border-color: transparent #1a1210 transparent transparent;
+}
+.bubble::after {
+  border-width: 6px 12px 6px 0;
+  border-color: transparent #fffaf4 transparent transparent;
+}
+.name {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 2px solid #1a1210;
+  background: #ff9a4a;
+  color: #1a0d05;
+  font: 800 10px/1.2 system-ui, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.text {
+  margin: 0;
+  font: 750 15px/1.35 system-ui, sans-serif;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+`;
+  function esc(value) {
+    return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function ensureHost(doc = document) {
+    let host = doc.getElementById(HOST_ID);
+    if (host) return host;
+    host = doc.createElement("div");
+    host.id = HOST_ID;
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `<style>${CSS}</style><div class="card" part="card"></div>`;
+    (doc.documentElement || doc.body).append(host);
+    return host;
+  }
+  function adopt(host, doc = document) {
+    const element = doc.fullscreenElement || doc.webkitFullscreenElement;
+    const parent = element || doc.documentElement || doc.body;
+    if (host.parentNode !== parent) parent.append(host);
+  }
+  function createWatchGuide(doc = document) {
+    let hideTimer = 0;
+    const host = ensureHost(doc);
+    const card = host.shadowRoot.querySelector(".card");
+    function onFs() {
+      adopt(host, doc);
+    }
+    doc.addEventListener("fullscreenchange", onFs);
+    doc.addEventListener("webkitfullscreenchange", onFs);
+    function show(payload = {}) {
+      const text = String(payload.text || "").trim();
+      if (!text) return;
+      adopt(host, doc);
+      const name = String(payload.name || "Kivi").trim() || "Kivi";
+      const portrait = String(payload.portraitUrl || "").trim();
+      card.innerHTML = `${portrait ? `<div class="portrait"><img src="${esc(portrait)}" alt=""></div>` : ""}
+      <figure class="bubble">
+        <figcaption class="name">${esc(name)}</figcaption>
+        <blockquote class="text">${esc(text)}</blockquote>
+      </figure>`;
+      card.classList.remove("show");
+      void card.offsetWidth;
+      card.classList.add("show");
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        card.classList.remove("show");
+      }, SHOW_MS);
+    }
+    function destroy() {
+      clearTimeout(hideTimer);
+      doc.removeEventListener("fullscreenchange", onFs);
+      doc.removeEventListener("webkitfullscreenchange", onFs);
+      host.remove();
+    }
+    return { show, destroy };
+  }
+  function bootWatchGuide(doc = document) {
+    if (globalThis.__ksWatchGuideBooted) return globalThis.__ksWatchGuide;
+    globalThis.__ksWatchGuideBooted = true;
+    const guide = createWatchGuide(doc);
+    globalThis.__ksWatchGuide = guide;
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "watchGuide") guide.show(message);
+    });
+    return guide;
+  }
+
   // content/site-boot.js
   if (!globalThis.__ksSitePanelBooted) {
     globalThis.__ksSitePanelBooted = true;
+    bootWatchGuide();
     boot();
   }
+  var activeService = "";
+  var started = false;
   function boot() {
     const begin = async () => {
       if (window.top !== window) return;
-      if (document.getElementById("ks-site-panel")) return;
-      const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
-      if (!hello?.ok || !hello.show) return;
-      const service = hello.service;
-      const name = hello.name || "this site";
-      const color = hello.color || "#ff7a2f";
-      const layout = hello.layout || {};
-      const send = (type, payload = {}) => chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
-        ok: false,
-        error: /context invalidated/i.test(error?.message || "") ? "Kivori SekAI was updated. Reload this tab to keep using it." : error?.message || "Extension unavailable"
-      }));
-      const panel = createPanel(document, {
-        send,
-        site: hello.siteFilter || service,
-        platforms: SEARCH_PLATFORMS,
-        accent: color,
-        gatherLabel: `Gathering the ${name} list`,
-        layout,
-        hostId: "ks-site-panel",
-        onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
-        onCorner: (panelCorner) => send("setUi", { panelCorner }),
-        onView: (view) => panel.setView(view)
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local") return;
+        if (!(PANEL_ENABLED_KEY in changes) && !(ENABLED_KEY in changes)) return;
+        chrome.storage.local.get([ENABLED_KEY, PANEL_ENABLED_KEY]).then((stored) => {
+          if (activeService && !isPanelEnabled(activeService, stored)) stopPanel();
+          else if (!document.getElementById("ks-site-panel")) startPanel().catch(() => {
+          });
+        });
       });
-      document.documentElement.append(panel.host);
-      function syncFullscreen() {
-        const video = document.querySelector("video");
-        const element = document.fullscreenElement || document.webkitFullscreenElement;
-        const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
-        panel.setFullscreen(Boolean(element || videoFullscreen));
-      }
-      document.addEventListener("fullscreenchange", syncFullscreen);
-      document.addEventListener("webkitfullscreenchange", syncFullscreen);
-      window.addEventListener("resize", syncFullscreen);
-      chrome.runtime.onMessage.addListener((message) => {
-        if (message?.type === "enriched" && message.view) panel.setView(message.view, { syncOpen: true });
-        if (message?.type === "activity") {
-          const list = Array.isArray(message.tasks) ? message.tasks : [];
-          panel.setActivity(list);
-          const gathering = list.find((task) => task.gathering);
-          panel.setGathering(Boolean(gathering), gathering?.label);
-        }
-      });
-      send("getState").then((response) => {
-        if (response?.ok && response.view) panel.setView(response.view, { syncOpen: true });
-      });
-      send("getActivity").then((response) => {
-        if (!response?.ok) return;
-        const list = Array.isArray(response.tasks) ? response.tasks : [];
-        panel.setActivity(list);
-        const gathering = list.find((task) => task.gathering);
-        panel.setGathering(Boolean(gathering), gathering?.label);
-      });
-      syncFullscreen();
+      await startPanel();
     };
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", begin, { once: true });
     else begin();
+  }
+  function stopPanel() {
+    started = false;
+    document.getElementById("ks-site-panel")?.remove();
+  }
+  async function startPanel() {
+    if (window.top !== window) return;
+    if (document.getElementById("ks-site-panel")) {
+      started = true;
+      return;
+    }
+    const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
+    if (!hello?.ok || !hello.show) {
+      activeService = hello?.service || activeService;
+      return;
+    }
+    activeService = hello.service;
+    const name = hello.name || "this site";
+    const color = hello.color || "#ff7a2f";
+    const layout = hello.layout || {};
+    const send = (type, payload = {}) => chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
+      ok: false,
+      error: /context invalidated/i.test(error?.message || "") ? "Kivori SekAI was updated. Reload this tab to keep using it." : error?.message || "Extension unavailable"
+    }));
+    const panel = createPanel(document, {
+      send,
+      site: hello.siteFilter || activeService,
+      platforms: SEARCH_PLATFORMS,
+      accent: color,
+      gatherLabel: `Gathering the ${name} list`,
+      layout,
+      hostId: "ks-site-panel",
+      onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
+      onCorner: (panelCorner) => send("setUi", { panelCorner }),
+      onView: (view) => panel.setView(view)
+    });
+    document.documentElement.append(panel.host);
+    started = true;
+    function syncFullscreen() {
+      const video = document.querySelector("video");
+      const element = document.fullscreenElement || document.webkitFullscreenElement;
+      const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
+      panel.setFullscreen(Boolean(element || videoFullscreen));
+    }
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    document.addEventListener("webkitfullscreenchange", syncFullscreen);
+    window.addEventListener("resize", syncFullscreen);
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!started || !document.getElementById("ks-site-panel")) return;
+      if (message?.type === "enriched" && message.view) panel.setView(message.view, { syncOpen: true });
+      if (message?.type === "activity") {
+        const list = Array.isArray(message.tasks) ? message.tasks : [];
+        panel.setActivity(list);
+        const gathering = list.find((task) => task.gathering);
+        panel.setGathering(Boolean(gathering), gathering?.label);
+      }
+    });
+    send("getState").then((response) => {
+      if (response?.ok && response.view) panel.setView(response.view, { syncOpen: true });
+    });
+    send("getActivity").then((response) => {
+      if (!response?.ok) return;
+      const list = Array.isArray(response.tasks) ? response.tasks : [];
+      panel.setActivity(list);
+      const gathering = list.find((task) => task.gathering);
+      panel.setGathering(Boolean(gathering), gathering?.label);
+    });
+    syncFullscreen();
   }
 })();

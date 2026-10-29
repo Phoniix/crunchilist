@@ -5,9 +5,11 @@ import { createPlayerBar, pauseVideos } from "./player-bar.js";
 import { scanDocument } from "./scan.js";
 import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { buildObservation, parseCmsObjects, parseCmsSeasons } from "../lib/page-model.js";
+import { bootWatchGuide } from "./watch-guide.js";
 
 if (!globalThis.__crCornerBooted) {
   globalThis.__crCornerBooted = true;
+  bootWatchGuide();
   boot();
 }
 
@@ -252,6 +254,7 @@ function onVideoTime(event) {
       return;
     }
     if (!response.toast || response.mode === "none") return;
+    if (response.watchGuide) globalThis.__ksWatchGuide?.show(response.watchGuide);
     showEpisodeToast(response);
   });
 }
