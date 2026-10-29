@@ -285,10 +285,12 @@ function netflixVideoId(videoId) {
 
 async function bumpFromNetflixActivity({ provisional, videoId, tabId }) {
   const wanted = netflixVideoId(videoId);
+  // No /watch/{id}: do not promote whatever is still at the top of activity.
+  if (!Number.isInteger(wanted)) return null;
   const collected = [];
   let seriesId = null;
   let seen = 0;
-  let foundWanted = !Number.isInteger(wanted);
+  let foundWanted = false;
 
   for (let page = 0; page < NETFLIX_ACTIVITY_PAGES; page += 1) {
     const payload = await askSiteTab("netflix", { type: "netflixActivity", page }, tabId);

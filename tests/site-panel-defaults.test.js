@@ -8,10 +8,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("site-boot defaults the search site filter to the host service", () => {
   const source = readFileSync(join(root, "content/site-boot.js"), "utf8");
-  assert.match(source, /site:\s*hello\.siteFilter\s*\|\|\s*service/);
+  assert.match(source, /site:\s*hello\.siteFilter\s*\|\|\s*activeService/);
   assert.match(source, /platforms:\s*SEARCH_PLATFORMS/);
   assert.match(source, /setFullscreen/);
   assert.match(source, /fullscreenchange/);
+  assert.match(source, /createPlayerBar/);
+  assert.match(source, /ensurePlayerBar/);
 });
 
 test("createPanel accepts site/accent/gatherLabel/layout options", () => {

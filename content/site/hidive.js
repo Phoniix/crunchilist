@@ -175,143 +175,151 @@
   var START_SECONDS = 5;
 
   // content/sites/hidive.js
-  var PAGE_SOURCE = "crunchilist-search-page";
-  var CHECK_MS = 5e3;
-  var HISTORY_EVERY = 3;
-  if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {
-  });
-  function videosIn(root, out = []) {
-    for (const video of root.querySelectorAll("video")) out.push(video);
-    for (const node of root.querySelectorAll("*")) {
-      if (node.shadowRoot) videosIn(node.shadowRoot, out);
-    }
-    return out;
-  }
-  function mainVideo() {
-    const videos = videosIn(document).filter((video) => Number.isFinite(video.duration) && video.duration >= MIN_SECONDS && video.played?.length);
-    return videos.sort((a, b) => b.duration - a.duration)[0] || null;
-  }
-  function videoDone() {
-    const video = mainVideo();
-    return Boolean(video && video.currentTime / video.duration >= FINISHED);
-  }
-  function videoStarted() {
-    const video = mainVideo();
-    return Boolean(video && video.currentTime >= START_SECONDS);
-  }
-  function hintFrom(entry) {
-    return entry ? {
-      series: entry.series || entry.title || "",
-      season: entry.seasonTitle || "",
-      seasonNumber: entry.season,
-      episode: entry.episode || 1
-    } : null;
-  }
-  var started = /* @__PURE__ */ new Set();
-  var named = /* @__PURE__ */ new Set();
-  var finished = /* @__PURE__ */ new Set();
-  var historyTick = 0;
-  var historyChecking = false;
-  if (window.top === window) {
-    setInterval(async () => {
-      const id2 = /^\/video\/(\d+)/.exec(location.pathname)?.[1];
-      if (!id2) return;
-      const signalStart = (entry = null) => {
-        if (finished.has(id2)) return;
-        if (entry) {
-          if (named.has(id2)) return;
-          named.add(id2);
+  if (window.__ksHidiveContent) {
+    if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {
+    });
+  } else {
+    let videosIn = function(root, out = []) {
+      for (const video of root.querySelectorAll("video")) out.push(video);
+      for (const node of root.querySelectorAll("*")) {
+        if (node.shadowRoot) videosIn(node.shadowRoot, out);
+      }
+      return out;
+    }, mainVideo = function() {
+      const videos = videosIn(document).filter((video) => Number.isFinite(video.duration) && video.duration >= MIN_SECONDS && video.played?.length);
+      return videos.sort((a, b) => b.duration - a.duration)[0] || null;
+    }, videoDone = function() {
+      const video = mainVideo();
+      return Boolean(video && video.currentTime / video.duration >= FINISHED);
+    }, videoStarted = function() {
+      const video = mainVideo();
+      return Boolean(video && video.currentTime >= START_SECONDS);
+    }, hintFrom = function(entry) {
+      return entry ? {
+        series: entry.series || entry.title || "",
+        season: entry.seasonTitle || "",
+        seasonNumber: entry.season,
+        episode: entry.episode || 1
+      } : null;
+    }, askPage = function(kind, fields, timeoutMs = 2e4) {
+      return new Promise((resolve) => {
+        const id2 = Math.random().toString(36).slice(2);
+        const timer = setTimeout(() => {
+          removeEventListener("message", onReply);
+          resolve(null);
+        }, timeoutMs);
+        function onReply(event) {
+          if (event.source !== window || event.origin !== location.origin) return;
+          const data = event.data;
+          if (data?.source !== PAGE_SOURCE || data.kind !== kind || data.id !== id2) return;
+          clearTimeout(timer);
+          removeEventListener("message", onReply);
+          resolve(data);
+        }
+        addEventListener("message", onReply);
+        window.postMessage({ source: "crunchilist-search-ext", kind, id: id2, ...fields }, location.origin);
+      });
+    };
+    window.__ksHidiveContent = true;
+    const PAGE_SOURCE = "crunchilist-search-page";
+    const CHECK_MS = 5e3;
+    const HISTORY_EVERY = 3;
+    if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {
+    });
+    const started = /* @__PURE__ */ new Set();
+    const named = /* @__PURE__ */ new Set();
+    const finished = /* @__PURE__ */ new Set();
+    let historyTick = 0;
+    let historyChecking = false;
+    if (window.top === window) {
+      setInterval(async () => {
+        const id2 = /^\/video\/(\d+)/.exec(location.pathname)?.[1];
+        if (!id2) return;
+        const signalStart = (entry = null) => {
+          if (finished.has(id2)) return;
+          if (entry) {
+            if (named.has(id2)) return;
+            named.add(id2);
+            started.add(id2);
+            chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+            });
+            return;
+          }
+          if (started.has(id2)) return;
           started.add(id2);
-          chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+          chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: null }).catch(() => {
           });
-          return;
+        };
+        const signalFinish = (entry = null) => {
+          if (entry) {
+            if (finished.has(id2) && named.has(id2)) return;
+            named.add(id2);
+          } else if (finished.has(id2)) {
+            return;
+          }
+          finished.add(id2);
+          started.add(id2);
+          chrome.runtime.sendMessage({ type: "hidiveWatched", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+          });
+        };
+        if (videoDone()) signalFinish();
+        else if (videoStarted()) signalStart();
+        historyTick = (historyTick + 1) % HISTORY_EVERY;
+        if (historyTick !== 0 || historyChecking) return;
+        historyChecking = true;
+        try {
+          const reply = await askPage("hidive-history", { page: 1 });
+          if (!reply?.ok || !reply.body) return;
+          const entry = hidiveEntries(reply.body).find((row) => row.id === id2);
+          if (!entry) return;
+          if (hidiveEntryFinished(entry)) signalFinish(entry);
+          else if ((Number(entry.position) || 0) >= START_SECONDS) signalStart(entry);
+        } finally {
+          historyChecking = false;
         }
-        if (started.has(id2)) return;
-        started.add(id2);
-        chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: null }).catch(() => {
-        });
-      };
-      const signalFinish = (entry = null) => {
-        if (entry) {
-          if (finished.has(id2) && named.has(id2)) return;
-          named.add(id2);
-        } else if (finished.has(id2)) {
-          return;
+      }, CHECK_MS);
+    }
+    async function digest(value) {
+      if (!value) return "";
+      const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+      return [...bytes.slice(0, 8)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    async function catalog() {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const items = [];
+      for (const grid of HIDIVE_GRIDS) {
+        let url = hidivePageUrl(hidiveGridUrl(grid), timezone);
+        for (let page = 0; url && page < HIDIVE_MAX_PAGES && items.length < CATALOG_MAX_ITEMS; page += 1) {
+          const reply = await askPage("hidive-grid", { url });
+          if (!reply) throw new Error("HIDIVE isn't ready in that tab. Reload hidive.com, then try again.");
+          if (!reply.ok) throw new Error(reply.error || "HIDIVE didn't answer.");
+          const parsed = parseHidiveGrid(reply.body);
+          items.push(...parsed.items);
+          url = parsed.next ? hidivePageUrl(parsed.next, timezone) : "";
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
-        finished.add(id2);
-        started.add(id2);
-        chrome.runtime.sendMessage({ type: "hidiveWatched", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+      }
+      return { items };
+    }
+    async function history(page) {
+      const reply = await askPage("hidive-history", { page: Number(page) || 1 });
+      if (!reply) throw new Error("HIDIVE isn't ready in that tab. Reload hidive.com while signed in, then try again.");
+      if (!reply.ok) throw new Error(reply.error || "HIDIVE didn't answer.");
+      const body = reply.body;
+      if (!body || !Array.isArray(body.vods)) throw new Error("HIDIVE changed how its watch history is sent. Nothing was imported.");
+      return { entries: hidiveEntries(body), page: body.page, totalPages: body.totalPages, totalResults: body.totalResults, profile: await digest(reply.profile) };
+    }
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id && sender.id !== chrome.runtime.id || sender.tab) return false;
+      if (message?.type === "hidivePing") {
+        askPage("hidive-ready", {}, 800).then((reply) => {
+          sendResponse({ ok: true, ping: true, ready: Boolean(reply?.ready) });
         });
-      };
-      if (videoDone()) signalFinish();
-      else if (videoStarted()) signalStart();
-      historyTick = (historyTick + 1) % HISTORY_EVERY;
-      if (historyTick !== 0 || historyChecking) return;
-      historyChecking = true;
-      try {
-        const reply = await askPage("hidive-history", { page: 1 });
-        if (!reply?.ok || !reply.body) return;
-        const entry = hidiveEntries(reply.body).find((row) => row.id === id2);
-        if (!entry) return;
-        if (hidiveEntryFinished(entry)) signalFinish(entry);
-        else if ((Number(entry.position) || 0) >= START_SECONDS) signalStart(entry);
-      } finally {
-        historyChecking = false;
+        return true;
       }
-    }, CHECK_MS);
-  }
-  async function digest(value) {
-    if (!value) return "";
-    const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-    return [...bytes.slice(0, 8)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-  function askPage(kind, fields) {
-    return new Promise((resolve) => {
-      const id2 = Math.random().toString(36).slice(2);
-      const timer = setTimeout(() => {
-        removeEventListener("message", onReply);
-        resolve(null);
-      }, 2e4);
-      function onReply(event) {
-        if (event.source !== window || event.origin !== location.origin) return;
-        const data = event.data;
-        if (data?.source !== PAGE_SOURCE || data.kind !== kind || data.id !== id2) return;
-        clearTimeout(timer);
-        removeEventListener("message", onReply);
-        resolve(data);
-      }
-      addEventListener("message", onReply);
-      window.postMessage({ source: "crunchilist-search-ext", kind, id: id2, ...fields }, location.origin);
+      if (!["hidiveHistory", "hidiveCatalog"].includes(message?.type)) return false;
+      (message.type === "hidiveCatalog" ? catalog() : history(message.page)).then((payload) => ({ ok: true, payload }), (error) => ({ ok: false, error: error?.message || "HIDIVE didn't answer." })).then(sendResponse);
+      return true;
     });
   }
-  async function catalog() {
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    const items = [];
-    for (const grid of HIDIVE_GRIDS) {
-      let url = hidivePageUrl(hidiveGridUrl(grid), timezone);
-      for (let page = 0; url && page < HIDIVE_MAX_PAGES && items.length < CATALOG_MAX_ITEMS; page += 1) {
-        const reply = await askPage("hidive-grid", { url });
-        if (!reply) throw new Error("HIDIVE isn't ready in that tab. Reload hidive.com, then try again.");
-        if (!reply.ok) throw new Error(reply.error || "HIDIVE didn't answer.");
-        const parsed = parseHidiveGrid(reply.body);
-        items.push(...parsed.items);
-        url = parsed.next ? hidivePageUrl(parsed.next, timezone) : "";
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    }
-    return { items };
-  }
-  async function history(page) {
-    const reply = await askPage("hidive-history", { page: Number(page) || 1 });
-    if (!reply) throw new Error("HIDIVE isn't ready in that tab. Reload hidive.com while signed in, then try again.");
-    if (!reply.ok) throw new Error(reply.error || "HIDIVE didn't answer.");
-    const body = reply.body;
-    if (!body || !Array.isArray(body.vods)) throw new Error("HIDIVE changed how its watch history is sent. Nothing was imported.");
-    return { entries: hidiveEntries(body), page: body.page, totalPages: body.totalPages, totalResults: body.totalResults, profile: await digest(reply.profile) };
-  }
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (sender.id !== chrome.runtime.id || sender.tab || !["hidiveHistory", "hidiveCatalog"].includes(message?.type)) return false;
-    (message.type === "hidiveCatalog" ? catalog() : history(message.page)).then((payload) => ({ ok: true, payload }), (error) => ({ ok: false, error: error?.message || "HIDIVE didn't answer." })).then(sendResponse);
-    return true;
-  });
 })();

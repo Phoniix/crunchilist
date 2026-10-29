@@ -3,7 +3,7 @@
   (() => {
     if (window.__ksKeyGuard) return;
     window.__ksKeyGuard = true;
-    const PANEL_IDS = /* @__PURE__ */ new Set(["ks-site-panel", "cr-corner-host"]);
+    const PANEL_IDS = /* @__PURE__ */ new Set(["ks-site-panel", "cr-corner-host", "crunchilist-tabbar", "ks-watch-guide"]);
     function fromPanel(event) {
       try {
         return event.composedPath().some((node) => node && PANEL_IDS.has(node.id));

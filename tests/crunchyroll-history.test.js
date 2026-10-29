@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CATCH_UP_DAYS, PAGE_SIZE, catchUpCheckpoint, newerThan, parsePage } from "../lib/crunchyroll-history.js";
+import { CATCH_UP_DAYS, PAGE_SIZE, catchUpCheckpoint, checkpointNewest, newerThan, parsePage, tipFromWatched } from "../lib/crunchyroll-history.js";
 
 const episode = (number, { date = "2026-10-01T00:00:00Z", id = `ep-${number}` } = {}) => ({
   id,
@@ -79,4 +79,24 @@ test("catchUpCheckpoint uses the last few days unless a newer checkpoint exists"
   assert.deepEqual(catchUpCheckpoint(null, now), { newestAt: floor, newestKey: "" });
   assert.deepEqual(catchUpCheckpoint({ newestAt: floor - 1, newestKey: "old" }, now), { newestAt: floor, newestKey: "" });
   assert.deepEqual(catchUpCheckpoint({ newestAt: floor + 1, newestKey: "fresh" }, now), { newestAt: floor + 1, newestKey: "fresh" });
+});
+
+test("checkpoint tip ignores unfinished rows so in-progress Netflix titles cannot seal history", () => {
+  const rows = [
+    { key: "mid", playedAt: 300, watched: false },
+    { key: "done", playedAt: 200, watched: true },
+    { key: "older", playedAt: 100, watched: true },
+  ];
+  assert.deepEqual(tipFromWatched(rows), { newestAt: 200, newestKey: "done" });
+  assert.equal(tipFromWatched([{ key: "mid", playedAt: 300, watched: false }]), null);
+  assert.deepEqual(
+    checkpointNewest({ newestAt: 150, newestKey: "prior" }, [{ key: "mid", playedAt: 300, watched: false }]),
+    { newestAt: 150, newestKey: "prior" },
+    "unfinished-only reads keep the stored tip",
+  );
+  assert.deepEqual(
+    checkpointNewest({ newestAt: 250, newestKey: "prior" }, [{ key: "done", playedAt: 200, watched: true }]),
+    { newestAt: 250, newestKey: "prior" },
+    "never move the tip backwards",
+  );
 });

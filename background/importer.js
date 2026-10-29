@@ -3,11 +3,11 @@
 // dismissed, so nothing read is ever lost, and history already read is never read again.
 import { anilist } from "../lib/anilist-api.js";
 import { readEntry, readList, saveEntry, deleteEntry } from "../lib/anilist-list.js";
-import { ACCOUNT_URL, CATCH_UP_DAYS, catchUpCheckpoint, groupRows, historyPageUrl, newerThan, parsePage } from "../lib/crunchyroll-history.js";
+import { ACCOUNT_URL, CATCH_UP_DAYS, catchUpCheckpoint, checkpointNewest, groupRows, historyPageUrl, newerThan, parsePage, tipFromWatched } from "../lib/crunchyroll-history.js";
 import { groupEpisodes } from "../lib/episode-groups.js";
 import { readAllShows } from "../lib/idb.js";
 import { LIVE_ACTION_NAMES, groupNetflix, parseActivity, parseNetflixCsv } from "../lib/netflix-history.js";
-import { GENERAL_RULES, checkGeneral, matchGroups, planChanges, watchedParts } from "../lib/import-plan.js";
+import { GENERAL_RULES, checkGeneral, matchGroups, mergeWatched, planChanges, watchedParts } from "../lib/import-plan.js";
 import { keepLogs } from "../lib/import-log.js";
 import { KEYS } from "../lib/keys.js";
 import { anyPreview, asPreviewMap, blockingPreview, packPreviewMap } from "../lib/import-previews.js";
@@ -24,7 +24,7 @@ import { shouldBumpContinueFromImport } from "../lib/continue-activity.js";
 import { noteActivity, pushSystemNotice } from "./app-notices.js";
 import { mirrorAppliedChanges, noteContinueFromTrackedPlay } from "./continue-activity.js";
 import { pullMalRows, pushMalChange } from "./mal-store.js";
-import { findOpenServiceTab, injectSiteScripts } from "./site-scripts.js";
+import { findOpenServiceTab, injectSiteScripts, syncSiteScripts } from "./site-scripts.js";
 import { loadState } from "./store.js";
 
 const TAB_KEYS = {
@@ -73,13 +73,17 @@ async function waitTabComplete(tabId, { tries = 40, ms = 500 } = {}) {
 async function siteTabAlive(serviceId, tabId) {
   const probe = {
     netflix: { type: "netflixPing" },
-    hidive: { type: "hidiveHistory", page: 1 },
+    hidive: { type: "hidivePing" },
     prime: { type: "primeHistory", token: "" },
     tubi: { type: "tubiCatalog" },
   }[serviceId];
   if (!probe || tabId == null) return false;
   const reply = await chrome.tabs.sendMessage(tabId, probe).catch(() => null);
-  return Boolean(reply?.ok);
+  if (!reply?.ok) return false;
+  // A HIDIVE tab can answer a ping before the page hook has seen a signed-in request.
+  // Reloading then (scripts already registered) is what lets document_start capture the auth headers.
+  if (serviceId === "hidive" && reply.ready === false) return false;
+  return true;
 }
 
 async function waitSiteAlive(serviceId, tabId, { tries = 24, ms = 500 } = {}) {
@@ -97,6 +101,9 @@ async function waitSiteAlive(serviceId, tabId, { tries = 24, ms = 500 } = {}) {
 // requireAlive: single-site import fails clearly when the tab never comes back; Import all keeps going.
 async function refreshOpenSiteTabs(serviceIds, { requireAlive = false } = {}) {
   const ids = [...new Set((serviceIds || []).filter(Boolean))];
+  // Register before any reload. A reload that happens first never runs the document_start
+  // HIDIVE hook, so the later inject misses the sign-in request and history stays empty.
+  if (ids.some((id) => TAB_KEYS[id])) await syncSiteScripts().catch(() => {});
   for (const id of ids) {
     if (cancelled) return;
     let tabId = TAB_KEYS[id] ? await boundTabId(id) : null;
@@ -419,7 +426,11 @@ async function readPages({ draft, source, cursor, newest, checkpoint, phase }) {
       break;
     }
     draft.seen += parsed.count;
-    if (count === 0 && phase === "newer" && parsed.rows[0]) newest.value = { newestAt: parsed.rows[0].playedAt, newestKey: parsed.rows[0].key };
+    // Only finished rows move the tip — an in-progress Netflix title must not seal the checkpoint.
+    if (count === 0 && phase === "newer") {
+      const tip = tipFromWatched(parsed.rows);
+      if (tip) newest.value = tip;
+    }
     const kept = phase === "newer" ? newerThan(parsed.rows, checkpoint) : { rows: parsed.rows, reached: false };
     draft.rows.push(...kept.rows);
     draft.fresh = (draft.fresh || 0) + kept.rows.length;
@@ -488,9 +499,28 @@ async function readHistory(source, { full, catchUp = false }) {
     else if (read.failed) { draft.cursor = read.cursor; notes.push(`Stopped early: ${read.failed} The next import continues from there.`); }
     await save(KEYS.importDraft, draft);
   }
+  // Netflix: a prior import may have sealed the checkpoint while titles were still in progress (same date when they finish).
+  // Re-check the first activity page for recent finishes that newerThan would otherwise skip.
+  if (!catchUp && !full && service === "netflix" && !(draft.fresh > 0)) {
+    try {
+      const parsed = await source.page(source.first, 0);
+      const floor = Date.now() - CATCH_UP_DAYS * 24 * 60 * 60 * 1000;
+      const have = new Set(draft.rows.map((row) => row.key));
+      const replay = parsed.rows.filter((row) => row.watched && row.playedAt >= floor && !have.has(row.key));
+      if (replay.length) {
+        draft.rows.push(...replay);
+        draft.fresh = (draft.fresh || 0) + replay.length;
+        notes.push("Re-checked recent Netflix finishes that may have been skipped while still in progress.");
+        await save(KEYS.importDraft, draft);
+      }
+    } catch {
+      // Leave as nothing-new; the next import can try again.
+    }
+  }
+  const tip = checkpointNewest(stored, draft.rows);
   const nextCheckpoint = {
-    newestAt: newest.value?.newestAt || stored.newestAt || 0,
-    newestKey: newest.value?.newestKey || stored.newestKey || "",
+    newestAt: tip.newestAt,
+    newestKey: tip.newestKey,
     // Catch-up never claims a full archive; keep any prior end flag only.
     end: Boolean(catchUp ? stored.end : (stored.end || draft.reachedEnd)),
     oldestAt: catchUp ? stored.oldestAt || 0 : (draft.reachedEnd ? draft.oldestAt : stored.oldestAt || 0),
@@ -577,23 +607,45 @@ async function buildPreview({ service, groups, checkpoints = [], seen, notes, tr
     notes,
   };
   await writePreview(preview);
-  // Seed Continue Watching as soon as the preview knows a bumpable play — don't wait for Apply.
-  for (const change of preview.changes || []) {
+  // Seed Continue Watching from every confident match — including titles already up to date on AniList.
+  // (Waiting for Apply left the rail empty when the preview had no list changes.)
+  for (const item of mergeWatched(watched)) {
+    const info = media.get(item.anilistId);
+    if (!info) continue;
+    const before = entries.get(item.anilistId) || null;
+    const beforeProgress = Math.max(0, Number(before?.progress) || 0);
+    const progress = Math.max(beforeProgress, Math.max(0, Number(item.progress) || 0));
+    const episodes = info.episodes || null;
+    const complete = Boolean(episodes && progress >= episodes && info.status === "FINISHED");
     if (!shouldBumpContinueFromImport({
-      after: change.after,
-      before: change.before,
-      episodes: change.episodes,
-      watched: change.watched,
+      after: { status: complete ? "COMPLETED" : "CURRENT", progress },
+      before: { status: before?.status || null, progress: beforeProgress },
+      episodes,
+      watched: { lastPlayed: item.lastPlayed },
     })) continue;
-    const source = change.sources?.[0];
+    const source = item.sources?.[0];
     const fromKey = String(source?.key || "").split(":")[0];
     const playService = fromKey || (service !== "all" ? service : "import");
     await noteContinueFromTrackedPlay({
       service: playService,
-      series: change.title || source?.series || "",
+      series: info.title || source?.series || "",
       season: source?.season || "",
-      episode: change.after?.progress,
-      anilistId: change.anilistId,
+      episode: progress,
+      anilistId: item.anilistId,
+    }).catch(() => {});
+  }
+  // Titles waiting for a pick still belong on the rail so a fresh watch isn't invisible.
+  for (const item of pending) {
+    const episodes = Array.isArray(item.input?.episodes) ? item.input.episodes : [];
+    const progress = episodes.length ? Math.max(...episodes.map(Number).filter((n) => n > 0)) : 0;
+    if (!progress || !item.input?.series) continue;
+    await noteContinueFromTrackedPlay({
+      service: item.service || (service !== "all" ? service : "import"),
+      series: item.input.series,
+      season: item.input.season || "",
+      seasonNumber: item.input.seasonNumber ?? null,
+      episode: progress,
+      provisional: true,
     }).catch(() => {});
   }
   await notifyPreviewReady(preview).catch(() => {});
@@ -822,7 +874,15 @@ async function runImport(read, service) {
     const checkpoints = result.ckey ? [{ ckey: result.ckey, checkpoint: result.checkpoint }] : [];
     if (!groups.length) {
       if (checkpoints.length) await commitCheckpoint({ checkpoints });
-      setJob({ phase: "idle", running: false, note: "", message: result.seen ? `No newly finished episodes in ${result.seen.toLocaleString()} new history entries.` : "Nothing new since your last import." });
+      const unfinished = (result.rows || []).filter((row) => !row.watched).length;
+      setJob({
+        phase: "idle",
+        running: false,
+        note: "",
+        message: result.seen
+          ? `No newly finished episodes in ${result.seen.toLocaleString()} new history entries${unfinished ? ` (${unfinished.toLocaleString()} still in progress)` : ""}.`
+          : "Nothing new since your last import.",
+      });
       return null;
     }
     const preview = await buildPreview({ service, groups, checkpoints, seen: result.seen, notes: result.notes });

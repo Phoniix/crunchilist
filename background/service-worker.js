@@ -39,6 +39,7 @@ import {
 import { continueWatching, titleSearch } from "./title-search.js";
 import { muteTitle, setUnrecommended, unmuteTitle } from "./unrecommended.js";
 import { refreshWhereMap, whereMapStatus } from "./where-map-store.js";
+import { applyImportHistoryFix } from "../lib/import-migrate.js";
 
 function seriesIdFrom(id) {
   return String(id || "").replace(/^sight:/, "");
@@ -395,6 +396,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   refreshIdMap({ force: true }).catch(() => {});
   syncSiteScripts().catch(() => {});
   setupImportAlarms();
+  applyImportHistoryFix().catch(() => {});
   if (details?.reason === "install") openApp("#welcome").catch(() => {});
   if (details?.reason === "update") reopenAfterUpdate().catch(() => {});
 });
@@ -413,6 +415,8 @@ chrome.runtime.onStartup.addListener(() => {
   refreshIdMap().catch(() => {});
   syncSiteScripts().catch(() => {});
   setupImportAlarms();
+  // Idempotent: covers Load unpacked reloads where onInstalled may not fire as "update".
+  applyImportHistoryFix().catch(() => {});
 });
 chrome.permissions.onAdded?.addListener(() => { syncSiteScripts().catch(() => {}); });
 chrome.permissions.onRemoved?.addListener(() => { syncSiteScripts().catch(() => {}); });

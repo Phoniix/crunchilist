@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { splitPlayerTitle, splitTitle, usablePlayerSeries } from "../lib/netflix-history.js";
+import { netflixHistoryStalled, splitPlayerTitle, splitTitle, usablePlayerSeries } from "../lib/netflix-history.js";
 
 test("splitPlayerTitle treats Show: Episode as a series (unlike CSV splitTitle)", () => {
   assert.deepEqual(splitPlayerTitle("Death Note: Rebirth"), {
@@ -27,6 +27,13 @@ test("junk tab titles like Netflix are never treated as a show", () => {
   assert.equal(splitPlayerTitle("Watch Netflix"), null);
   assert.equal(usablePlayerSeries("Netflix"), "");
   assert.equal(usablePlayerSeries("Death Note"), "Death Note");
+});
+
+test("a first activity page with a known total but no rows is still loading, not an empty account", () => {
+  assert.equal(netflixHistoryStalled({ viewedItems: [], vhSize: 40 }, 0), true);
+  assert.equal(netflixHistoryStalled({ viewedItems: [], vhSize: 0 }, 0), false);
+  assert.equal(netflixHistoryStalled({ viewedItems: [{ movieID: 1 }], vhSize: 40 }, 0), false);
+  assert.equal(netflixHistoryStalled({ viewedItems: [], vhSize: 40 }, 1), false);
 });
 
 test("Show: Episode keeps the series head, not the episode name", () => {

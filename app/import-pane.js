@@ -126,9 +126,19 @@ function onePreviewCard(imp, preview) {
     : "";
   const who = sourceName(preview.service);
   if (!changes.length) {
-    return `<div class="panel" data-preview-svc="${esc(preview.service)}"><div class="line"><div class="grow"><b>${esc(who)}: nothing to change on AniList yet</b><small>${esc(summary)}</small></div>
+    const why = [
+      stats.unchanged ? `${stats.unchanged.toLocaleString()} already match your AniList` : "",
+      stats.pending ? `${stats.pending.toLocaleString()} need your pick` : "",
+      stats.dropped ? `${stats.dropped.toLocaleString()} season${stats.dropped === 1 ? "" : "s"} skipped as not anime` : "",
+    ].filter(Boolean).join(" · ");
+    const dropped = Array.isArray(preview.droppedNames) ? preview.droppedNames.slice(0, 12) : [];
+    const droppedHint = dropped.length
+      ? `<details class="dropped"><summary>${dropped.length.toLocaleString()} skipped title${dropped.length === 1 ? "" : "s"}</summary><p class="hint-note">${dropped.map(esc).join(" · ")}</p></details>`
+      : "";
+    return `<div class="panel" data-preview-svc="${esc(preview.service)}"><div class="line"><div class="grow"><b>${esc(who)}: nothing to change on AniList yet</b><small>${esc(summary)}${why ? ` · ${esc(why)}` : ""}</small></div>
       <button class="btn accent" data-act="import-close" data-svc="${esc(preview.service)}">Close</button></div>
-      ${pendingNudge || (imp?.pendingCount ? `<p class="hint-note"><a href="#needs-pick">${imp.pendingCount.toLocaleString()} title${imp.pendingCount === 1 ? "" : "s"} waiting in Needs your pick</a>.</p>` : "")}</div>`;
+      ${pendingNudge || (imp?.pendingCount ? `<p class="hint-note"><a href="#needs-pick">${imp.pendingCount.toLocaleString()} title${imp.pendingCount === 1 ? "" : "s"} waiting in Needs your pick</a>.</p>` : "")}
+      ${droppedHint}</div>`;
   }
   const list = changes.map((change) => `<label class="change">
     <input type="checkbox" data-pick="${change.anilistId}" ${skip.has(change.anilistId) ? "" : "checked"}>

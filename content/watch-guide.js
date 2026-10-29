@@ -23,6 +23,7 @@ const CSS = `
   opacity: 0;
   transform: translateY(12px);
   transition: opacity .22s ease, transform .22s ease;
+  pointer-events: auto;
 }
 .card.show {
   opacity: 1;
@@ -128,6 +129,9 @@ function adopt(host, doc = document) {
  */
 export function createWatchGuide(doc = document) {
   let hideTimer = 0;
+  let hideAt = 0;
+  let remaining = SHOW_MS;
+  let paused = false;
   const host = ensureHost(doc);
   const card = host.shadowRoot.querySelector(".card");
 
@@ -135,8 +139,46 @@ export function createWatchGuide(doc = document) {
     adopt(host, doc);
   }
 
+  function clearHide() {
+    clearTimeout(hideTimer);
+    hideTimer = 0;
+  }
+
+  function hide() {
+    clearHide();
+    paused = false;
+    remaining = 0;
+    card.classList.remove("show");
+  }
+
+  function scheduleHide(ms) {
+    clearHide();
+    remaining = Math.max(0, ms);
+    hideAt = Date.now() + remaining;
+    paused = false;
+    if (remaining <= 0) {
+      hide();
+      return;
+    }
+    hideTimer = setTimeout(hide, remaining);
+  }
+
+  function pauseHide() {
+    if (!hideTimer || paused) return;
+    remaining = Math.max(0, hideAt - Date.now());
+    clearHide();
+    paused = true;
+  }
+
+  function resumeHide() {
+    if (!paused) return;
+    scheduleHide(remaining);
+  }
+
   doc.addEventListener("fullscreenchange", onFs);
   doc.addEventListener("webkitfullscreenchange", onFs);
+  card.addEventListener("pointerenter", pauseHide);
+  card.addEventListener("pointerleave", resumeHide);
 
   function show(payload = {}) {
     const text = String(payload.text || "").trim();
@@ -152,14 +194,13 @@ export function createWatchGuide(doc = document) {
     card.classList.remove("show");
     void card.offsetWidth;
     card.classList.add("show");
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      card.classList.remove("show");
-    }, SHOW_MS);
+    scheduleHide(SHOW_MS);
   }
 
   function destroy() {
-    clearTimeout(hideTimer);
+    clearHide();
+    card.removeEventListener("pointerenter", pauseHide);
+    card.removeEventListener("pointerleave", resumeHide);
     doc.removeEventListener("fullscreenchange", onFs);
     doc.removeEventListener("webkitfullscreenchange", onFs);
     host.remove();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kivori SekAI",
-  "version": "1.0.119",
+  "version": "1.0.120",
   "minimum_chrome_version": "114",
   "description": "Find anime across your services, get AI-ranked picks, and track what you watch with AniList.",
   "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "scripting", "alarms", "webNavigation", "declarativeNetRequestWithHostAccess"],
@@ -101,7 +101,13 @@
       "resources": ["fonts/nunito-latin.woff2"],
       "matches": [
         "https://www.crunchyroll.com/*",
-        "https://*.crunchyroll.com/*"
+        "https://*.crunchyroll.com/*",
+        "https://www.netflix.com/*",
+        "https://www.hidive.com/*",
+        "https://tubitv.com/*",
+        "https://www.primevideo.com/*",
+        "https://www.amazon.com/*",
+        "https://www.hulu.com/*"
       ]
     },
     {

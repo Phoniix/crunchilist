@@ -1,8 +1,9 @@
 (() => {
   // content/sites/hidive-page.js
   (() => {
-    if (window.__crunchilistSearchHook) return;
-    window.__crunchilistSearchHook = true;
+    const HOOK_VERSION = 2;
+    if (window.__crunchilistSearchHook === HOOK_VERSION) return;
+    window.__crunchilistSearchHook = HOOK_VERSION;
     const SOURCE = "crunchilist-search-page";
     const API = "https://dce-frontoffice.imggaming.com/";
     const KEEP = ["authorization", "x-api-key", "realm", "x-app-var", "app", "accept-language"];
@@ -51,6 +52,10 @@
       const data = event.data;
       if (data?.source !== "crunchilist-search-ext" || typeof data.id !== "string") return;
       const reply = (result) => window.postMessage({ source: SOURCE, kind: data.kind, id: data.id, ...result }, location.origin);
+      if (data.kind === "hidive-ready") {
+        reply({ ok: true, ready: Boolean(headers) });
+        return;
+      }
       if (data.kind === "hidive-history") historyPage(Number.isInteger(data.page) && data.page > 0 && data.page < 1e4 ? data.page : 1).then(reply);
       if (data.kind === "hidive-grid") gridPage(data.url).then(reply);
     });

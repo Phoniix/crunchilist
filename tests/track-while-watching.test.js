@@ -393,6 +393,43 @@ test("Netflix activity bump never promotes a different show still at the top of 
   assert.ok(activity.some((row) => row.anilistId === 180000 || /tetsuryo/i.test(row.title || "")), "must bump the /watch/id being played");
 });
 
+test("Netflix finish without a video id does not scan activity or bump the newest row", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  const send = chrome.tabs.sendMessage;
+  let activityCalls = 0;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixActivity" || message?.type === "netflixWatchNow") activityCalls += 1;
+    return {
+      ok: true,
+      payload: {
+        vhSize: 1,
+        viewedItems: [{
+          seriesTitle: "Death Note",
+          series: 1,
+          movieID: 9,
+          date: Date.now(),
+          duration: 1400,
+          bookmark: 0,
+          genres: ["Anime Series"],
+          title: "Death Note",
+        }],
+      },
+    };
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "" },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/browse", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(activityCalls, 0);
+  assert.equal((stored[KEYS.continueActivity] || []).length, 0);
+});
+
 test("HIDIVE history bump never promotes a different show still at the top of history", async () => {
   reset();
   withTracking();

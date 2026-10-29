@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 68 68" width="512" height="512">
   <title>Kivori SekAI</title>
-  <!-- Meridian globe · pick #2  violet tile, white globe, cyan route -->
   <rect width="68" height="68" rx="15" fill="#5b4bff"/>
   <circle cx="34" cy="34" r="18" fill="none" stroke="#eef0ff" stroke-width="3.5"/>
   <ellipse cx="34" cy="34" rx="8" ry="18" fill="none" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>

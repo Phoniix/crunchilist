@@ -192,6 +192,23 @@ test("show links: catalog URL replaces AniList's, a missing service is added, de
   assert.deepEqual(liveGap[3], [{ service: "netflix", url: "https://www.netflix.com/title/801", checked: true, seen: false }]);
 });
 
+test("local Netflix catalog wins over where-map gaps for the same service", () => {
+  const gaps = {
+    143338: { netflix: "https://www.netflix.com/title/81662402", hulu: "https://www.hulu.com/series/x" },
+    5: { netflix: "https://www.netflix.com/title/80057281" },
+  };
+  const catalogs = {
+    netflix: { at: 10, error: "", titles: 1, matched: 1, links: { 5: "https://www.netflix.com/title/80057281" } },
+  };
+  const found = availability(catalogs, ["netflix"], { gaps });
+  assert.equal(found[143338]?.some((row) => row.service === "netflix"), false);
+  assert.equal(found[143338]?.find((row) => row.service === "hulu")?.checked, true);
+  assert.deepEqual(found[5], [{ service: "netflix", url: "https://www.netflix.com/title/80057281", checked: true, seen: false }]);
+  // No successful catalog yet → gaps still fill Netflix.
+  const fromGaps = availability({ netflix: { tried: 10, error: "tab closed", links: {} } }, ["netflix"], { gaps });
+  assert.equal(fromGaps[143338]?.find((row) => row.service === "netflix")?.url, "https://www.netflix.com/title/81662402");
+});
+
 const MATCHES = {
   "netflix:frieren": { anilistId: 3, how: "auto", names: ["Frieren: Beyond Journey's End — Season 1"] },
   "prime:frieren": { anilistId: 3, how: "auto", names: ["Frieren"] },

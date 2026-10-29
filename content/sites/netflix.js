@@ -2,7 +2,7 @@
 // and the Anime Series / Anime Movies genre catalogs, then reads them on request with the user's own Netflix
 // sign-in (the same calls Netflix's pages make). Nothing is changed on Netflix; tokens never leave this tab.
 import { CATALOG_MAX_ITEMS, NETFLIX_ANIME_MOVIES, NETFLIX_CATALOG_PAGE, NETFLIX_GENRES, NETFLIX_MAX_PAGES, parseNetflixGenrePage } from "../../lib/catalogs.js";
-import { netflixInfo, seasonNumberOf, splitPlayerTitle } from "../../lib/netflix-history.js";
+import { netflixHistoryStalled, netflixInfo, seasonNumberOf, splitPlayerTitle } from "../../lib/netflix-history.js";
 import { FINISHED } from "../../lib/watch-tracking.js";
 import { START_SECONDS } from "../../lib/watch-loop.js";
 
@@ -118,13 +118,13 @@ const baseHeaders = (me) => ({
 // Prefer the page world for Netflix POSTs (cookies / CSRF match the site). Fall back to this world if needed.
 async function post(url, headers, body) {
   const viaPage = await askPage("fetch-request", { url, headers, body }, 12000);
-  if (viaPage) {
-    if (viaPage.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
-    if (!viaPage.ok) {
-      cached = null;
-      throw new Error(`Netflix didn't answer (${viaPage.status || 0}). Reload Netflix and try again, or use the file upload: netflix.com/viewingactivity, then Download all.`);
-    }
-    return viaPage.json;
+  // status 0 / no reply means the page hook never got an HTTP response (missing hook, timeout, or fetch throw).
+  // A real HTTP status is final — don't hide a 401/500 behind the isolated-world fallback.
+  if (viaPage?.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
+  if (viaPage?.ok) return viaPage.json;
+  if (viaPage?.status) {
+    cached = null;
+    throw new Error(`Netflix didn't answer (${viaPage.status}). Reload Netflix and try again, or use the file upload: netflix.com/viewingactivity, then Download all.`);
   }
   const response = await fetch(url, { method: "POST", credentials: "include", headers, body });
   if (response.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
@@ -138,7 +138,7 @@ async function post(url, headers, body) {
 async function historyPage(me, page) {
   const path = encodeURIComponent(JSON.stringify(["aui", "viewingActivity", page, PAGE_SIZE]));
   const json = await post(
-    `/api/aui/pathEvaluator/web/%5E2.0.0?method=call&callPath=${path}&falcor_server=0.1.0`,
+    `/api/aui/pathEvaluator/web/^2.0.0?method=call&callPath=${path}&falcor_server=0.1.0`,
     {
       ...baseHeaders(me),
       "x-netflix.client.request.name": "ui/xhrUnclassified",
@@ -148,6 +148,7 @@ async function historyPage(me, page) {
   );
   const value = json?.jsonGraph?.aui?.viewingActivity?.value;
   if (!value || !Array.isArray(value.viewedItems)) throw new Error("Netflix changed how viewing activity is sent. Use the file upload for now: netflix.com/viewingactivity, then Download all.");
+  if (netflixHistoryStalled(value, page)) throw new Error("Netflix's viewing activity hasn't loaded in that tab yet. Wait a few seconds and try the import again.");
   return value;
 }
 

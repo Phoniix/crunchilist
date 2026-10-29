@@ -1,6 +1,7 @@
 // Full CR-equivalent corner panel on connected non-Crunchyroll streaming sites.
-// Bundled to content/site-panel.js — no page badges / player bar / CMS scan.
+// Bundled to content/site-panel.js — no page badges / CMS scan.
 import { createPanel } from "./panel.js";
+import { createPlayerBar, pauseVideos } from "./player-bar.js";
 import { SEARCH_PLATFORMS } from "../ui/search-view.js";
 import { ENABLED_KEY, PANEL_ENABLED_KEY, isPanelEnabled } from "../lib/enabled.js";
 import { bootWatchGuide } from "./watch-guide.js";
@@ -13,8 +14,23 @@ if (!globalThis.__ksSitePanelBooted) {
 
 let activeService = "";
 let started = false;
+let panel;
+let playerBar;
+
+function send(type, payload = {}) {
+  return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
+    ok: false,
+    error: /context invalidated/i.test(error?.message || "")
+      ? "Kivori SekAI was updated. Reload this tab to keep using it."
+      : error?.message || "Extension unavailable",
+  }));
+}
 
 function boot() {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "pauseVideo") pauseVideos(document);
+    if (message?.type === "tabRoleChanged" && playerBar) playerBar.refresh(message.note);
+  });
   const begin = async () => {
     if (window.top !== window) return;
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -22,7 +38,7 @@ function boot() {
       if (!(PANEL_ENABLED_KEY in changes) && !(ENABLED_KEY in changes)) return;
       chrome.storage.local.get([ENABLED_KEY, PANEL_ENABLED_KEY]).then((stored) => {
         if (activeService && !isPanelEnabled(activeService, stored)) stopPanel();
-        else if (!document.getElementById("ks-site-panel")) startPanel().catch(() => {});
+        else startPanel().catch(() => {});
       });
     });
     await startPanel();
@@ -33,18 +49,40 @@ function boot() {
 
 function stopPanel() {
   started = false;
-  document.getElementById("ks-site-panel")?.remove();
+  panel?.host.remove();
+  panel = null;
+}
+
+function ensurePlayerBar() {
+  if (window.top !== window) return;
+  if (!playerBar) playerBar = createPlayerBar(document, { send, tips: false });
+  if (!playerBar.host.isConnected) document.documentElement.append(playerBar.host);
+  playerBar.refresh();
+}
+
+function syncFullscreen() {
+  const video = document.querySelector("video");
+  const element = document.fullscreenElement || document.webkitFullscreenElement;
+  const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
+  const on = Boolean(element || videoFullscreen);
+  panel?.setFullscreen(on);
+  playerBar?.setFullscreen(on);
 }
 
 async function startPanel() {
   if (window.top !== window) return;
-  if (document.getElementById("ks-site-panel")) {
-    started = true;
+  const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
+  if (hello?.ok && hello.service) {
+    activeService = hello.service;
+    ensurePlayerBar();
+  }
+  if (!hello?.ok || !hello.show) {
+    if (hello?.service) activeService = hello.service;
+    stopPanel();
     return;
   }
-  const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
-  if (!hello?.ok || !hello.show) {
-    activeService = hello?.service || activeService;
+  if (panel?.host.isConnected || document.getElementById("ks-site-panel")) {
+    started = true;
     return;
   }
 
@@ -53,14 +91,7 @@ async function startPanel() {
   const color = hello.color || "#ff7a2f";
   const layout = hello.layout || {};
 
-  const send = (type, payload = {}) => chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
-    ok: false,
-    error: /context invalidated/i.test(error?.message || "")
-      ? "Kivori SekAI was updated. Reload this tab to keep using it."
-      : error?.message || "Extension unavailable",
-  }));
-
-  const panel = createPanel(document, {
+  panel = createPanel(document, {
     send,
     site: hello.siteFilter || activeService,
     platforms: SEARCH_PLATFORMS,
@@ -74,21 +105,15 @@ async function startPanel() {
   });
 
   document.documentElement.append(panel.host);
+  ensurePlayerBar();
   started = true;
-
-  function syncFullscreen() {
-    const video = document.querySelector("video");
-    const element = document.fullscreenElement || document.webkitFullscreenElement;
-    const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
-    panel.setFullscreen(Boolean(element || videoFullscreen));
-  }
 
   document.addEventListener("fullscreenchange", syncFullscreen);
   document.addEventListener("webkitfullscreenchange", syncFullscreen);
   window.addEventListener("resize", syncFullscreen);
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (!started || !document.getElementById("ks-site-panel")) return;
+    if (!started || !panel?.host.isConnected) return;
     if (message?.type === "enriched" && message.view) panel.setView(message.view, { syncOpen: true });
     if (message?.type === "activity") {
       const list = Array.isArray(message.tasks) ? message.tasks : [];

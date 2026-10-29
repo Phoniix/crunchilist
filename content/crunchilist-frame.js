@@ -92,14 +92,7 @@
   var TIP_MS = 9e3;
   var TIP_WIDTH = 250;
   var TIP_SEEN = "crunchilist-back-tip";
-  function playerBox(doc) {
-    const video = doc.querySelector("video");
-    for (const node of [...doc.querySelectorAll(PLAYER), video]) {
-      const rect = node?.getBoundingClientRect();
-      if (rect && rect.width > 240 && rect.height > 135) return rect;
-    }
-    return null;
-  }
+  var BACK_LABEL = "Open Kivori SekAI";
   function headerBottom(doc) {
     const header = doc.querySelector(".erc-large-header");
     const bar = header && [...header.querySelectorAll("*")].find((node) => node.getBoundingClientRect().height > 30);
@@ -124,6 +117,18 @@
     }
     return best;
   }
+  function playerBox(doc) {
+    const main = mainVideo(doc.querySelectorAll("video"));
+    if (main) {
+      const rect = main.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    for (const node of doc.querySelectorAll(PLAYER)) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    return null;
+  }
   function createPlayerBar(doc, { send, tips = false, frame = false }) {
     const win = doc.defaultView;
     const host = doc.createElement("div");
@@ -131,12 +136,12 @@
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Kivori SekAI</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>${BACK_LABEL}</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Kivori SekAI tab whenever you're done watching.</small>
+    <b>Click here to open Kivori SekAI</b><small>Switches to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>

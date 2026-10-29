@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hidiveEntries, hidiveEntryFinished, hidiveRows } from "../lib/hidive-history.js";
+import { PAGE_SIZE, hidiveEntries, hidiveEntryFinished, hidiveRows, parseHidivePage } from "../lib/hidive-history.js";
 
 const vod = (id, episode, watchedAt, watchProgress, extra = {}) => ({
   id,
@@ -33,4 +33,11 @@ test("hidiveRows still marks finished vs mid-watch the same way", () => {
   delete finished.watchProgress;
   const rows = hidiveRows(hidiveEntries({ vods: [vod(11, 2, 9_500, 713), finished] }));
   assert.deepEqual(rows.map((row) => [row.episode, row.watched]), [[2, false], [1, true]]);
+});
+
+test("parseHidivePage keeps reading when totalPages is missing but the page is full", () => {
+  const full = Array.from({ length: PAGE_SIZE }, (_, i) => vod(100 + i, i + 1, 10_000 - i, 1400));
+  assert.equal(parseHidivePage({ entries: hidiveEntries({ vods: full }), page: 1 }).more, true);
+  assert.equal(parseHidivePage({ entries: hidiveEntries({ vods: [vod(1, 1, 1_000, 1400)] }), page: 1 }).more, false);
+  assert.equal(parseHidivePage({ entries: hidiveEntries({ vods: full }), page: 1, totalPages: 1 }).more, false);
 });

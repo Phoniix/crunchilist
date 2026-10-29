@@ -64,6 +64,12 @@ test("HIDIVE history: more pages until the last one, and an empty page ends it",
   assert.equal(parseHidivePage({ entries: [], page: 1, totalPages: 5 }).more, false);
 });
 
+test("HIDIVE history: without totalPages, a full page keeps going and a short page ends", () => {
+  const full = Array.from({ length: PAGE_SIZE }, (_, i) => vod(100 + i, i + 1, 10_000 - i, 1400));
+  assert.equal(parseHidivePage({ entries: hidiveEntries({ vods: full }), page: 1 }).more, true);
+  assert.equal(parseHidivePage({ entries: hidiveEntries(PAGE), page: 1 }).more, false);
+});
+
 test("the HIDIVE page script never alters a request and keeps the sign-in in the page", () => {
   const text = readFileSync(path.join(SEARCH, "src", "content", "hidive-page.js"), "utf8");
   assert.match(text, /originalFetch\.apply\(this, args\)/);

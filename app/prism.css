@@ -272,6 +272,9 @@ img { display: block; }
 
 /* Streaming availability (one or more services) */
 .avail { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 4px 10px 4px 5px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+a.avail { color: inherit; text-decoration: none; cursor: pointer; }
+a.avail:hover { filter: brightness(1.12); }
+a.avail:focus-visible { outline: 2px solid color-mix(in srgb, var(--svc, var(--accent)) 70%, #fff); outline-offset: 2px; }
 .avail svg { width: 16px; height: 16px; flex: none; }
 .avail.on { background: rgba(244, 117, 33, .16); color: #ff9a52; border: 1px solid rgba(244, 117, 33, .35); }
 .avail.off { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--muted); border: 1px dashed color-mix(in srgb, var(--text) 28%, transparent); }

@@ -625,7 +625,7 @@
   ];
   var STATUS_LABEL = { in_progress: "Watching", plan: "Planned", finished: "Finished", dropped: "Dropped" };
   function createSearchView({
-    send,
+    send: send2,
     site = "all",
     siteToggle = true,
     platforms = SEARCH_PLATFORMS,
@@ -723,7 +723,7 @@
           siteOnly = false;
         }
         paintToggles();
-        send("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {
+        send2("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {
         });
         run();
       });
@@ -920,7 +920,7 @@
       const save = async (status) => {
         select.disabled = true;
         plan.disabled = true;
-        const response = await send("setStatus", { id: item.id, status });
+        const response = await send2("setStatus", { id: item.id, status });
         select.disabled = false;
         plan.disabled = false;
         if (!response?.ok) {
@@ -1127,7 +1127,7 @@
       current.loading = true;
       sentinel.replaceChildren(logoLoader({ label: "Loading more\u2026", size: "is-sm" }));
       sentinel.classList.add("is-loading");
-      const response = await send("catalogSearch", { ...current.params, offset: current.offset });
+      const response = await send2("catalogSearch", { ...current.params, offset: current.offset });
       current.loading = false;
       sentinel.classList.remove("is-loading");
       sentinel.replaceChildren();
@@ -1186,7 +1186,7 @@
     function watchModelDownload(retry) {
       window.clearInterval(modelPoll);
       modelPoll = window.setInterval(async () => {
-        const progress = await send("catalogProgress");
+        const progress = await send2("catalogProgress");
         if (!progress?.ok || !progress.modelDownloading) {
           window.clearInterval(modelPoll);
           writeNote(progress?.modelStalled ? progress.modelNote : "");
@@ -1205,7 +1205,7 @@
     }
     async function confirmDownload() {
       if (!askDownload) return true;
-      const response = await send("modelStatus");
+      const response = await send2("modelStatus");
       if (!response?.status?.needsDownload) return true;
       if (downloadDeclined) return false;
       closeAsk(false);
@@ -1220,7 +1220,7 @@
       if (head) head.replaceWith(aiState(text, false));
     }
     async function rerank(id, query, items, render) {
-      const answer = await send("catalogRerank", { query, chip, site: currentSite, siteOnly, ids: items.slice(0, 20).map((item) => item.id) });
+      const answer = await send2("catalogRerank", { query, chip, site: currentSite, siteOnly, ids: items.slice(0, 20).map((item) => item.id) });
       if (id !== seq) return;
       if (answer?.ok && answer.results?.length) {
         render(answer.results, answer.by);
@@ -1239,7 +1239,7 @@
       if (!current) forYouSeen = /* @__PURE__ */ new Set();
       for (const pickId of last) forYouSeen.add(pickId);
       button.replaceWith(aiState(current ? "Rerolling" : "Picking", true));
-      const answer = await send("catalogRerank", {
+      const answer = await send2("catalogRerank", {
         query: "",
         chip: "",
         site: currentSite,
@@ -1283,7 +1283,7 @@
       form.classList.add("is-busy");
       showResultsLoader(query ? "Searching\u2026" : browse ? "Loading titles\u2026" : "Loading\u2026");
       const params = { query, chip, site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse };
-      const response = await send("catalogSearch", params);
+      const response = await send2("catalogSearch", params);
       if (id !== seq) return;
       form.classList.remove("is-busy");
       if (!response?.ok) {
@@ -1362,7 +1362,7 @@
         showResultsLoader("Looking up\u2026");
       }
       suggestTimer = window.setTimeout(async () => {
-        const response = await send("catalogSuggest", { query, chip, site: currentSite, siteOnly });
+        const response = await send2("catalogSuggest", { query, chip, site: currentSite, siteOnly });
         if (token !== suggestSeq || input.value.trim() !== query) return;
         form.classList.remove("is-busy");
         suggestions = response?.suggestions || [];
@@ -1371,7 +1371,7 @@
       }, liteMode ? 450 : 130);
     }
     async function refreshModel() {
-      const response = await send("modelStatus");
+      const response = await send2("modelStatus");
       const state = response?.ok ? response.status?.state : "unknown";
       modelOnline = state === "online" ? true : state === "offline" ? false : null;
       paintAi();
@@ -1415,7 +1415,7 @@
     askYes.addEventListener("click", () => {
       if (askBox.checked) {
         askDownload = false;
-        send("setSettings", { patch: { askModelDownload: false } });
+        send2("setSettings", { patch: { askModelDownload: false } });
       }
       closeAsk(true);
     });
@@ -1424,7 +1424,7 @@
       if (askBox.checked) {
         useAi = false;
         paintAi();
-        send("setSettings", { patch: { useAi: false } });
+        send2("setSettings", { patch: { useAi: false } });
         writeNote("AI ranking is off. Turn it back on with the AI button.");
       }
       closeAsk(false);
@@ -1433,13 +1433,13 @@
       useAi = !useAi;
       if (useAi) downloadDeclined = false;
       paintAi();
-      send("setSettings", { patch: { useAi } });
+      send2("setSettings", { patch: { useAi } });
       if (useAi && lastRun?.response?.rerank && lastRun.query === input.value.trim()) run();
     });
     hideButton.addEventListener("click", async () => {
       hideWatched = !hideWatched;
       paintToggles();
-      const response = await send("setUi", { hideWatched });
+      const response = await send2("setUi", { hideWatched });
       if (response?.view) onView(response.view);
       run();
     });
@@ -1550,7 +1550,7 @@
     const days = Math.round(hours / 24);
     return days === 1 ? "Yesterday" : `${days} days ago`;
   }
-  function createNoticesView({ send, onView = () => {
+  function createNoticesView({ send: send2, onView = () => {
   } } = {}) {
     let notices = [];
     const updateAll = el("button", { class: "btn primary", type: "button", text: "Update all" });
@@ -1564,7 +1564,7 @@
     ]);
     async function act(type, payload, busy) {
       for (const button of busy) button.disabled = true;
-      const response = await send(type, payload);
+      const response = await send2(type, payload);
       for (const button of busy) button.disabled = false;
       if (!response?.ok) {
         status.textContent = response?.error || "Something went wrong.";
@@ -1939,7 +1939,7 @@
     const minutes = Math.ceil(count * PACE_SECONDS / 60);
     return minutes <= 1 ? "about a minute" : `about ${minutes} minutes`;
   }
-  function createHistoryView({ send, onView = () => {
+  function createHistoryView({ send: send2, onView = () => {
   }, onClose = () => {
   } } = {}) {
     let changes = [];
@@ -1982,7 +1982,7 @@
       meter.set(value);
     }
     async function refreshView() {
-      const fresh = await send("getState");
+      const fresh = await send2("getState");
       if (fresh?.view) onView(fresh.view);
     }
     function row(change) {
@@ -2005,7 +2005,7 @@
         if (busy) return;
         busy = true;
         article.classList.add("is-busy");
-        const response = await send("historyApply", { stale, ids: [change.id] });
+        const response = await send2("historyApply", { stale, ids: [change.id] });
         busy = false;
         if (!response?.ok) {
           article.classList.remove("is-busy");
@@ -2019,7 +2019,7 @@
       skip.addEventListener("click", async () => {
         if (busy) return;
         article.classList.add("is-busy");
-        await send("historySkip", { ids: [change.id] });
+        await send2("historySkip", { ids: [change.id] });
         await loadPlan();
       });
       return article;
@@ -2083,7 +2083,7 @@
       paintMissing(plan.unmatched || []);
     }
     async function loadPlan() {
-      const response = await send("historyPlan", { stale });
+      const response = await send2("historyPlan", { stale });
       if (response?.ok) paint(response);
     }
     function stopPoll() {
@@ -2093,7 +2093,7 @@
     function watch(onFinish) {
       stopPoll();
       poll = window.setInterval(async () => {
-        const job = await send("historyProgress");
+        const job = await send2("historyProgress");
         if (!job?.ok) {
           stopPoll();
           progress("Lost track of the import. Open it again to continue.");
@@ -2125,7 +2125,7 @@
       tools.hidden = true;
       missing.hidden = true;
       summary.textContent = "Reading your Crunchyroll history and matching it with AniList. Nothing changes until you review it.";
-      const response = await send("historyScan");
+      const response = await send2("historyScan");
       if (!response?.ok) {
         paintFailure(response?.error);
         return;
@@ -2142,7 +2142,7 @@
     }
     async function resume() {
       show();
-      const job = await send("historyProgress");
+      const job = await send2("historyProgress");
       if (job?.running) {
         progress(job.note, job.progress);
         watch(async (finished) => {
@@ -2178,7 +2178,7 @@
       confirm.hidden = true;
       tools.hidden = true;
       for (const item of list.children) item.classList.add("is-busy");
-      const response = await send("historyApply", { stale });
+      const response = await send2("historyApply", { stale });
       if (!response?.ok) {
         progress(response?.error || "Could not start the update.");
         await loadPlan();
@@ -2197,7 +2197,7 @@
       });
     });
     skipAll.addEventListener("click", async () => {
-      await send("historySkip", { ids: changes.map((change) => change.id) });
+      await send2("historySkip", { ids: changes.map((change) => change.id) });
       progress("Skipped. Nothing was sent to AniList.");
       await loadPlan();
     });
@@ -2301,7 +2301,7 @@
   .st-card.is-soon { opacity: .55; pointer-events: none; }
   .st-soon { margin: 0; color: var(--faint); font: 700 11.5px/1.3 ${ROUNDED}; letter-spacing: .06em; text-transform: uppercase; }
 `;
-  function createSettingsView({ send, onView = () => {
+  function createSettingsView({ send: send2, onView = () => {
   }, pageContext = false, extras = [], section = null } = {}) {
     let view = null;
     let catalogPoll = 0;
@@ -2484,10 +2484,10 @@
       status
     ]);
     let activeSection = section;
-    const history = createHistoryView({ send, onView, onClose: () => checkHistory() });
+    const history = createHistoryView({ send: send2, onView, onClose: () => checkHistory() });
     root.append(history.root);
     async function checkHistory() {
-      const job = await send("historyProgress");
+      const job = await send2("historyProgress");
       historyWaiting = Boolean(job?.ok && (job.waiting || job.running));
       paintHistoryRow();
     }
@@ -2508,7 +2508,7 @@
       statusMeter.set(progress);
     }
     async function act(type, payload, done) {
-      const response = await send(type, payload);
+      const response = await send2(type, payload);
       if (!response?.ok) {
         say(response?.error || "Something went wrong.");
         return null;
@@ -2627,7 +2627,7 @@
     refreshCatalog.addEventListener("click", async () => {
       window.clearInterval(catalogPoll);
       say("Updating the catalog\u2026", 0);
-      const response = await send("refreshCatalogCovers");
+      const response = await send2("refreshCatalogCovers");
       const text = response?.ok ? response.note : response?.error || "Could not update the catalog.";
       if (!response?.running) {
         say(text);
@@ -2635,11 +2635,11 @@
       }
       say(text, response.progress || 0);
       catalogPoll = window.setInterval(async () => {
-        const progress = await send("catalogProgress");
+        const progress = await send2("catalogProgress");
         if (!progress?.ok || !progress.running) {
           window.clearInterval(catalogPoll);
           say(!progress?.ok ? "" : response.titlesOwed ? "AniList details updated. The Crunchyroll title list will refresh the next time you open Crunchyroll while signed in." : "Catalog is up to date.");
-          const fresh = await send("getState");
+          const fresh = await send2("getState");
           if (fresh?.view) onView(fresh.view);
           return;
         }
@@ -2647,7 +2647,7 @@
       }, 600);
     });
     async function refreshModel() {
-      const response = await send("modelStatus");
+      const response = await send2("modelStatus");
       const state = response?.ok ? response.status : { label: "Unknown" };
       lastModelStatus = state;
       modelLine.replaceChildren(
@@ -2947,7 +2947,7 @@
   :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer, :host(.fullscreen) .gather { display: none !important; }
 `;
   function createPanel(doc, {
-    send,
+    send: send2,
     site = "crunchyroll",
     // Same Where chips as other site panels (on → only → off), not Crunchyroll alone.
     platforms = SEARCH_PLATFORMS,
@@ -2974,7 +2974,7 @@
     const gatherMeter = progressMeter("Background progress");
     const gather = el("div", { class: "gather glass", role: "status", hidden: true }, [icon("sparkle", 15), el("div", { class: "gather-copy" }, [gatherText, gatherMeter.root])]);
     const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Kivori SekAI", tabindex: "-1" });
-    const panel = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
+    const panel2 = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
     const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Kivori SekAI settings", hidden: true });
     const toastTitle = el("p", { class: "toast-title" });
     const toastMeta = el("p", { class: "toast-meta" });
@@ -2984,7 +2984,7 @@
     const toastOptText = el("span");
     const toastOpt = el("label", { class: "toast-opt", hidden: true }, [toastOptBox, toastOptText]);
     const toast = el("div", { class: "toast glass", role: "status", hidden: true }, [el("div", { class: "toast-copy" }, [toastTitle, toastMeta, toastOpt]), toastAction, toastClose]);
-    shadow.append(style, backdrop, launcher, gather, toast, panel, drawer);
+    shadow.append(style, backdrop, launcher, gather, toast, panel2, drawer);
     let open = false;
     let drawerOpen = false;
     let fullscreen = false;
@@ -2992,17 +2992,17 @@
     let tasks = [];
     let corner = "bottom-right";
     let hydrated = false;
-    const search = createSearchView({ send, site, platforms, onView });
+    const search = createSearchView({ send: send2, site, platforms, onView });
     const moveButton = el("button", { class: "btn", type: "button", title: "Move the search button to the next corner" }, [icon("corner", 15), el("span", { text: "Move button" })]);
-    const settings = createSettingsView({ send, onView, pageContext: true, extras: [moveButton] });
-    const notices = createNoticesView({ send, onView });
+    const settings = createSettingsView({ send: send2, onView, pageContext: true, extras: [moveButton] });
+    const notices = createNoticesView({ send: send2, onView });
     const fullButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Open the full page", title: "Open the full page" }, [icon("external")]);
     const bellBadge = noticeBadge();
     const bellButton = el("button", { class: "icon-btn nt-bell", type: "button", "aria-label": "Notifications", title: "Notifications", "aria-expanded": "false" }, [icon("bell"), bellBadge]);
     const settingsButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Settings", title: "Settings", "aria-expanded": "false" }, [icon("sliders")]);
     const closeButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Close", title: "Close" }, [icon("close")]);
     const body = el("div", { class: "body" }, [search.root]);
-    panel.append(
+    panel2.append(
       el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Kivori SekAI" }), fullButton, bellButton, settingsButton, closeButton]),
       body
     );
@@ -3062,7 +3062,7 @@
     }
     function placeDrawer() {
       if (!drawerOpen) return;
-      const rect = panel.getBoundingClientRect();
+      const rect = panel2.getBoundingClientRect();
       const width = 340;
       const right = rect.right + 12;
       const left = rect.left - 12 - width;
@@ -3099,8 +3099,8 @@
     }
     function paint() {
       const shown = open && !fullscreen;
-      panel.hidden = !shown;
-      panel.classList.toggle("is-open", shown);
+      panel2.hidden = !shown;
+      panel2.classList.toggle("is-open", shown);
       backdrop.classList.toggle("is-open", shown);
       launcher.setAttribute("aria-expanded", shown ? "true" : "false");
       if (!shown) setDrawer(false);
@@ -3130,7 +3130,7 @@
     });
     settingsButton.addEventListener("click", () => toggleDrawer("settings"));
     bellButton.addEventListener("click", () => toggleDrawer("notices"));
-    fullButton.addEventListener("click", () => send("openApp"));
+    fullButton.addEventListener("click", () => send2("openApp"));
     moveButton.addEventListener("click", () => {
       corner = CORNERS[(CORNERS.indexOf(corner) + 1) % CORNERS.length];
       place();
@@ -3242,6 +3242,498 @@
     };
   }
 
+  // lib/brand-logo.js
+  var KIVORI_LOGO_SVG = `<svg viewBox="0 0 68 68" width="20" height="20" aria-hidden="true">
+  <rect width="68" height="68" rx="15" fill="#5b4bff"/>
+  <circle cx="34" cy="34" r="18" fill="none" stroke="#eef0ff" stroke-width="3.5"/>
+  <ellipse cx="34" cy="34" rx="8" ry="18" fill="none" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M16 34h36" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M20 46L48 22" stroke="#4fd1ff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="48" cy="22" r="4" fill="#4fd1ff"/>
+</svg>`;
+
+  // content/player-bar.js
+  var CSS = `
+  ${roundedFontFace()}
+  :host { all: initial; }
+  .bar {
+    position: fixed; top: 72px; right: 16px; transform: translateY(-8px); z-index: 2147483000;
+    display: flex; align-items: center; gap: 6px; max-width: min(900px, calc(100vw - 24px)); padding: 5px;
+    border-radius: 999px; background: rgba(20, 16, 13, .86); border: 1px solid rgba(255, 226, 196, .14);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45); -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4);
+    color: #f7efe9; font: 700 13px/1.2 ${ROUNDED}; opacity: 0; pointer-events: none;
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  .bar.show { opacity: 1; transform: none; pointer-events: auto; }
+  button {
+    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border: 0; border-radius: 999px; cursor: pointer;
+    font: 800 13px/1 ${ROUNDED}; color: #f7efe9; background: rgba(255, 226, 196, .08); white-space: nowrap;
+    transition: background .15s ease, color .15s ease;
+  }
+  button:hover { background: rgba(255, 226, 196, .16); }
+  button.primary { background: #f47521; color: #1a0d05; }
+  button.primary:hover { background: #ff8a3d; }
+  .back { padding-left: 8px; }
+  .back svg { width: 20px; height: 20px; flex: none; }
+  .pip { padding: 0 10px 0 12px; }
+  .pip svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pip i { position: relative; width: 26px; height: 15px; flex: none; border-radius: 999px; background: rgba(255, 226, 196, .22); transition: background .2s ease; }
+  .pip i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: #f7efe9; transition: transform .2s ease; }
+  .pip[aria-checked="true"] i { background: #f47521; }
+  .pip[aria-checked="true"] i::after { transform: translateX(11px); }
+  .msg { display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; min-width: 0; flex: 0 1 auto; }
+  .msg span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spin { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid rgba(255, 226, 196, .2); border-top-color: #f47521; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tip {
+    position: fixed; z-index: 2147483001; box-sizing: border-box; width: 250px; padding: 12px 14px 11px; border-radius: 14px;
+    background: #f47521; color: #1a0d05; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); font: 700 12px/1.3 ${ROUNDED};
+    opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity .45s ease, transform .45s ease;
+  }
+  .tip.show { opacity: 1; transform: none; pointer-events: auto; }
+  .tip::before {
+    content: ""; position: absolute; top: -6px; left: var(--arrow, 28px); width: 14px; height: 14px;
+    background: inherit; border-radius: 3px 0 0 0; transform: rotate(45deg);
+  }
+  .tip b { display: block; font: 800 14px/1.2 ${ROUNDED}; }
+  .tip small { display: block; margin-top: 3px; font: inherit; opacity: .78; }
+  .tip label { display: flex; align-items: center; gap: 7px; margin-top: 10px; cursor: pointer; user-select: none; }
+  .tip input { width: 14px; height: 14px; margin: 0; accent-color: #1a0d05; cursor: pointer; }
+  .ask {
+    position: fixed; inset: 0; z-index: 2147483002; display: grid; place-items: center; cursor: pointer;
+    background: rgba(8, 6, 5, .55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+    font: 700 13px/1.35 ${ROUNDED}; color: #f7efe9; animation: ask-in .25s ease;
+  }
+  @keyframes ask-in { from { opacity: 0; } }
+  .ask-card {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: min(340px, calc(100% - 32px)); padding: 18px 22px 14px;
+    border-radius: 18px; text-align: center; background: rgba(20, 16, 13, .9); border: 1px solid rgba(255, 226, 196, .16); box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+  }
+  .ask-card svg { width: 30px; height: 30px; color: #f47521; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .ask-card b { font: 800 16px/1.2 ${ROUNDED}; }
+  .ask-card small { font: inherit; font-weight: 600; opacity: .75; }
+  .ask .later { height: 28px; margin-top: 6px; padding: 0 12px; font-size: 12px; background: transparent; color: rgba(247, 239, 233, .7); }
+  .ask .later:hover { color: #f7efe9; background: rgba(255, 226, 196, .1); }
+  [hidden] { display: none !important; }
+`;
+  var LOGO = KIVORI_LOGO_SVG;
+  var PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
+  var IDLE_MS = 3e3;
+  var GAP = 12;
+  var TIP_MS = 9e3;
+  var TIP_WIDTH = 250;
+  var TIP_SEEN = "crunchilist-back-tip";
+  var BACK_LABEL = "Open Kivori SekAI";
+  function headerBottom(doc) {
+    const header = doc.querySelector(".erc-large-header");
+    const bar = header && [...header.querySelectorAll("*")].find((node) => node.getBoundingClientRect().height > 30);
+    const rect = bar?.getBoundingClientRect();
+    return rect && rect.top <= 1 ? Math.max(0, rect.bottom) : 0;
+  }
+  var PIP_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4.5" width="19" height="15" rx="2"/><rect x="12" y="11.5" width="7" height="5.5" rx="1" fill="currentColor" stroke="none"/></svg>`;
+  var PIP_MESSAGE = "crunchilist-pip";
+  function pauseVideos(doc) {
+    for (const video of doc.querySelectorAll("video")) if (!video.paused) video.pause();
+  }
+  function mainVideo(videos) {
+    let best = null;
+    let bestArea = 0;
+    for (const video of videos) {
+      const rect = video.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (rect.width > 240 && rect.height > 135 && area > bestArea) {
+        best = video;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+  function playerBox(doc) {
+    const main = mainVideo(doc.querySelectorAll("video"));
+    if (main) {
+      const rect = main.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    for (const node of doc.querySelectorAll(PLAYER)) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    return null;
+  }
+  function createPlayerBar(doc, { send: send2, tips = false, frame = false }) {
+    const win = doc.defaultView;
+    const host = doc.createElement("div");
+    host.id = "crunchilist-tabbar";
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
+    <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
+    <button class="back" type="button" hidden>${LOGO}<span>${BACK_LABEL}</span></button>
+    <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
+    <button class="act primary" type="button" hidden></button>
+    <button class="act2" type="button" hidden></button>
+  </div><div class="tip" role="status" hidden>
+    <b>Click here to open Kivori SekAI</b><small>Switches to your Kivori SekAI tab whenever you're done watching.</small>
+    <label><input type="checkbox">Don't show again</label>
+  </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
+    <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
+      <small>The episode floats above your other windows. Chrome needs one click on the player first.</small>
+      <button class="later" type="button">Not now</button></div>
+  </div>`;
+    const bar = shadow.querySelector(".bar");
+    const back = shadow.querySelector(".back");
+    const pip = shadow.querySelector(".pip");
+    const ask = shadow.querySelector(".ask");
+    const msg = shadow.querySelector(".msg");
+    const spin = shadow.querySelector(".spin");
+    const text = msg.querySelector("span");
+    const act = shadow.querySelector(".act");
+    const act2 = shadow.querySelector(".act2");
+    const tip = shadow.querySelector(".tip");
+    const tipOff = tip.querySelector("input");
+    let role = null;
+    let tipState = "idle";
+    let tipTimer = 0;
+    let note = "";
+    let noteTimer = 0;
+    let undoUntil = 0;
+    let fullscreen = false;
+    let covered = false;
+    let awake = false;
+    let hovered = false;
+    let idleTimer = 0;
+    let placeFrame = 0;
+    let seq = 0;
+    let canPip = false;
+    let frameRoom = 0;
+    let sentRoom = -1;
+    function adopt2() {
+      if (!host.parentNode) return;
+      const element = doc.fullscreenElement || doc.webkitFullscreenElement;
+      covered = Boolean(element && /^(IFRAME|VIDEO)$/.test(element.tagName));
+      const parent = element && !covered ? element : doc.documentElement;
+      if (host.parentNode !== parent) parent.append(host);
+    }
+    function place() {
+      placeFrame = 0;
+      if (!host.isConnected) return;
+      const width = doc.documentElement.clientWidth || win.innerWidth;
+      let top = headerBottom(doc) + GAP;
+      let right = 16;
+      if (fullscreen) {
+        top = 16;
+        right = 16;
+      } else {
+        const box = playerBox(doc);
+        if (box && box.bottom > top + 60) {
+          top = Math.max(box.top, top - GAP) + GAP;
+          right = Math.max(GAP, width - box.right + GAP) + frameRoom;
+        }
+      }
+      bar.style.top = `${Math.round(top)}px`;
+      bar.style.right = `${Math.round(right)}px`;
+      placeTip();
+      tellRoom();
+    }
+    function tellRoom() {
+      if (!frame) return;
+      const room = !fullscreen && bar.classList.contains("show") ? Math.ceil(bar.getBoundingClientRect().width) + 6 : 0;
+      if (room === sentRoom) return;
+      sentRoom = room;
+      win.top.postMessage({ type: PIP_MESSAGE, room }, "*");
+    }
+    if (!frame) {
+      win.addEventListener("message", (event) => {
+        if (event.data?.type !== PIP_MESSAGE || !/(^|\.)crunchyroll\.com$/.test(new URL(event.origin).hostname)) return;
+        const room = Math.max(0, Math.min(400, Number(event.data.room) || 0));
+        if (room === frameRoom) return;
+        frameRoom = room;
+        schedulePlace();
+      });
+    }
+    const pipVideo = () => mainVideo(doc.querySelectorAll("video"));
+    function syncPip() {
+      syncAsk();
+      const next = Boolean(doc.pictureInPictureEnabled && (doc.pictureInPictureElement || pipVideo()));
+      const on = Boolean(doc.pictureInPictureElement);
+      if (next === canPip && String(on) === pip.getAttribute("aria-checked")) return;
+      canPip = next;
+      pip.setAttribute("aria-checked", String(on));
+      pip.title = on ? "The episode is floating above your other windows. Click to put it back" : "Float the episode in a small player that stays above your other windows";
+      paint();
+    }
+    pip.addEventListener("click", async () => {
+      try {
+        if (doc.pictureInPictureElement) {
+          await doc.exitPictureInPicture();
+        } else {
+          const video = pipVideo();
+          if (!video) return flash("Start the episode first.");
+          video.disablePictureInPicture = false;
+          await video.requestPictureInPicture();
+        }
+      } catch {
+        flash("Chrome couldn't float this video. Click the video once, then try again.");
+      }
+      syncPip();
+    });
+    doc.addEventListener("enterpictureinpicture", syncPip, true);
+    doc.addEventListener("leavepictureinpicture", syncPip, true);
+    let autoFor = null;
+    let sessionHooked = false;
+    const episodeOf = (video) => video?.currentSrc || video?.src || "";
+    const pending = () => {
+      const video = pipVideo();
+      return Boolean(role?.miniPlayer && canPip && video && !doc.pictureInPictureElement && autoFor !== episodeOf(video));
+    };
+    async function floatEpisode() {
+      const video = pipVideo();
+      autoFor = episodeOf(video);
+      syncAsk();
+      try {
+        video.disablePictureInPicture = false;
+        await video.requestPictureInPicture();
+      } catch {
+        flash("Chrome couldn't float this video. Use the Always on top switch to try again.");
+      }
+    }
+    function syncAsk() {
+      const show = pending();
+      if (ask.hidden === !show) return;
+      ask.hidden = !show;
+      if (show) hideTip();
+    }
+    ask.addEventListener("click", (event) => {
+      if (event.target.closest(".later")) {
+        autoFor = episodeOf(pipVideo());
+        return syncAsk();
+      }
+      floatEpisode();
+    });
+    function autoFloat(event) {
+      if (event.composedPath().includes(host) || event.key === "Escape" || !pending()) return;
+      floatEpisode();
+    }
+    doc.addEventListener("pointerdown", autoFloat, true);
+    doc.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !ask.hidden) {
+        autoFor = episodeOf(pipVideo());
+        return syncAsk();
+      }
+      autoFloat(event);
+    }, true);
+    function hookSession() {
+      if (sessionHooked || !role?.miniPlayer || !canPip) return;
+      sessionHooked = true;
+      try {
+        win.navigator.mediaSession.setActionHandler("enterpictureinpicture", () => {
+          if (role?.miniPlayer && !doc.pictureInPictureElement) pipVideo()?.requestPictureInPicture().catch(() => {
+          });
+        });
+      } catch {
+      }
+    }
+    function schedulePlace() {
+      if (!placeFrame) placeFrame = win.requestAnimationFrame(place);
+    }
+    function seenTip() {
+      try {
+        return win.sessionStorage.getItem(TIP_SEEN) === "1";
+      } catch {
+        return false;
+      }
+    }
+    function placeTip() {
+      if (tip.hidden) return;
+      const anchor = back.getBoundingClientRect();
+      const width = doc.documentElement.clientWidth || win.innerWidth;
+      const center = anchor.left + anchor.width / 2;
+      const left = Math.min(Math.max(8, center - 35), width - TIP_WIDTH - 8, bar.getBoundingClientRect().right - TIP_WIDTH);
+      tip.style.top = `${Math.round(anchor.bottom + 12)}px`;
+      tip.style.left = `${Math.round(left)}px`;
+      tip.style.setProperty("--arrow", `${Math.round(center - left - 7)}px`);
+    }
+    const barVisible = () => !back.hidden && bar.classList.contains("show") && !fullscreen;
+    function maybeTip() {
+      if (!tips || tipState !== "idle" || !role?.showTips || !barVisible() || seenTip()) return;
+      if (!/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?watch\//i.test(win.location.pathname)) return;
+      tipState = "waiting";
+      tipTimer = win.setTimeout(showTip, 900);
+    }
+    function showTip() {
+      if (!barVisible()) {
+        tipState = "idle";
+        return;
+      }
+      tipState = "showing";
+      try {
+        win.sessionStorage.setItem(TIP_SEEN, "1");
+      } catch {
+      }
+      tip.hidden = false;
+      placeTip();
+      void tip.offsetWidth;
+      tip.classList.add("show");
+      tipTimer = win.setTimeout(hideTip, TIP_MS);
+    }
+    function hideTip() {
+      win.clearTimeout(tipTimer);
+      if (tipState !== "showing") return;
+      tipState = "done";
+      tip.classList.remove("show");
+      win.setTimeout(() => {
+        tip.hidden = true;
+      }, 500);
+    }
+    tip.addEventListener("pointerenter", () => win.clearTimeout(tipTimer));
+    tip.addEventListener("pointerleave", () => {
+      win.clearTimeout(tipTimer);
+      if (tipState === "showing") tipTimer = win.setTimeout(hideTip, 3e3);
+    });
+    tipOff.addEventListener("change", () => {
+      send2("setSettings", { patch: { showTips: !tipOff.checked } });
+      if (tipOff.checked) {
+        win.clearTimeout(tipTimer);
+        tipTimer = win.setTimeout(hideTip, 900);
+      }
+    });
+    function wake() {
+      if (!fullscreen || !host.isConnected) return;
+      win.clearTimeout(idleTimer);
+      idleTimer = win.setTimeout(() => {
+        awake = false;
+        paint();
+      }, IDLE_MS);
+      if (!awake) {
+        awake = true;
+        paint();
+      }
+    }
+    bar.addEventListener("pointerenter", () => {
+      hovered = true;
+      paint();
+    });
+    bar.addEventListener("pointerleave", () => {
+      hovered = false;
+      wake();
+      paint();
+    });
+    doc.addEventListener("mousemove", wake, { passive: true, capture: true });
+    doc.addEventListener("pointerdown", wake, { passive: true, capture: true });
+    doc.addEventListener("pointerdown", (event) => {
+      if (tipState === "showing" && !event.composedPath().includes(host)) hideTip();
+    }, { passive: true, capture: true });
+    win.addEventListener("scroll", schedulePlace, { passive: true, capture: true });
+    win.addEventListener("resize", schedulePlace, { passive: true });
+    let liteTick = false;
+    win.setInterval(() => {
+      if (!host.isConnected) return;
+      syncPip();
+      if (role?.liteMode) {
+        liteTick = !liteTick;
+        if (liteTick) return;
+      } else {
+        liteTick = false;
+        maybeTip();
+      }
+      schedulePlace();
+    }, 1e3);
+    back.addEventListener("click", async () => {
+      hideTip();
+      const response = await send2("backToCrunchilist");
+      if (!response?.ok) flash(response?.error || "Couldn't find your Kivori SekAI tab.");
+    });
+    const button = (node, label, onClick) => {
+      node.hidden = !label;
+      node.textContent = label || "";
+      node.onclick = onClick || null;
+    };
+    function paint() {
+      const r = role || {};
+      hookSession();
+      syncAsk();
+      const inline = frame && !fullscreen;
+      const showBack = Boolean(r.backButton && r.home && r.role !== "moving" && !inline);
+      const showPip = Boolean(role && canPip && r.role !== "moving" && r.role !== "stray");
+      back.hidden = !showBack;
+      pip.hidden = !showPip;
+      let message = "";
+      let busy = false;
+      button(act, "");
+      button(act2, "");
+      if (inline) {
+        message = note;
+      } else if (r.role === "stray") {
+        message = "You already have a Crunchyroll tab open";
+        button(act, "Move it there", () => run("moveTab"));
+        button(act2, "Keep this tab", () => run("keepTab"));
+      } else if (r.role === "moving") {
+        message = "Moving to your Crunchyroll tab\u2026";
+        busy = true;
+      } else if (r.pending) {
+        message = `Opening ${r.pending}\u2026`;
+        busy = true;
+      } else if (Date.now() < undoUntil) {
+        message = "Moved here from your other Crunchyroll tab";
+        button(act2, "Undo", () => run("undoMove"));
+      } else if (note) {
+        message = note;
+      }
+      msg.hidden = !message;
+      text.textContent = message;
+      spin.hidden = !busy;
+      place();
+      bar.classList.toggle("show", !covered && (!fullscreen || awake || hovered) && (showBack || showPip || Boolean(message)));
+      if (tipState === "showing" && !barVisible()) hideTip();
+      maybeTip();
+      tellRoom();
+    }
+    async function run(type) {
+      button(act, "");
+      button(act2, "");
+      const response = await send2(type);
+      if (!response?.ok) flash(response?.error || "That didn't work.");
+      if (type === "undoMove") undoUntil = 0;
+      refresh();
+    }
+    function flash(value, ms = 8e3) {
+      note = value;
+      window.clearTimeout(noteTimer);
+      noteTimer = window.setTimeout(() => {
+        note = "";
+        paint();
+      }, ms);
+      paint();
+    }
+    async function refresh(extraNote) {
+      const id = ++seq;
+      const response = await send2("tabRole");
+      if (id !== seq || !response?.ok) return;
+      role = response;
+      undoUntil = response.undoFor > 0 ? Date.now() + response.undoFor : 0;
+      if (undoUntil) window.setTimeout(paint, response.undoFor + 100);
+      if (extraNote) flash(extraNote);
+      else paint();
+    }
+    return {
+      host,
+      refresh,
+      setFullscreen(value) {
+        const next = Boolean(value);
+        if (next === fullscreen) return;
+        fullscreen = next;
+        awake = false;
+        hovered = false;
+        win.clearTimeout(idleTimer);
+        adopt2();
+        paint();
+      },
+      clear() {
+        role = null;
+        paint();
+      }
+    };
+  }
+
   // lib/enabled.js
   var ENABLED_KEY = "crEnabled";
   var PANEL_ENABLED_KEY = "ksPanelEnabled";
@@ -3257,7 +3749,7 @@
   // content/watch-guide.js
   var HOST_ID = "ks-watch-guide";
   var SHOW_MS = 3500;
-  var CSS = `
+  var CSS2 = `
 :host {
   all: initial;
   position: fixed;
@@ -3277,6 +3769,7 @@
   opacity: 0;
   transform: translateY(12px);
   transition: opacity .22s ease, transform .22s ease;
+  pointer-events: auto;
 }
 .card.show {
   opacity: 1;
@@ -3359,7 +3852,7 @@
     host = doc.createElement("div");
     host.id = HOST_ID;
     const root = host.attachShadow({ mode: "open" });
-    root.innerHTML = `<style>${CSS}</style><div class="card" part="card"></div>`;
+    root.innerHTML = `<style>${CSS2}</style><div class="card" part="card"></div>`;
     (doc.documentElement || doc.body).append(host);
     return host;
   }
@@ -3370,13 +3863,49 @@
   }
   function createWatchGuide(doc = document) {
     let hideTimer = 0;
+    let hideAt = 0;
+    let remaining = SHOW_MS;
+    let paused = false;
     const host = ensureHost(doc);
     const card = host.shadowRoot.querySelector(".card");
     function onFs() {
       adopt(host, doc);
     }
+    function clearHide() {
+      clearTimeout(hideTimer);
+      hideTimer = 0;
+    }
+    function hide() {
+      clearHide();
+      paused = false;
+      remaining = 0;
+      card.classList.remove("show");
+    }
+    function scheduleHide(ms) {
+      clearHide();
+      remaining = Math.max(0, ms);
+      hideAt = Date.now() + remaining;
+      paused = false;
+      if (remaining <= 0) {
+        hide();
+        return;
+      }
+      hideTimer = setTimeout(hide, remaining);
+    }
+    function pauseHide() {
+      if (!hideTimer || paused) return;
+      remaining = Math.max(0, hideAt - Date.now());
+      clearHide();
+      paused = true;
+    }
+    function resumeHide() {
+      if (!paused) return;
+      scheduleHide(remaining);
+    }
     doc.addEventListener("fullscreenchange", onFs);
     doc.addEventListener("webkitfullscreenchange", onFs);
+    card.addEventListener("pointerenter", pauseHide);
+    card.addEventListener("pointerleave", resumeHide);
     function show(payload = {}) {
       const text = String(payload.text || "").trim();
       if (!text) return;
@@ -3391,13 +3920,12 @@
       card.classList.remove("show");
       void card.offsetWidth;
       card.classList.add("show");
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        card.classList.remove("show");
-      }, SHOW_MS);
+      scheduleHide(SHOW_MS);
     }
     function destroy() {
-      clearTimeout(hideTimer);
+      clearHide();
+      card.removeEventListener("pointerenter", pauseHide);
+      card.removeEventListener("pointerleave", resumeHide);
       doc.removeEventListener("fullscreenchange", onFs);
       doc.removeEventListener("webkitfullscreenchange", onFs);
       host.remove();
@@ -3423,7 +3951,19 @@
   }
   var activeService = "";
   var started = false;
+  var panel;
+  var playerBar;
+  function send(type, payload = {}) {
+    return chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
+      ok: false,
+      error: /context invalidated/i.test(error?.message || "") ? "Kivori SekAI was updated. Reload this tab to keep using it." : error?.message || "Extension unavailable"
+    }));
+  }
   function boot() {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "pauseVideo") pauseVideos(document);
+      if (message?.type === "tabRoleChanged" && playerBar) playerBar.refresh(message.note);
+    });
     const begin = async () => {
       if (window.top !== window) return;
       chrome.storage.onChanged.addListener((changes, area) => {
@@ -3431,7 +3971,7 @@
         if (!(PANEL_ENABLED_KEY in changes) && !(ENABLED_KEY in changes)) return;
         chrome.storage.local.get([ENABLED_KEY, PANEL_ENABLED_KEY]).then((stored) => {
           if (activeService && !isPanelEnabled(activeService, stored)) stopPanel();
-          else if (!document.getElementById("ks-site-panel")) startPanel().catch(() => {
+          else startPanel().catch(() => {
           });
         });
       });
@@ -3442,28 +3982,44 @@
   }
   function stopPanel() {
     started = false;
-    document.getElementById("ks-site-panel")?.remove();
+    panel?.host.remove();
+    panel = null;
+  }
+  function ensurePlayerBar() {
+    if (window.top !== window) return;
+    if (!playerBar) playerBar = createPlayerBar(document, { send, tips: false });
+    if (!playerBar.host.isConnected) document.documentElement.append(playerBar.host);
+    playerBar.refresh();
+  }
+  function syncFullscreen() {
+    const video = document.querySelector("video");
+    const element = document.fullscreenElement || document.webkitFullscreenElement;
+    const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
+    const on = Boolean(element || videoFullscreen);
+    panel?.setFullscreen(on);
+    playerBar?.setFullscreen(on);
   }
   async function startPanel() {
     if (window.top !== window) return;
-    if (document.getElementById("ks-site-panel")) {
-      started = true;
+    const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
+    if (hello?.ok && hello.service) {
+      activeService = hello.service;
+      ensurePlayerBar();
+    }
+    if (!hello?.ok || !hello.show) {
+      if (hello?.service) activeService = hello.service;
+      stopPanel();
       return;
     }
-    const hello = await chrome.runtime.sendMessage({ type: "panelHello" }).catch(() => null);
-    if (!hello?.ok || !hello.show) {
-      activeService = hello?.service || activeService;
+    if (panel?.host.isConnected || document.getElementById("ks-site-panel")) {
+      started = true;
       return;
     }
     activeService = hello.service;
     const name = hello.name || "this site";
     const color = hello.color || "#ff7a2f";
     const layout = hello.layout || {};
-    const send = (type, payload = {}) => chrome.runtime.sendMessage({ type, ...payload }).catch((error) => ({
-      ok: false,
-      error: /context invalidated/i.test(error?.message || "") ? "Kivori SekAI was updated. Reload this tab to keep using it." : error?.message || "Extension unavailable"
-    }));
-    const panel = createPanel(document, {
+    panel = createPanel(document, {
       send,
       site: hello.siteFilter || activeService,
       platforms: SEARCH_PLATFORMS,
@@ -3476,18 +4032,13 @@
       onView: (view) => panel.setView(view)
     });
     document.documentElement.append(panel.host);
+    ensurePlayerBar();
     started = true;
-    function syncFullscreen() {
-      const video = document.querySelector("video");
-      const element = document.fullscreenElement || document.webkitFullscreenElement;
-      const videoFullscreen = Boolean(video && (element === video || video.webkitDisplayingFullscreen));
-      panel.setFullscreen(Boolean(element || videoFullscreen));
-    }
     document.addEventListener("fullscreenchange", syncFullscreen);
     document.addEventListener("webkitfullscreenchange", syncFullscreen);
     window.addEventListener("resize", syncFullscreen);
     chrome.runtime.onMessage.addListener((message) => {
-      if (!started || !document.getElementById("ks-site-panel")) return;
+      if (!started || !panel?.host.isConnected) return;
       if (message?.type === "enriched" && message.view) panel.setView(message.view, { syncOpen: true });
       if (message?.type === "activity") {
         const list = Array.isArray(message.tasks) ? message.tasks : [];

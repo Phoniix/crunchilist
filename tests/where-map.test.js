@@ -37,6 +37,24 @@ test("availability + withCatalogLinks folds gap URLs into streaming", () => {
   assert.equal(show.streaming.find((link) => link.site === "Hulu")?.checked, true);
 });
 
+test("a successful Netflix catalog read suppresses where-map Netflix chips", () => {
+  const gaps = {
+    143338: { netflix: "https://www.netflix.com/title/81662402", prime: "https://www.primevideo.com/detail/x" },
+    99: { netflix: "https://www.netflix.com/title/80057281" },
+  };
+  const catalogs = {
+    netflix: {
+      at: 1,
+      error: "",
+      links: { 99: "https://www.netflix.com/title/80057281" },
+    },
+  };
+  const found = availability(catalogs, ["netflix"], { gaps });
+  assert.equal(found[143338]?.some((item) => item.service === "netflix"), false, "gap Netflix dropped when catalog covers Netflix");
+  assert.equal(found[143338]?.find((item) => item.service === "prime")?.url, "https://www.primevideo.com/detail/x", "Prime still comes from gaps");
+  assert.equal(found[99]?.find((item) => item.service === "netflix")?.url, "https://www.netflix.com/title/80057281", "titles in the local catalog still show");
+});
+
 test("withCatalogLinks upgrades an AniList search link when the gap map has a title URL", () => {
   const found = availability({}, [], {
     gaps: { 1: { netflix: "https://www.netflix.com/title/80100172" } },

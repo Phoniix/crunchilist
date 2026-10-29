@@ -4000,14 +4000,7 @@
   var TIP_MS = 9e3;
   var TIP_WIDTH = 250;
   var TIP_SEEN = "crunchilist-back-tip";
-  function playerBox(doc) {
-    const video = doc.querySelector("video");
-    for (const node of [...doc.querySelectorAll(PLAYER), video]) {
-      const rect = node?.getBoundingClientRect();
-      if (rect && rect.width > 240 && rect.height > 135) return rect;
-    }
-    return null;
-  }
+  var BACK_LABEL = "Open Kivori SekAI";
   function headerBottom(doc) {
     const header = doc.querySelector(".erc-large-header");
     const bar = header && [...header.querySelectorAll("*")].find((node) => node.getBoundingClientRect().height > 30);
@@ -4032,6 +4025,18 @@
     }
     return best;
   }
+  function playerBox(doc) {
+    const main = mainVideo(doc.querySelectorAll("video"));
+    if (main) {
+      const rect = main.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    for (const node of doc.querySelectorAll(PLAYER)) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    return null;
+  }
   function createPlayerBar(doc, { send: send2, tips = false, frame = false }) {
     const win = doc.defaultView;
     const host = doc.createElement("div");
@@ -4039,12 +4044,12 @@
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Kivori SekAI</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>${BACK_LABEL}</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Kivori SekAI tab whenever you're done watching.</small>
+    <b>Click here to open Kivori SekAI</b><small>Switches to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
@@ -4540,6 +4545,7 @@
   opacity: 0;
   transform: translateY(12px);
   transition: opacity .22s ease, transform .22s ease;
+  pointer-events: auto;
 }
 .card.show {
   opacity: 1;
@@ -4633,13 +4639,49 @@
   }
   function createWatchGuide(doc = document) {
     let hideTimer = 0;
+    let hideAt = 0;
+    let remaining = SHOW_MS;
+    let paused = false;
     const host = ensureHost(doc);
     const card = host.shadowRoot.querySelector(".card");
     function onFs() {
       adopt(host, doc);
     }
+    function clearHide() {
+      clearTimeout(hideTimer);
+      hideTimer = 0;
+    }
+    function hide() {
+      clearHide();
+      paused = false;
+      remaining = 0;
+      card.classList.remove("show");
+    }
+    function scheduleHide(ms) {
+      clearHide();
+      remaining = Math.max(0, ms);
+      hideAt = Date.now() + remaining;
+      paused = false;
+      if (remaining <= 0) {
+        hide();
+        return;
+      }
+      hideTimer = setTimeout(hide, remaining);
+    }
+    function pauseHide() {
+      if (!hideTimer || paused) return;
+      remaining = Math.max(0, hideAt - Date.now());
+      clearHide();
+      paused = true;
+    }
+    function resumeHide() {
+      if (!paused) return;
+      scheduleHide(remaining);
+    }
     doc.addEventListener("fullscreenchange", onFs);
     doc.addEventListener("webkitfullscreenchange", onFs);
+    card.addEventListener("pointerenter", pauseHide);
+    card.addEventListener("pointerleave", resumeHide);
     function show(payload = {}) {
       const text2 = String(payload.text || "").trim();
       if (!text2) return;
@@ -4654,13 +4696,12 @@
       card.classList.remove("show");
       void card.offsetWidth;
       card.classList.add("show");
-      clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => {
-        card.classList.remove("show");
-      }, SHOW_MS);
+      scheduleHide(SHOW_MS);
     }
     function destroy() {
-      clearTimeout(hideTimer);
+      clearHide();
+      card.removeEventListener("pointerenter", pauseHide);
+      card.removeEventListener("pointerleave", resumeHide);
       doc.removeEventListener("fullscreenchange", onFs);
       doc.removeEventListener("webkitfullscreenchange", onFs);
       host.remove();

@@ -102,6 +102,18 @@ test("Netflix's genres and years keep western titles with anime names out", () =
   assert.deepEqual(pending, []);
 });
 
+test("live-action-shared names still need a pick when Netflix files them without an Anime genre", () => {
+  const liveActionGenres = (year) => ({ showYear: year, genres: ["TV Dramas", "Action & Adventure"] });
+  const { watched, pending, dropped, droppedNames } = runActivity([
+    ...show("ONE PIECE", "Season 1", 2, liveActionGenres(2023)),
+    ...show("The Flash", "Season 1", 2, liveActionGenres(2014)),
+  ]);
+  assert.deepEqual(watched, []);
+  assert.ok(pending.find((item) => /one piece/i.test(item.input.series)), "One Piece waits for a pick even without Anime genre");
+  assert.ok(!droppedNames.includes("ONE PIECE") && !droppedNames.includes("One Piece"));
+  assert.ok(dropped >= 1 && droppedNames.some((name) => /flash/i.test(name)), "The Flash stays skipped");
+});
+
 test("without genres, the year still has to line up", () => {
   const yearOnly = (year) => ({ showYear: year });
   const { watched } = runActivity([...film("Dune", yearOnly(2021)), ...film("Annie", yearOnly(2014)), ...show("Blade", "", 1, yearOnly(2006))]);

@@ -68,18 +68,42 @@ export function generalFit(engine, group) {
 // a show whose seasons don't line up with AniList's is offered by its name; everything else is dropped as not anime.
 // group.anime: true/false when the service says whether it's anime, null when it doesn't say.
 export function checkGeneral(engine, group, found, liveActionNames = new Set(), serviceName = "Netflix") {
-  if (group.anime === false) return NONE;
+  const sharedLiveAction = liveActionNames.has(looseKey(group.series));
+  // Netflix often files the live-action listing (no Anime genre). Still offer a pick for shared names —
+  // don't silently drop One Piece / Death Note / etc. as "not anime".
+  if (group.anime === false && !sharedLiveAction) return NONE;
   const fits = generalFit(engine, group);
   if (found.anilistId && found.confidence === "high") {
-    if (!fits(found.anilistId)) return NONE;
-    if (liveActionNames.has(looseKey(group.series))) return { ...found, confidence: "low", reason: `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.` };
+    if (!fits(found.anilistId)) {
+      if (sharedLiveAction) {
+        return { ...NONE, candidates: [found.anilistId], reason: `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.` };
+      }
+      return NONE;
+    }
+    if (sharedLiveAction) return { ...found, confidence: "low", reason: `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.` };
     return found;
   }
   const candidates = [found.anilistId, ...(found.candidates || [])].filter((id, index, list) => id && list.indexOf(id) === index && fits(id, { roomy: true }));
-  if (candidates.length) return { ...found, anilistId: null, confidence: "none", candidates, reason: found.reason || "More than one AniList entry fits; pick the right one once." };
+  if (candidates.length) {
+    const reason = sharedLiveAction
+      ? `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.`
+      : (found.reason || "More than one AniList entry fits; pick the right one once.");
+    return { ...found, anilistId: null, confidence: "none", candidates, reason };
+  }
   const byName = group.season ? engine.match({ ...group, season: "", seasonNumber: null }) : null;
   if (byName?.anilistId && fits(byName.anilistId, { roomy: true })) {
-    return { ...NONE, candidates: [byName.anilistId], reason: `${serviceName} splits this show into seasons its own way. Pick the entry; only this season's episodes are counted.` };
+    return { ...NONE, candidates: [byName.anilistId], reason: sharedLiveAction
+      ? `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.`
+      : `${serviceName} splits this show into seasons its own way. Pick the entry; only this season's episodes are counted.` };
+  }
+  if (sharedLiveAction) {
+    const starts = (engine.startingWith?.(group.series) || []).filter((id) => !WEAK_FORMATS.has(engine.row(id)?.format)).slice(0, 6);
+    return {
+      ...NONE,
+      keep: true,
+      candidates: starts,
+      reason: `${serviceName} also has a live-action version with this name. Pick the anime only if that's what you watched.`,
+    };
   }
   // The service files it under anime: never dropped. Offer entries whose names begin with it, or ask for a link.
   if (group.anime !== true) return NONE;

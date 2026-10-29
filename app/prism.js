@@ -16,8 +16,9 @@ import { CUSTOM_VARS, clamp, customVars, hexHsv, hsvHex } from "./prism-color.js
 import { createTastePop } from "./prism-taste.js";
 import { canSelfUpdate, installUpdate } from "./updater.js";
 import { reloadForDisk } from "../lib/update-check.js";
+import { IMPORT_HISTORY_RESET_NOTE_KEY } from "../lib/import-migrate.js";
 import { KEYS } from "../lib/keys.js";
-import { SERVICE_BRAND, SERVICE_SHORT, pickPlayLink } from "../lib/play-url.js";
+import { SERVICE_BRAND, SERVICE_SHORT, pickPlayLink, servicePlayUrl } from "../lib/play-url.js";
 import { serviceById, serviceForSite, visibleLink } from "../lib/services.js";
 import { handleImportAct, noteImportState, onImportPick, onImportToggle, renderImportPane, renderImportsHistory } from "./import-pane.js";
 import { DEFAULT_CHARACTER_ID, characterById } from "../lib/characters.js";
@@ -433,12 +434,24 @@ function svcMark(link) {
   return `<span class="svc-dot" aria-hidden="true">${esc((link.short || link.name || "?")[0])}</span>`;
 }
 
+// Next episode to open on another service (library progress), or null when unknown / finished.
+function badgeEpisode(show) {
+  const item = entry(show);
+  if (!item || item.status === "finished") return null;
+  const target = playTarget(show);
+  return Number.isInteger(target.episode) && target.episode > 0 ? target.episode : null;
+}
+
 // Availability pills: every known service when we have them; otherwise the old on/off Crunchyroll mark.
-// Crunchyroll-only titles still get a CR badge (including mini on cards).
-function crBadge(show, cls = "") {
+// Crunchyroll-only titles still get a CR badge (including mini on cards). Linked pills open that service (episode hint when known).
+function crBadge(show, cls = "", { episode = badgeEpisode(show) } = {}) {
   const links = streamLinks(show);
   const mini = /\bmini\b/.test(cls);
   if (!links.length) {
+    const crUrl = onCrunchyroll(show) ? servicePlayUrl(show, { service: "crunchyroll", episode }) : "";
+    if (crUrl) {
+      return `<a class="avail on ${cls}" href="${esc(crUrl)}" target="_blank" rel="noopener noreferrer" title="Open on Crunchyroll">${CR_MARK}${mini ? "CR" : "On Crunchyroll"}</a>`;
+    }
     return onCrunchyroll(show)
       ? `<span class="avail on ${cls}">${CR_MARK}${mini ? "CR" : "On Crunchyroll"}</span>`
       : `<span class="avail off ${cls}">${OFF_MARK}${mini ? "Off CR" : "Not on Crunchyroll"}</span>`;
@@ -449,7 +462,13 @@ function crBadge(show, cls = "") {
     const text = mini ? link.short
       : links.length === 1 && link.id === "crunchyroll" ? "On Crunchyroll"
       : link.name;
-    return `<span class="avail on svc ${cls}" style="--svc:${esc(link.color)}" data-svc="${esc(link.id)}" title="${esc(link.name)}">${svcMark(link)}${esc(text)}</span>`;
+    const href = servicePlayUrl(show, { service: link.id, url: link.url, episode });
+    const label = episode && link.id === "hidive" ? `Watch episode ${episode} on ${link.name}` : `Open on ${link.name}`;
+    const body = `${svcMark(link)}${esc(text)}`;
+    if (!href) {
+      return `<span class="avail on svc ${cls}" style="--svc:${esc(link.color)}" data-svc="${esc(link.id)}" title="${esc(link.name)}">${body}</span>`;
+    }
+    return `<a class="avail on svc ${cls}" style="--svc:${esc(link.color)}" data-svc="${esc(link.id)}" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(label)}" aria-label="${esc(label)}">${body}</a>`;
   }).join("");
   const more = links.length > cap
     ? `<span class="avail on svc more ${cls}" title="${esc(links.slice(cap).map((link) => link.name).join(", "))}">+${links.length - cap}</span>`
@@ -531,25 +550,30 @@ function card(show, opts = {}) {
       : `<div class="sub">${esc(watchedLabel(show) || `${show.genres[0] || (show.type === "movie" ? "Movie" : "Series")} · ${seasonCount(show)}`)}</div>`}</div>
   </div>`;
 }
-function whereWatchHtml(show, links = streamLinks(show)) {
+function whereWatchHtml(show, links = streamLinks(show), { episode = badgeEpisode(show) } = {}) {
   if (!links.length) {
-    return onCrunchyroll(show)
-      ? `<a class="where on" href="${esc(show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`
+    const crUrl = servicePlayUrl(show, { service: "crunchyroll", episode });
+    return onCrunchyroll(show) && crUrl
+      ? `<a class="where on" href="${esc(crUrl)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`
       : `<p class="muted">AniList doesn't list a streaming site for this one.</p>
          <div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`;
   }
   const rows = links.map((link) => {
+    const href = servicePlayUrl(show, { service: link.id, url: link.url, episode });
     if (link.id === "crunchyroll") {
-      return `<a class="where on" href="${esc(link.url || show.url || `https://www.crunchyroll.com/series/${show.id}`)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`;
+      return href
+        ? `<a class="where on" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages. This link opens the show page</small></div>${icon("right")}</a>`
+        : `<div class="where on">${CR_MARK}<div><b>Crunchyroll</b><small>Play uses the Crunchyroll tab Kivori SekAI manages</small></div></div>`;
     }
     const note = link.checked && link.seen ? "In your catalog · you've watched it there"
       : link.checked ? "In your catalog · opens in a new tab"
       : link.seen ? "You've watched it there · opens in a new tab"
+      : episode && link.id === "hidive" ? `Opens episode ${episode} in a new tab`
       : "Opens in a new tab";
-    if (!link.url) {
+    if (!href) {
       return `<div class="where"><span class="where-dot" style="background:${esc(link.color)}">${esc((link.short || link.name)[0])}</span><div><b>${esc(link.name)}</b><small>Listed · no playable link yet</small></div></div>`;
     }
-    return `<a class="where" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span class="where-dot" style="background:${esc(link.color)}">${esc((link.short || link.name)[0])}</span><div><b>${esc(link.name)}</b><small>${note}</small></div>${icon("right")}</a>`;
+    return `<a class="where" href="${esc(href)}" target="_blank" rel="noopener noreferrer"><span class="where-dot" style="background:${esc(link.color)}">${esc((link.short || link.name)[0])}</span><div><b>${esc(link.name)}</b><small>${note}</small></div>${icon("right")}</a>`;
   }).join("");
   return `${rows}${onCrunchyroll(show) ? "" : `<div class="where off">${OFF_MARK}<div><b>Not on Crunchyroll</b><small>Tracking and AniList sync still work</small></div></div>`}`;
 }
@@ -1530,7 +1554,7 @@ function pageShow(id, seasonArg) {
         </div>
         <div class="show-native">${multi ? `<b class="season-pill">${esc(season.label)}${seasonName ? ` · ${esc(seasonName)}` : ""}</b>` : ""}${show.romaji && show.romaji !== show.title ? esc(show.romaji) : ""}</div>
         <div class="show-meta"><span>★ ${season.score ? (season.score / 10).toFixed(1) : score(show)}</span>${season.year ? `<span>${seasonLabel(season)}${season.year}</span>` : ""}<span>${season.episodes ? `${season.episodes} ${season.episodes === 1 ? "ep" : "eps"}` : "Ongoing"}</span>${show.duration && season.format !== "MOVIE" ? `<span>${show.duration} min</span>` : ""}${show.studio ? `<span>${esc(show.studio)}</span>` : ""}<span>${season.status === "RELEASING" ? "Airing" : released(season) ? "Complete" : "Upcoming"}</span></div>
-        <div class="show-avail">${crBadge(show, "large")}${playHint ? `<span class="play-hint">${playHint}</span>` : ""}</div>
+        <div class="show-avail">${crBadge(show, "large", { episode: nextEp })}${playHint ? `<span class="play-hint">${playHint}</span>` : ""}</div>
         <div class="show-actions">
           ${actions}
           ${show.trailer ? `<button class="btn" data-act="trailer" data-show="${esc(show.id)}">${icon("film")} Trailer</button>` : ""}
@@ -1551,7 +1575,7 @@ function pageShow(id, seasonArg) {
         ${multi ? `<dt>Seasons</dt><dd>${seasons.length - movies}${movies ? ` + ${movies} movie${movies > 1 ? "s" : ""}` : ""}</dd>` : ""}
         <dt>Episodes</dt><dd>${multi && totalEps ? `${totalEps} total` : show.episodes || "Ongoing"}</dd>
         <dt>Year</dt><dd>${show.year || "–"}${multi && lastYear && lastYear !== show.year ? `–${lastYear}` : ""}</dd><dt>Studio</dt><dd>${esc(show.studio) || "–"}</dd><dt>Score</dt><dd>${score(show)} / 10</dd></dl></div>
-      <div class="side-card"><h3>Where to watch</h3>${whereWatchHtml(show, streams)}</div>
+      <div class="side-card"><h3>Where to watch</h3>${whereWatchHtml(show, streams, { episode: nextEp })}</div>
       ${show.tags.length ? `<div class="side-card"><h3>Tags</h3><div class="tag-list">${show.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div></div>` : ""}
       ${season.anilistId || show.anilistId ? `<div class="side-card"><a class="btn ghost" style="width:100%" href="https://anilist.co/anime/${Number(season.anilistId || show.anilistId)}" target="_blank" rel="noopener noreferrer">Open ${multi ? `${esc(season.label.toLowerCase())} ` : ""}on AniList</a></div>` : ""}
     </aside>
@@ -1696,7 +1720,7 @@ function settingsPanePlayback() {
   return `<div class="set-card"><h3>Playback</h3><p>Browse in Kivori SekAI, watch on Crunchyroll. Episodes always play on Crunchyroll's own site, so your account, quality and subtitles work as normal.</p>
     <div class="set-row"><div class="grow"><b>Open episodes</b><small data-choice-about="openEpisodes">${esc(CHOICE_ABOUT.openEpisodes[open] || "")}</small></div>
       <div class="seg">${[["tab-ask", "Reuse (ask)"], ["tab-auto", "Reuse (auto)"], ["window", "Pop-out"], ["new", "Always new"]].map(([v, l]) => `<button type="button" class="${open === v ? "on" : ""}" data-choice="openEpisodes:${v}">${l}</button>`).join("")}</div></div>
-    <div class="set-row"><div class="grow"><b>“Back to Kivori SekAI” on Crunchyroll</b><small>Adds a button at the top of Crunchyroll pages that switches back to this tab instead of opening a new one, and pauses the episode you leave</small></div><button class="switch" data-setting="backButton" aria-label="Back to Kivori SekAI button"></button></div>
+    <div class="set-row"><div class="grow"><b>“Open Kivori SekAI” on streaming sites</b><small>Adds a button on Crunchyroll, Netflix, HIDIVE, Tubi, and Prime that switches to this tab instead of opening a new one, and pauses the episode you leave</small></div><button class="switch" data-setting="backButton" aria-label="Open Kivori SekAI button"></button></div>
     <div class="set-row"><div class="grow"><b>Open episodes in the mini player</b><small>Floats each episode in Chrome's small always-on-top player. Chrome only allows this after a click on the player, so each episode starts with a prompt; when you switch away from the tab, Chrome may also float it on its own</small></div><button class="switch" data-setting="miniPlayer" aria-label="Open episodes in the mini player"></button></div>
     ${tipsSeen
       ? `<div class="set-row"><div class="grow"><b>Tips</b><small>Short pointers for preview volume, theme controls, and the back button. You’ve dismissed them on this device.</small></div>
@@ -3195,7 +3219,7 @@ function bind() {
       if (about && CHOICE_ABOUT[key]?.[raw]) about.textContent = CHOICE_ABOUT[key][raw];
       return setSettings({ [key]: value });
     }
-    if (target.tagName === "A") return;
+    if (target.tagName === "A" || event.target.closest("a.avail, a.where")) return;
     if (show && !target.closest("button")) openCard(showEl, show);
   });
   document.addEventListener("submit", (event) => {
@@ -3394,6 +3418,12 @@ export function startPrism(source, design) {
     if (!crJustUpdated) return;
     chrome.storage.local.remove("crJustUpdated");
     setTimeout(() => toast(`Kivori SekAI updated to version ${crJustUpdated}`), 600);
+  }).catch(() => {});
+  chrome.storage.local.get(IMPORT_HISTORY_RESET_NOTE_KEY).then((stored) => {
+    const note = stored[IMPORT_HISTORY_RESET_NOTE_KEY];
+    if (!note) return;
+    chrome.storage.local.remove(IMPORT_HISTORY_RESET_NOTE_KEY);
+    setTimeout(() => toast(note), 900);
   }).catch(() => {});
   source.watch((kind, next) => (kind === "view" ? applyView(next) : reload().finally(() => setTimeout(startTips, 800))));
   takeCatalogKick().catch(() => {});

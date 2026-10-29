@@ -7,6 +7,12 @@ import { hidiveEntries, hidiveEntryFinished } from "../../lib/hidive-history.js"
 import { FINISHED, MIN_SECONDS } from "../../lib/watch-tracking.js";
 import { START_SECONDS } from "../../lib/watch-loop.js";
 
+// Re-injection (import soft-refresh / Connect) must not stack intervals or message listeners.
+if (window.__ksHidiveContent) {
+  if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {});
+} else {
+window.__ksHidiveContent = true;
+
 const PAGE_SOURCE = "crunchilist-search-page";
 const CHECK_MS = 5000;
 const HISTORY_EVERY = 3;
@@ -108,10 +114,10 @@ async function digest(value) {
   return [...bytes.slice(0, 8)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function askPage(kind, fields) {
+function askPage(kind, fields, timeoutMs = 20000) {
   return new Promise((resolve) => {
     const id = Math.random().toString(36).slice(2);
-    const timer = setTimeout(() => { removeEventListener("message", onReply); resolve(null); }, 20000);
+    const timer = setTimeout(() => { removeEventListener("message", onReply); resolve(null); }, timeoutMs);
     function onReply(event) {
       if (event.source !== window || event.origin !== location.origin) return;
       const data = event.data;
@@ -154,9 +160,18 @@ async function history(page) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.id !== chrome.runtime.id || sender.tab || !["hidiveHistory", "hidiveCatalog"].includes(message?.type)) return false;
+  // Service-worker → tab messages sometimes omit sender.id; reject only clear cross-extension / tab senders.
+  if ((sender.id && sender.id !== chrome.runtime.id) || sender.tab) return false;
+  if (message?.type === "hidivePing") {
+    askPage("hidive-ready", {}, 800).then((reply) => {
+      sendResponse({ ok: true, ping: true, ready: Boolean(reply?.ready) });
+    });
+    return true;
+  }
+  if (!["hidiveHistory", "hidiveCatalog"].includes(message?.type)) return false;
   (message.type === "hidiveCatalog" ? catalog() : history(message.page))
     .then((payload) => ({ ok: true, payload }), (error) => ({ ok: false, error: error?.message || "HIDIVE didn't answer." }))
     .then(sendResponse);
   return true;
 });
+} // end reinjection guard

@@ -286,13 +286,21 @@ export function watchedOn(matches = {}) {
   return found;
 }
 
+/** True when this connected service has a successful local catalog read — prefer it over the where-map gap feed. */
+export function catalogCoversService(catalogs = {}, connected = [], service) {
+  if (!service || !connected.includes(service)) return false;
+  const row = catalogs?.[service];
+  return Boolean(row?.at && !row.error && row.links && typeof row.links === "object");
+}
+
 // AniList id -> [{ service, url, checked, seen }]: catalogs of connected services (checked), gap-map / AniList
-// fills for Netflix·Prime·Hulu (also checked when the URL is a real title page), and shows watched on any
+// fills for Netflix·Prime·Hulu when that service has no local catalog yet, and shows watched on any
 // service (seen). Services switched off under Where to watch are left out. dead: { [url]: true } drops bad links.
 export function availability(catalogs = {}, connected = [], { matches = {}, hidden = [], gaps = {}, dead = {} } = {}) {
   const off = new Set(hidden.map((site) => site.toLowerCase()));
   const shown = (service) => !off.has(serviceById(service)?.name.toLowerCase());
   const live = (url) => typeof url === "string" && url.startsWith("https://") && !dead[url];
+  const covered = new Set(CATALOG_SERVICES.filter((id) => catalogCoversService(catalogs, connected, id)));
   const found = {};
   const add = (anilistId, service, url, flag) => {
     if (!shown(service) || !live(url)) return;
@@ -312,6 +320,8 @@ export function availability(catalogs = {}, connected = [], { matches = {}, hidd
     const id = Number(anilistId);
     if (!Number.isInteger(id)) continue;
     for (const service of GAP_SERVICES) {
+      // Local Netflix/HIDIVE/… browse catalog is region-accurate; don't overlay AniList where-map chips on top.
+      if (covered.has(service)) continue;
       const url = row?.[service];
       if (url) add(id, service, url, "checked");
     }

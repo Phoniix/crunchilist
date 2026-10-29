@@ -195,6 +195,10 @@
     const genres = Array.isArray(item?.genres) ? item.genres.filter((name) => typeof name === "string") : [];
     return { year: year2, anime: genres.length ? genres.some((name) => /anime/i.test(name)) : null };
   }
+  function netflixHistoryStalled(value, page = 0) {
+    const items = value?.viewedItems;
+    return (Number(page) || 0) === 0 && Number(value?.vhSize) > 0 && Array.isArray(items) && items.length === 0;
+  }
   var JUNK_TITLE = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3}|null|undefined)$/i;
   function usablePlayerSeries(name) {
     const series = text(name, 200);
@@ -387,13 +391,11 @@
     });
     async function post(url, headers, body) {
       const viaPage = await askPage("fetch-request", { url, headers, body }, 12e3);
-      if (viaPage) {
-        if (viaPage.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
-        if (!viaPage.ok) {
-          cached = null;
-          throw new Error(`Netflix didn't answer (${viaPage.status || 0}). Reload Netflix and try again, or use the file upload: netflix.com/viewingactivity, then Download all.`);
-        }
-        return viaPage.json;
+      if (viaPage?.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
+      if (viaPage?.ok) return viaPage.json;
+      if (viaPage?.status) {
+        cached = null;
+        throw new Error(`Netflix didn't answer (${viaPage.status}). Reload Netflix and try again, or use the file upload: netflix.com/viewingactivity, then Download all.`);
       }
       const response = await fetch(url, { method: "POST", credentials: "include", headers, body });
       if (response.status === 401) throw new Error("Netflix asked you to sign in again. Reload Netflix, then continue the import.");
@@ -406,7 +408,7 @@
     async function historyPage(me, page) {
       const path = encodeURIComponent(JSON.stringify(["aui", "viewingActivity", page, PAGE_SIZE]));
       const json = await post(
-        `/api/aui/pathEvaluator/web/%5E2.0.0?method=call&callPath=${path}&falcor_server=0.1.0`,
+        `/api/aui/pathEvaluator/web/^2.0.0?method=call&callPath=${path}&falcor_server=0.1.0`,
         {
           ...baseHeaders(me),
           "x-netflix.client.request.name": "ui/xhrUnclassified",
@@ -416,6 +418,7 @@
       );
       const value2 = json?.jsonGraph?.aui?.viewingActivity?.value;
       if (!value2 || !Array.isArray(value2.viewedItems)) throw new Error("Netflix changed how viewing activity is sent. Use the file upload for now: netflix.com/viewingactivity, then Download all.");
+      if (netflixHistoryStalled(value2, page)) throw new Error("Netflix's viewing activity hasn't loaded in that tab yet. Wait a few seconds and try the import again.");
       return value2;
     }
     async function videoData(me, path) {
