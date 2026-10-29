@@ -99,18 +99,26 @@ document.querySelector("#anilist-account").addEventListener("submit", async (eve
     return;
   }
   say("A tab will open for AniList. Finish signing in there, and leave this page open.");
+  const secret = secretInput.value.trim();
   const response = await chrome.runtime.sendMessage({
     type: "startAnilistAuth",
     clientId,
-    clientSecret: secretInput.value.trim(),
+    clientSecret: secret,
   });
-  secretInput.value = "";
+  document.querySelector("#secret-error")?.remove();
   if (response?.ok) {
+    secretInput.value = "";
     say(`Connected as ${response.viewerName}. Read ${response.imported} anime.`);
     await load();
     say(`Connected as ${response.viewerName}. Read ${response.imported} anime.`);
   } else {
-    say(response?.error || "Could not connect AniList.");
+    // Keep the secret so a failed Connect doesn't force a re-paste.
+    const message = response?.error || "Could not connect AniList.";
+    say(message);
+    const fieldError = Object.assign(document.createElement("p"), { id: "secret-error", className: "field-error" });
+    fieldError.textContent = message;
+    secretInput.insertAdjacentElement("afterend", fieldError);
+    secretInput.focus();
   }
 });
 

@@ -1,33 +1,43 @@
 {
   "manifest_version": 3,
-  "name": "Crunchilist",
-  "version": "1.0.115",
+  "name": "Kivori SekAI",
+  "version": "1.0.120",
   "minimum_chrome_version": "114",
-  "description": "Search anime by title or mood, get AI-ranked picks, and track what you watch with AniList.",
-  "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "webNavigation", "declarativeNetRequestWithHostAccess"],
+  "description": "Find anime across your services, get AI-ranked picks, and track what you watch with AniList.",
+  "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "scripting", "alarms", "webNavigation", "declarativeNetRequestWithHostAccess"],
   "host_permissions": [
     "https://www.crunchyroll.com/*",
     "https://*.crunchyroll.com/*",
     "https://anilist.co/*",
     "https://graphql.anilist.co/*",
     "https://*.chromiumapp.org/*",
+    "https://www.youtube-nocookie.com/*",
+    "https://raw.githubusercontent.com/Phoniix/crunchilist/*"
+  ],
+  "optional_host_permissions": [
+    "https://www.netflix.com/*",
+    "https://www.primevideo.com/*",
+    "https://www.amazon.com/gp/video/*",
+    "https://www.hulu.com/*",
+    "https://tubitv.com/*",
+    "https://www.hidive.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://api.groq.com/*",
     "https://openrouter.ai/*",
-    "https://www.youtube-nocookie.com/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://api.myanimelist.net/*",
+    "https://myanimelist.net/*",
+    "http://127.0.0.1:5178/*",
+    "http://localhost:5178/*",
+    "http://127.0.0.1:5391/*",
+    "http://localhost:5391/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Crunchilist",
+    "default_title": "Kivori SekAI",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -45,12 +55,18 @@
   "commands": {
     "switch-crunchilist": {
       "suggested_key": { "default": "Alt+Shift+C" },
-      "description": "Switch between Crunchilist and your Crunchyroll tab"
+      "description": "Switch between Kivori SekAI and your Crunchyroll tab"
     }
   },
   "externally_connectable": {
-    "matches": ["http://localhost/*", "http://127.0.0.1/*"]
+    "matches": [
+      "http://127.0.0.1:5178/*",
+      "http://localhost:5178/*",
+      "http://127.0.0.1:5391/*",
+      "http://localhost:5391/*"
+    ]
   },
+
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true
@@ -85,7 +101,26 @@
       "resources": ["fonts/nunito-latin.woff2"],
       "matches": [
         "https://www.crunchyroll.com/*",
-        "https://*.crunchyroll.com/*"
+        "https://*.crunchyroll.com/*",
+        "https://www.netflix.com/*",
+        "https://www.hidive.com/*",
+        "https://tubitv.com/*",
+        "https://www.primevideo.com/*",
+        "https://www.amazon.com/*",
+        "https://www.hulu.com/*"
+      ]
+    },
+    {
+      "resources": ["icons/kivi.png"],
+      "matches": [
+        "https://www.crunchyroll.com/*",
+        "https://*.crunchyroll.com/*",
+        "https://www.netflix.com/*",
+        "https://www.hidive.com/*",
+        "https://tubitv.com/*",
+        "https://www.primevideo.com/*",
+        "https://www.amazon.com/*",
+        "https://www.hulu.com/*"
       ]
     }
   ]

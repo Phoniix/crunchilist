@@ -1,4 +1,5 @@
 import { cacheKeyForSeries, readCache } from "../lib/anilist.js";
+import { allowsRemoteFeeds } from "../lib/build-channel.js";
 import {
   YOUTUBE_FEED_URL,
   YOUTUBE_KEY,
@@ -23,6 +24,11 @@ export async function loadYoutube() {
 export async function refreshYoutube({ force = false, fetchImpl = fetch } = {}) {
   const stored = (await chrome.storage.local.get(YOUTUBE_KEY))[YOUTUBE_KEY] || {};
   if (!feedDue(stored, Date.now(), force)) return stored;
+  if (!allowsRemoteFeeds()) {
+    const next = { ...stored, checkedAt: Date.now(), error: "" };
+    await chrome.storage.local.set({ [YOUTUBE_KEY]: next });
+    return next;
+  }
   running ||= (async () => {
     const next = { ...stored, checkedAt: Date.now() };
     try {
@@ -59,7 +65,8 @@ function catalogLinks(state, catalog, media) {
 
 // The viewer's YouTube titles: playable in their country, and not a show (or a season of one) Crunchyroll has.
 export async function youtubeFor(state, catalog, media = null) {
-  if (state.settings?.youtubeTitles === false) return [];
+  // Opt-in only; no Settings control yet, so this stays off.
+  if (state.settings?.youtubeTitles !== true) return [];
   const stored = (await chrome.storage.local.get(YOUTUBE_KEY))[YOUTUBE_KEY];
   if (!stored?.feed?.shows?.length) return [];
   const country = countryOf(catalog.locale);

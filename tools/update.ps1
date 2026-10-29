@@ -1,5 +1,5 @@
-# Manual Crunchilist update, for when Update now in Settings can't finish. Double-click update.cmd in the
-# Crunchilist folder. Your list and settings are kept by Chrome, not in this folder, so they stay.
+# Manual Kivori SekAI update, for when Update now in Settings can't finish. Double-click update.cmd in the
+# Kivori SekAI folder. Your list and settings are kept by Chrome, not in this folder, so they stay.
 # Must stay plain ASCII: Windows PowerShell 5.1 reads scripts without a BOM as the local code page.
 param(
   [string]$Root = (Split-Path -Parent $PSScriptRoot),
@@ -8,15 +8,15 @@ param(
   [switch]$NoPause,
   [int]$SettleMs = 1500,
   [string]$Repo = "Phoniix/crunchilist",
-  [string]$ApiBase = "https://api.github.com",
-  [string]$ZipBase = "https://codeload.github.com"
+  [string]$ApiBase = "https://api.github.com"
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 # Same lists as PACKAGE_FOLDERS and PACKAGE_ROOT_FILES in lib/update-files.js (tests/manual-update.test.js checks).
-$Folders = @("app", "background", "fonts", "icons", "lib", "options", "popup", "tools", "ui")
-$RootFiles = @("update.cmd")
+$Folders = @("app", "background", "feeds", "fonts", "icons", "lib", "options", "popup", "tools", "ui")
+$RootFiles = @("update.cmd", "install.cmd", "INSTALL.txt")
+$AppName = "Kivori SekAI"
 $Latin1 = [Text.Encoding]::GetEncoding(28591)
 $Utf8 = New-Object Text.UTF8Encoding $false
 
@@ -34,6 +34,21 @@ function ContentFiles($manifest) {
   foreach ($entry in @($manifest.content_scripts)) {
     if ($entry) { $out += @($entry.js) + @($entry.css) }
   }
+  # Same site scripts as contentFiles() in lib/update-files.js (injected, not listed in content_scripts).
+  $out += @(
+    "content/site-panel.js",
+    "content/site/key-guard.js",
+    "content/site/return.js",
+    "content/site/crunchyroll.js",
+    "content/site/crunchyroll-page.js",
+    "content/site/netflix.js",
+    "content/site/netflix-page.js",
+    "content/site/prime.js",
+    "content/site/hidive.js",
+    "content/site/hidive-page.js",
+    "content/site/tubi.js",
+    "content/site/tubi-page.js"
+  )
   @($out | Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -65,29 +80,33 @@ function GitHubFailure($record) {
   $status = 0
   try { $status = [int]$record.Exception.Response.StatusCode } catch { }
   if ($status -eq 403 -or $status -eq 429) { return "GitHub is limiting requests from your connection right now. Try again in an hour. Nothing was changed." }
+  if ($status -eq 404) { return "No GitHub release zip yet. Publish a release with a kivori-sekai zip, then try again. Nothing was changed." }
   if ($status -gt 0) { return "GitHub answered $status. Try again later. Nothing was changed." }
   "Couldn't reach GitHub. Check your connection and try again. Nothing was changed."
 }
 
-function LatestRef {
-  $headers = @{ "User-Agent" = "Crunchilist-update" }
+function PreferZip($assets) {
+  $zips = @($assets | Where-Object { $_.name -match '\.zip$' -and $_.browser_download_url })
+  $prefer = @($zips | Where-Object { $_.name -match 'kivori' })
+  if ($prefer.Count) { return $prefer[0] }
+  if ($zips.Count) { return $zips[0] }
+  $null
+}
+
+# Newest published release with a zip asset. No master-branch fallback.
+function LatestRelease {
+  $headers = @{ "User-Agent" = "KivoriSekAI-update" }
   try {
     $release = Invoke-RestMethod -Uri "$ApiBase/repos/$Repo/releases/latest" -UseBasicParsing -Headers $headers
-    if ($release.tag_name) { return [string]$release.tag_name }
-  } catch {
-    $status = 0
-    try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-    if ($status -ne 404) { throw (GitHubFailure $_) }
-  }
-  # GitHub caches the master zip for minutes after a push; a commit's zip never changes.
-  try { $commit = Invoke-RestMethod -Uri "$ApiBase/repos/$Repo/commits/master" -UseBasicParsing -Headers $headers }
-  catch { throw (GitHubFailure $_) }
-  if ([string]$commit.sha -notmatch '^[0-9a-f]{40}$') { throw "GitHub's answer didn't make sense. Try again later. Nothing was changed." }
-  [string]$commit.sha
+  } catch { throw (GitHubFailure $_) }
+  if (-not $release.tag_name) { throw "No GitHub release zip yet. Publish a release with a kivori-sekai zip, then try again. Nothing was changed." }
+  $asset = PreferZip $release.assets
+  if (-not $asset) { throw "The latest GitHub release has no zip asset. Attach kivori-sekai-<version>.zip to the release, then try again. Nothing was changed." }
+  [pscustomobject]@{ Tag = [string]$release.tag_name; Url = [string]$asset.browser_download_url }
 }
 
 function Blocked([string]$file) {
-  "Your antivirus blocked $file, so nothing was changed. This is a false alarm on Crunchilist's own files. Allow the Crunchilist folder in your antivirus (Windows Security > Virus & threat protection > Exclusions) and run update.cmd again, or get the zip from https://github.com/$Repo/releases."
+  "Your antivirus blocked $file, so nothing was changed. This is a false alarm on Kivori SekAI's own files. Allow the KivoriSekAI folder in your antivirus (Windows Security > Virus & threat protection > Exclusions) and run update.cmd again, or get the zip from https://github.com/$Repo/releases."
 }
 
 function WriteFailure([string]$file, $record) {
@@ -96,32 +115,32 @@ function WriteFailure([string]$file, $record) {
   # 225 / 226: Windows refused the file because an antivirus flagged it.
   if (($error0.HResult -band 0xFFFF) -in 225, 226) { return Blocked $file }
   if (($error0.HResult -band 0xFFFF) -in 39, 112) { return "Your disk is full, so $file couldn't be written. Nothing was changed. Free up some space and run update.cmd again." }
-  "Couldn't write $file ($($error0.Message.Trim())). Nothing was changed. Close anything using the Crunchilist folder and run update.cmd again."
+  "Couldn't write $file ($($error0.Message.Trim())). Nothing was changed. Close anything using the Kivori SekAI folder and run update.cmd again."
 }
 
-$work = Join-Path ([IO.Path]::GetTempPath()) ("crunchilist-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+$work = Join-Path ([IO.Path]::GetTempPath()) ("kivori-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 try {
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   Add-Type -AssemblyName System.IO.Compression.FileSystem
 
   $Root = (Resolve-Path -LiteralPath $Root).ProviderPath
   $manifestPath = Join-Path $Root "manifest.json"
-  if (-not (Test-Path -LiteralPath $manifestPath)) { throw "There's no Crunchilist in $Root. Put update.cmd back in your Crunchilist folder and run it from there." }
+  if (-not (Test-Path -LiteralPath $manifestPath)) { throw "There's no Kivori SekAI in $Root. Put update.cmd back in your Kivori SekAI folder and run it from there." }
   $installed = ReadManifest $manifestPath
-  if ($installed.name -ne "Crunchilist") { throw "$Root isn't a Crunchilist folder. Run update.cmd from your Crunchilist folder." }
-  if (Test-Path -LiteralPath (Join-Path $Root ".git")) { throw "This Crunchilist folder is a git checkout. Update it with git pull instead." }
-  Write-Host "Crunchilist $($installed.version) in $Root"
+  if ($installed.name -ne $AppName) { throw "$Root isn't a Kivori SekAI folder. Run update.cmd from your Kivori SekAI folder." }
+  if (Test-Path -LiteralPath (Join-Path $Root ".git")) { throw "This Kivori SekAI folder is a git checkout. Update it with git pull instead." }
+  Write-Host "$AppName $($installed.version) in $Root"
 
   New-Item -ItemType Directory -Path $work | Out-Null
-  $archive = Join-Path $work "crunchilist.zip"
+  $archive = Join-Path $work "kivori.zip"
   if ($Zip) {
     Copy-Item -LiteralPath $Zip -Destination $archive
   } else {
-    Write-Host "Checking GitHub for the newest version..."
-    $ref = LatestRef
-    Write-Host "Downloading $(if ($ref.Length -eq 40) { "the newest version" } else { $ref })..."
+    Write-Host "Checking GitHub for the newest release..."
+    $release = LatestRelease
+    Write-Host "Downloading $($release.Tag)..."
     try {
-      Invoke-WebRequest -Uri "$ZipBase/$Repo/zip/$ref" -OutFile $archive -UseBasicParsing -Headers @{ "User-Agent" = "Crunchilist-update" }
+      Invoke-WebRequest -Uri $release.Url -OutFile $archive -UseBasicParsing -Headers @{ "User-Agent" = "KivoriSekAI-update" }
     } catch { throw (GitHubFailure $_) }
   }
 
@@ -134,7 +153,7 @@ try {
   $prefix = ""
   if (-not ($entries | Where-Object { $_.Path -eq "manifest.json" })) {
     $top = @($entries | ForEach-Object { ($_.Path -split "/")[0] } | Select-Object -Unique)
-    if ($top.Count -ne 1) { throw "The download doesn't look like Crunchilist. Nothing was changed." }
+    if ($top.Count -ne 1) { throw "The download doesn't look like Kivori SekAI. Nothing was changed." }
     $prefix = "$($top[0])/"
   }
 
@@ -150,9 +169,9 @@ try {
   $source = Local $stage $prefix
 
   $nextManifestPath = Join-Path $source "manifest.json"
-  if (-not (Test-Path -LiteralPath $nextManifestPath)) { throw "The download doesn't look like Crunchilist. Nothing was changed." }
+  if (-not (Test-Path -LiteralPath $nextManifestPath)) { throw "The download doesn't look like Kivori SekAI. Nothing was changed." }
   $next = ReadManifest $nextManifestPath
-  if ($next.name -ne "Crunchilist") { throw "The download doesn't look like Crunchilist. Nothing was changed." }
+  if ($next.name -ne $AppName) { throw "The download doesn't look like Kivori SekAI. Nothing was changed." }
   if (-not $Force -and (Version $next.version) -le (Version $installed.version)) {
     Write-Host "You already have the newest version ($($installed.version))."
     Finish 0
@@ -174,7 +193,7 @@ try {
   foreach ($file in $files) { $keep[$file.ToLowerInvariant()] = $true }
   $stale = @($present | Select-Object -Unique | Where-Object { -not $keep[$_.ToLowerInvariant()] -and $_ -ne "manifest.json" -and (IsPackagePath $_ $content) })
 
-  # The localhost bridge only serves the dev mockup (storeManifest in lib/update-files.js).
+  # The localhost bridge only serves the lab mockup (sideloadManifest in lib/update-files.js).
   $manifestBytes = [IO.File]::ReadAllBytes($nextManifestPath)
   if ($next.PSObject.Properties.Name -contains "externally_connectable") {
     $next.PSObject.Properties.Remove("externally_connectable")
@@ -228,8 +247,8 @@ try {
   }
 
   Write-Host ""
-  Write-Host "Crunchilist is updated to $($next.version)."
-  Write-Host "Open Crunchilist and it restarts itself on the new version, or press reload on Crunchilist in chrome://extensions."
+  Write-Host "$AppName is updated to $($next.version)."
+  Write-Host "Open Kivori SekAI and it restarts itself on the new version, or press Reload on Kivori SekAI in chrome://extensions."
   Finish 0
 } catch {
   Write-Host ""

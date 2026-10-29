@@ -12,10 +12,27 @@ import {
   parseCodeRedirect,
   toAnilistStatus,
 } from "../lib/anilist.js";
+import { ANILIST_CLIENT_ID, authUrl, parseTokenRedirect } from "../lib/anilist-auth.js";
 import { applySynced, linkCatalog, mergeAnilistList, pendingSync, setEntryProgress, setEntryStatus } from "../lib/library.js";
+import { KEYS } from "../lib/keys.js";
 import { anilistSession, applySettingsPatch, validateClientId, validateClientSecret } from "../lib/settings.js";
 import { catalogPairs } from "./catalog-sync.js";
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
+
+function mirrorAnilistSession({ token, expiresAt, viewer }) {
+  return chrome.storage.local.set({
+    [KEYS.session]: {
+      token,
+      expiresAt,
+      viewer: {
+        id: viewer.id,
+        name: viewer.name || "",
+        avatar: viewer.avatar?.medium || viewer.avatar?.large || "",
+      },
+      connectedAt: Date.now(),
+    },
+  });
+}
 
 async function saveListEntry(token, input) {
   const variables = { mediaId: input.mediaId, status: input.status };
@@ -124,6 +141,9 @@ export function syncActivity() {
     id: "sync",
     label: "Syncing changes to AniList",
     progress: backgroundProgress.done / backgroundProgress.total,
+    done: backgroundProgress.done,
+    total: backgroundProgress.total,
+    service: "global",
   };
 }
 
@@ -347,11 +367,13 @@ export async function startAnilistAuth({ clientId, clientSecret }) {
   return connectAnilist({ token: exchanged.token, expiresIn: exchanged.expiresIn, clientId: cleanId });
 }
 
-export async function connectAnilist({ token, expiresIn, clientId }) {
+export async function connectAnilist({ token, expiresIn, expiresAt: until, clientId }) {
   const cleanId = String(clientId || "").trim();
   if (!/^\d{1,20}$/.test(cleanId)) throw new Error("Enter the AniList client id.");
   if (!token) throw new Error("AniList did not return a token.");
-  const expiresAt = Date.now() + Math.max(0, Number(expiresIn) || 0) * 1000;
+  let expiresAt = Number(until) || 0;
+  if (!expiresAt && expiresIn != null) expiresAt = Date.now() + Math.max(0, Number(expiresIn) || 0) * 1000;
+  if (!expiresAt) expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
   if (expiresAt <= Date.now()) throw new Error("AniList token expired. Connect again.");
   const viewerPayload = await anilist(VIEWER_QUERY, {}, token);
   const viewer = viewerPayload?.data?.Viewer;
@@ -367,7 +389,28 @@ export async function connectAnilist({ token, expiresIn, clientId }) {
   };
   const imported = await pullAccountList(state);
   await saveState(state);
+  // Keep importer / Search-style helpers on the same token as main settings.
+  await mirrorAnilistSession({ token, expiresAt, viewer });
   return { state, imported, viewerName: viewer.name };
+}
+
+/** One-click Connect: shipped public client + implicit grant (no client secret). */
+export async function startAnilistOneClick() {
+  let redirect;
+  try {
+    redirect = await chrome.identity.launchWebAuthFlow({ url: authUrl(), interactive: true });
+  } catch (error) {
+    throw new Error(/did not approve|cancel|closed/i.test(String(error?.message || error))
+      ? "AniList sign-in was cancelled."
+      : "AniList sign-in didn't finish. Try again.");
+  }
+  const result = parseTokenRedirect(redirect || "");
+  if (result.error) throw new Error(result.error);
+  return connectAnilist({
+    token: result.token,
+    expiresAt: result.expiresAt,
+    clientId: String(ANILIST_CLIENT_ID),
+  });
 }
 
 export async function disconnectAnilist() {
@@ -380,6 +423,7 @@ export async function disconnectAnilist() {
     anilistViewerName: "",
   };
   await saveState(state);
+  await chrome.storage.local.remove(KEYS.session);
   return { state };
 }
 

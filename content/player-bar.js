@@ -1,3 +1,4 @@
+import { KIVORI_LOGO_SVG } from "../lib/brand-logo.js";
 import { ROUNDED, roundedFontFace } from "../ui/dom.js";
 
 const CSS = `
@@ -64,7 +65,7 @@ const CSS = `
   [hidden] { display: none !important; }
 `;
 
-const LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="clb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f3f"/><stop offset="1" stop-color="#ef5418"/></linearGradient></defs><path fill="url(#clb)" d="M406.51,82.09A230,230 0 1 0 406.51,429.91A190,190 0 1 1 406.51,82.09Z"/><path transform="translate(210 116) scale(.153)" fill="#ffc54d" stroke="#ffc54d" stroke-width="60" stroke-linejoin="round" fill-rule="evenodd" d="M68.98,29.53l1862.04,315.6L952.66,692.29V1970.47L116.32,234.67l867.9,110.46H305.68L873.76,1591.75V613.39l710.1-268.26Z"/></svg>`;
+const LOGO = KIVORI_LOGO_SVG;
 
 const PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
 const IDLE_MS = 3000;
@@ -72,15 +73,7 @@ const GAP = 12;
 const TIP_MS = 9000;
 const TIP_WIDTH = 250;
 const TIP_SEEN = "crunchilist-back-tip";
-
-function playerBox(doc) {
-  const video = doc.querySelector("video");
-  for (const node of [...doc.querySelectorAll(PLAYER), video]) {
-    const rect = node?.getBoundingClientRect();
-    if (rect && rect.width > 240 && rect.height > 135) return rect;
-  }
-  return null;
-}
+const BACK_LABEL = "Open Kivori SekAI";
 
 function headerBottom(doc) {
   const header = doc.querySelector(".erc-large-header");
@@ -111,6 +104,19 @@ export function mainVideo(videos) {
   return best;
 }
 
+function playerBox(doc) {
+  const main = mainVideo(doc.querySelectorAll("video"));
+  if (main) {
+    const rect = main.getBoundingClientRect();
+    if (rect.width > 240 && rect.height > 135) return rect;
+  }
+  for (const node of doc.querySelectorAll(PLAYER)) {
+    const rect = node.getBoundingClientRect();
+    if (rect.width > 240 && rect.height > 135) return rect;
+  }
+  return null;
+}
+
 // Chrome can't keep an extension's window above other windows; its floating video player
 // (Picture-in-Picture) is the one surface that stays on top. Entering it needs a click in the
 // document that holds the video, so in Crunchyroll's player iframe the frame draws this switch itself
@@ -120,14 +126,14 @@ export function createPlayerBar(doc, { send, tips = false, frame = false }) {
   const host = doc.createElement("div");
   host.id = "crunchilist-tabbar";
   const shadow = host.attachShadow({ mode: "open" });
-  shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Crunchilist">
+  shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Crunchilist</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>${BACK_LABEL}</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Crunchilist tab whenever you're done watching.</small>
+    <b>Click here to open Kivori SekAI</b><small>Switches to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
@@ -385,17 +391,25 @@ export function createPlayerBar(doc, { send, tips = false, frame = false }) {
   }, { passive: true, capture: true });
   win.addEventListener("scroll", schedulePlace, { passive: true, capture: true });
   win.addEventListener("resize", schedulePlace, { passive: true });
+  // Performance mode skips tip prompts and only repositions the bar every other tick.
+  let liteTick = false;
   win.setInterval(() => {
     if (!host.isConnected) return;
     syncPip();
+    if (role?.liteMode) {
+      liteTick = !liteTick;
+      if (liteTick) return;
+    } else {
+      liteTick = false;
+      maybeTip();
+    }
     schedulePlace();
-    maybeTip();
   }, 1000);
 
   back.addEventListener("click", async () => {
     hideTip();
     const response = await send("backToCrunchilist");
-    if (!response?.ok) flash(response?.error || "Couldn't find your Crunchilist tab.");
+    if (!response?.ok) flash(response?.error || "Couldn't find your Kivori SekAI tab.");
   });
 
   const button = (node, label, onClick) => {

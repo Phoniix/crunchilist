@@ -1,25 +1,45 @@
 import { LIBRARY_STATUS, buildAppShows, libraryMirror, mediaWanted, seasonTarget } from "../lib/app-shows.js";
+import { catalogOnlyShows } from "../lib/catalog-shows.js";
+import { availability, withCatalogLinks } from "../lib/catalogs.js";
 import { setEntryProgress, setEntryStatus } from "../lib/library.js";
 import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable, mediaNode, missingNode } from "../lib/seasons.js";
 import { changeLibrary } from "./anilist-sync.js";
+import { readCatalogs } from "./catalog-reader.js";
+import { loadServiceCatalogs } from "./catalog-store.js";
+import { expireProvisionalContinueActivity, loadContinueActivity } from "./continue-activity.js";
+import { refreshIdMap } from "./id-map-store.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
-import { refreshYoutube, youtubeFor } from "./youtube.js";
+import { loadDead } from "./dead-links.js";
+import { loadUnrecommended } from "./unrecommended.js";
+import { loadGaps, refreshWhereMap } from "./where-map-store.js";
 
 async function loadShows(state) {
   const catalog = await loadCatalog();
   const media = await loadMedia();
-  const youtube = await youtubeFor(state, catalog, media);
-  return { catalog, shows: buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library, youtube }) };
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = Object.keys(catalogs).filter((id) => catalogs[id]?.links);
+  const found = availability(catalogs, connected, { gaps, dead });
+  const base = buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library });
+  const already = new Set(base.map((show) => show.anilistId).filter(Boolean));
+  // Same enrich gate as search: title + genres/about only (high-confidence matches come from availability).
+  const extras = catalogOnlyShows(found, media, already, { enrich: true });
+  const shows = [...base, ...extras].map((show) => withCatalogLinks(show, found, { dead }));
+  return { catalog, shows };
 }
 
-// Everything the Crunchilist page shows. Secrets never leave the background: the view carries public settings only.
+// Everything the Kivori SekAI page shows. Secrets never leave the background: the view carries public settings only.
 export async function appData() {
   const state = await loadState();
   const { catalog, shows } = await loadShows(state);
   refreshMediaExtras().catch(() => {});
-  refreshYoutube().catch(() => {});
-  return { shows, library: libraryMirror(shows, state.library), view: makeView(state, catalog) };
+  refreshWhereMap().catch(() => {});
+  refreshIdMap().catch(() => {});
+  readCatalogs(["crunchyroll"]).catch(() => {});
+  const continueActivity = await expireProvisionalContinueActivity().catch(() => loadContinueActivity());
+  const view = makeView(state, catalog);
+  view.unrecommended = await loadUnrecommended();
+  return { shows, library: libraryMirror(shows, state.library), continueActivity, view, unrecommended: view.unrecommended };
 }
 
 export async function setSeasonState(showId, changes) {
@@ -52,7 +72,15 @@ export function refreshMediaExtras(signal) {
 async function fetchExtras(signal) {
   const state = await loadState();
   const catalog = await loadCatalog();
-  const { ids, catalogIds, offCatalog } = mediaWanted({ catalog, cache: state.anilistCache, library: state.library });
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = Object.keys(catalogs).filter((id) => catalogs[id]?.links);
+  const found = availability(catalogs, connected, { gaps, dead });
+  const { ids, catalogIds, offCatalog } = mediaWanted({
+    catalog,
+    cache: state.anilistCache,
+    library: state.library,
+    found,
+  });
   if (!ids.length) return;
   const media = await loadMedia();
   let changed = false;

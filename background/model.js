@@ -200,12 +200,22 @@ function languageModel() {
   return globalThis.LanguageModel || null;
 }
 
+let chromeAvailabilityCache = { at: 0, value: "" };
+const CHROME_AVAILABILITY_TTL_MS = 10 * 60 * 1000;
+
 async function chromeModelStatus() {
   const model = languageModel();
   if (!model?.availability) return "unavailable";
+  const now = Date.now();
+  if (chromeAvailabilityCache.value && now - chromeAvailabilityCache.at < CHROME_AVAILABILITY_TTL_MS) {
+    return chromeAvailabilityCache.value;
+  }
   try {
-    return await model.availability(CHROME_MODEL);
+    const value = await model.availability(CHROME_MODEL);
+    chromeAvailabilityCache = { at: now, value };
+    return value;
   } catch {
+    chromeAvailabilityCache = { at: now, value: "unavailable" };
     return "unavailable";
   }
 }
@@ -311,7 +321,8 @@ async function modelRecentlyStalled(span = MODEL_STALL_RETRY_MS) {
 }
 
 async function preloadChromeModel(state) {
-  if (hasRemote(state.settings) || state.settings.useAi === false) return "";
+  // Performance mode skips background model downloads; the user can still opt in by turning AI on after.
+  if (hasRemote(state.settings) || state.settings.useAi === false || state.settings.liteMode) return "";
   const status = await chromeModelStatus();
   if (status !== "downloadable" && status !== "downloading") return status;
   if (chromeModelDownload || await modelRecentlyStalled(MODEL_PRELOAD_RETRY_MS)) return status;
@@ -437,7 +448,7 @@ async function modelStatus() {
   const model = languageModel();
   if (!hasKey && model?.availability) {
     try {
-      availability = await model.availability(CHROME_MODEL);
+      availability = await chromeModelStatus();
     } catch {
       availabilityError = true;
     }

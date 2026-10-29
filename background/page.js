@@ -13,7 +13,12 @@ import { describeNotice, liveNotices } from "../lib/notices.js";
 import { publicSettings } from "../lib/settings.js";
 import { collectTagSuggestions } from "../lib/taste.js";
 import { retryPendingSync, syncStatus } from "./anilist-sync.js";
+import { noteContinueFromCrObservation } from "./continue-activity.js";
+import { sendWatchGuide } from "./watch-guide.js";
+
+const guidedCrKeys = new Set();
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
+import { loadUnrecommended } from "./unrecommended.js";
 
 let enrichToken = 0;
 
@@ -80,7 +85,7 @@ export function makeView(state, catalog, observation = state.lastObservation) {
     notices: liveNotices(state.notices, state.library).map((row) => ({
       id: row.id,
       kind: row.kind,
-      cover: row.show.cover,
+      cover: row.show?.cover || "",
       createdAt: row.createdAt,
       ...describeNotice(row),
     })),
@@ -89,7 +94,9 @@ export function makeView(state, catalog, observation = state.lastObservation) {
 
 export async function currentView(state = null) {
   const loaded = state || await loadState();
-  return makeView(loaded, await loadCatalog());
+  const view = makeView(loaded, await loadCatalog());
+  view.unrecommended = await loadUnrecommended();
+  return view;
 }
 
 export async function pageUpdate(observation, sender) {
@@ -98,10 +105,26 @@ export async function pageUpdate(observation, sender) {
   state.lastObservation = observation;
   await saveState(state);
   const tabId = sender?.tab?.id;
+  if (observation.kind === "watch") {
+    noteContinueFromCrObservation(observation).then((row) => {
+      if (!row || tabId == null) return;
+      const key = `${row.id}:${row.progress ?? row.next ?? ""}`;
+      if (guidedCrKeys.has(key)) return;
+      guidedCrKeys.add(key);
+      if (guidedCrKeys.size > 80) guidedCrKeys.clear();
+      sendWatchGuide(tabId, {
+        kind: "tracked",
+        title: row.title,
+        episode: Number(row.progress) >= 0 ? Number(row.progress) + 1 : null,
+        service: "crunchyroll",
+      }).catch(() => {});
+    }).catch(() => {});
+  }
   retryPendingSync().then(async (result) => {
     if (result && tabId != null) await chrome.tabs.sendMessage(tabId, { type: "enriched", view: await currentView(result.state) });
   }).catch(() => {});
-  if (tabId != null && (observation.kind === "series" || observation.kind === "watch")) {
+  // AniList season lookups on every series/watch page are skipped in performance mode.
+  if (tabId != null && (observation.kind === "series" || observation.kind === "watch") && !state.settings?.liteMode) {
     const token = ++enrichToken;
     enrich(tabId, token).catch(() => {});
   }

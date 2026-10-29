@@ -1,8 +1,9 @@
+import { DEV_BRIDGE_TOKEN, allowsDevBridge, isDevBridgeSender } from "../lib/build-channel.js";
 import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { currentActivity, watchActivity } from "./activity.js";
 import { appData, setSeasonState } from "./app-data.js";
 import { entryForSeries } from "../lib/library.js";
-import { providerById } from "../lib/providers.js";
+import { providerById, providerOrigin } from "../lib/providers.js";
 import { applySettingsPatch } from "../lib/settings.js";
 import { sanitizeTaste } from "../lib/taste.js";
 import {
@@ -16,6 +17,7 @@ import {
   setShowProgress,
   setShowStatus,
   startAnilistAuth,
+  startAnilistOneClick,
   syncStatus,
 } from "./anilist-sync.js";
 import { catalogProgress, catalogSession, runCatalogProtocol } from "./catalog-sync.js";
@@ -24,10 +26,20 @@ import { applyHistory, cancelHistory, historyPlan, historyProgress, scanHistory,
 import { modelStatus, originAllowed, resolveModel } from "./model.js";
 import { currentView, makeView, pageUpdate, showForSeries } from "./page.js";
 import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, tokenArrived, undoMove, warmEpisodes, watchPlayerTabs } from "./player.js";
-import { catalogRerank, catalogSearch, catalogSuggest, homeRows, searchInspired } from "./search.js";
+import { catalogRerank, catalogSearch, catalogSuggest, forYouPicksCache, homeRows, searchInspired } from "./search.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
 import { checkForUpdate, markUpdateAnnounced } from "./updates.js";
-import { refreshYoutube } from "./youtube.js";
+import { readCatalogs } from "./catalog-reader.js";
+import { catalogStatus } from "./catalog-store.js";
+import { idMapStatus, refreshIdMap } from "./id-map-store.js";
+import { catalogSoon, forgetTab, handleImportMessage, importHandles, onImportAlarm, setupImportAlarms, syncSoon } from "./import-host.js";
+import {
+  connectSite, disconnectSite, panelHello, siteConnections, syncSiteScripts,
+} from "./site-scripts.js";
+import { continueWatching, titleSearch } from "./title-search.js";
+import { muteTitle, setUnrecommended, unmuteTitle } from "./unrecommended.js";
+import { refreshWhereMap, whereMapStatus } from "./where-map-store.js";
+import { applyImportHistoryFix } from "../lib/import-migrate.js";
 
 function seriesIdFrom(id) {
   return String(id || "").replace(/^sight:/, "");
@@ -88,14 +100,28 @@ async function updateTaste(taste) {
 async function updateSettings(patch) {
   const state = await loadState();
   const clean = {};
-  for (const key of ["apiKey", "providerKey", "aiService", "anilistUsername", "anilistClientId", "panelOpen", "panelCorner", "hideWatched", "useAi", "favorNamed", "episodeDialogs", "askModelDownload", "muteNotifications", "badgeStyle", "badgeCorner", "badgeSize", "badgeProgress", "badgeUnwatched", "badgeMotion", "liteMode", "openIn", "tabManage", "tabAuto", "backButton", "miniPlayer", "showTips"]) {
+  for (const key of [
+    "apiKey", "providerKey", "aiService", "anilistUsername", "anilistClientId", "panelOpen", "panelCorner", "hideWatched",
+    "useAi", "favorNamed", "episodeDialogs", "askModelDownload", "muteNotifications", "badgeStyle", "badgeCorner",
+    "badgeSize", "badgeProgress", "badgeUnwatched", "badgeMotion", "liteMode", "openIn", "tabManage", "tabAuto",
+    "backButton", "miniPlayer", "showTips",
+    "hiddenSites", "listingSite", "listingOn", "readCatalogs", "hideOffSiteShows",
+    "dailySync", "syncApply", "trackNetflix", "trackTubi", "trackHidive", "weeklyTrackerPull", "writeMal",
+    "dailySyncMode", "openEpisodes", "notificationStyle", "trackWhileWatching", "trackSites",
+    "whereFilterMode", "lastWhereSite",
+  ]) {
     if (patch?.[key] !== undefined) clean[key] = patch[key];
   }
   state.settings = applySettingsPatch(state.settings, clean);
+  if (clean.dailySync === false || clean.dailySyncMode === "off") {
+    state.settings = applySettingsPatch(state.settings, { syncApply: false });
+  }
   const saved = typeof clean.apiKey === "string" ? { id: "openai", key: clean.apiKey } : clean.providerKey;
   const provider = saved?.key ? providerById(saved.id) : null;
   let keyNote = "";
   if (provider) {
+    const origin = providerOrigin(provider);
+    if (origin) await chrome.permissions.request({ origins: [origin] }).catch(() => false);
     try {
       const picked = await resolveModel(provider, state.settings.apiKeys[provider.id]);
       if (picked) state.settings = applySettingsPatch(state.settings, { providerModel: { id: provider.id, model: picked } });
@@ -105,6 +131,8 @@ async function updateSettings(patch) {
     }
   }
   await saveState(state);
+  if (state.settings.dailySync) syncSoon().catch(() => {});
+  if (state.settings.readCatalogs !== false) catalogSoon().catch(() => {});
   const result = { view: await currentView(state), keyNote };
   if (provider) {
     result.originOk = await originAllowed(provider.baseUrl);
@@ -119,6 +147,11 @@ async function withView(promise) {
 }
 
 async function handle(message, sender) {
+  if (importHandles(message?.type)) {
+    const result = await handleImportMessage(message, sender);
+    if (result?.openHash) await openApp(result.openHash);
+    return result;
+  }
   switch (message?.type) {
     case "pageUpdate":
       return pageUpdate(message.observation, sender);
@@ -151,15 +184,23 @@ async function handle(message, sender) {
         offset: message.offset,
         limit: message.limit,
         browse: message.browse === true,
+        siteOnly: message.siteOnly === true,
       });
     case "catalogSuggest":
-      return catalogSuggest(message.query, message.chip, message.site);
+      return catalogSuggest(message.query, message.chip, message.site, { siteOnly: message.siteOnly === true });
     case "catalogRerank":
       return catalogRerank(message.query, message.chip, message.site, message.ids, { reroll: message.reroll, seen: message.seen, last: message.last, save: message.save });
+    case "forYouPicksCache":
+      return forYouPicksCache();
     case "searchInspired":
       return searchInspired(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh) });
     case "homeRows":
-      return homeRows(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh), nudge: typeof message.nudge === "string" ? message.nudge : undefined });
+      return homeRows(message.searches, {
+        ai: message.ai !== false,
+        fresh: Boolean(message.fresh),
+        nudge: typeof message.nudge === "string" ? message.nudge : undefined,
+        excludeIds: Array.isArray(message.excludeIds) ? message.excludeIds : [],
+      });
     case "catalogProgress":
       return catalogProgress();
     case "refreshCatalogCovers":
@@ -194,6 +235,18 @@ async function handle(message, sender) {
       return resolveAllNotices(message.action);
     case "setTaste":
       return updateTaste(message.taste);
+    case "muteTitle": {
+      const unrecommended = await muteTitle(message.show);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
+    case "unmuteTitle": {
+      const unrecommended = await unmuteTitle(message.id);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
+    case "setUnrecommended": {
+      const unrecommended = await setUnrecommended(message.list);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
     case "setSettings":
       return updateSettings(message.patch || {});
     case "clearKey":
@@ -208,6 +261,8 @@ async function handle(message, sender) {
       return withView(importAnilist(message.username));
     case "startAnilistAuth":
       return withView(startAnilistAuth(message));
+    case "startAnilistOneClick":
+      return withView(startAnilistOneClick());
     case "connectAnilist":
       return withView(connectAnilist(message));
     case "disconnectAnilist":
@@ -218,10 +273,41 @@ async function handle(message, sender) {
       await chrome.runtime.openOptionsPage();
       return {};
     case "openApp":
-      await openApp();
+      await openApp(message.hash || "");
       return {};
+    case "panelHello":
+      return panelHello(message, sender);
+    case "titleSearch":
+      return titleSearch(message);
+    case "continueWatching":
+      return continueWatching(message);
+    case "siteConnections":
+      return { sites: await siteConnections(), catalogs: await catalogStatus() };
+    case "connectSite":
+      return connectSite(message.service || message.id);
+    case "disconnectSite":
+      return disconnectSite(message.service || message.id);
     case "appData":
       return appData();
+    case "titleFeeds":
+      return {
+        whereMap: await whereMapStatus(),
+        idMap: await idMapStatus(),
+        catalogs: await catalogStatus(),
+      };
+    case "refreshTitleFeeds":
+      await Promise.all([
+        refreshWhereMap({ force: true }),
+        refreshIdMap({ force: true }),
+        readCatalogs(["crunchyroll"], { force: true }).catch(() => []),
+      ]);
+      return {
+        whereMap: await whereMapStatus(),
+        idMap: await idMapStatus(),
+        catalogs: await catalogStatus(),
+      };
+    case "readCatalogs":
+      return { results: await readCatalogs(message.ids || ["crunchyroll"], { force: message.force === true }) };
     case "setSeasonState":
       return setSeasonState(message.showId, message.changes);
     case "updateStatus":
@@ -276,35 +362,46 @@ async function openShortcuts() {
   return {};
 }
 
-// Development bridge: the app page mockup served from localhost can start playback through the extension.
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(sender?.url || "")) return false;
-  const playback = async () => {
-    const view = await currentView();
-    const { openIn, tabManage, tabAuto, backButton, showTips, anilistConnected, anilistExpired, anilistViewerName } = view.settings || {};
-    const name = anilistConnected || anilistExpired ? anilistViewerName || "" : view.importMeta?.username || "";
-    const account = { name, connected: Boolean(anilistConnected && anilistViewerName), expired: Boolean(anilistExpired), avatar: name && view.importMeta?.username === name ? view.importMeta.avatar || "" : "", importedAt: view.importMeta?.importedAt || 0 };
-    return { version: chrome.runtime.getManifest().version, shortcut: await switchShortcut(), account, playback: { openIn, tabManage, tabAuto, backButton, showTips } };
-  };
-  const pick = (patch) => Object.fromEntries(["openIn", "tabManage", "tabAuto", "backButton", "showTips"].filter((key) => patch?.[key] !== undefined).map((key) => [key, patch[key]]));
-  const run = message?.type === "playEpisode" ? playEpisode(message, sender)
-    : message?.type === "ping" ? playback()
-    : message?.type === "setPlayback" ? updateSettings(pick(message.patch)).then(playback)
-    : message?.type === "openShortcuts" ? openShortcuts()
-    : Promise.reject(new Error("Unknown message"));
-  run.then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }));
-  return true;
-});
+// Lab bridge (unpacked only): npm run lab on port 5391. Store builds strip externally_connectable.
+if (allowsDevBridge()) {
+  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    if (!isDevBridgeSender(sender?.url || "")) return false;
+    if (message?.token !== DEV_BRIDGE_TOKEN) {
+      sendResponse({ ok: false, error: "Unauthorized" });
+      return true;
+    }
+    const playback = async () => {
+      const view = await currentView();
+      const { openIn, tabManage, tabAuto, backButton, showTips, anilistConnected, anilistExpired, anilistViewerName } = view.settings || {};
+      const name = anilistConnected || anilistExpired ? anilistViewerName || "" : view.importMeta?.username || "";
+      const account = { name, connected: Boolean(anilistConnected && anilistViewerName), expired: Boolean(anilistExpired), avatar: name && view.importMeta?.username === name ? view.importMeta.avatar || "" : "", importedAt: view.importMeta?.importedAt || 0 };
+      return { version: chrome.runtime.getManifest().version, shortcut: await switchShortcut(), account, playback: { openIn, tabManage, tabAuto, backButton, showTips } };
+    };
+    const pick = (patch) => Object.fromEntries(["openIn", "tabManage", "tabAuto", "backButton", "showTips"].filter((key) => patch?.[key] !== undefined).map((key) => [key, patch[key]]));
+    const run = message?.type === "playEpisode" ? playEpisode(message, sender)
+      : message?.type === "ping" ? playback()
+      : message?.type === "setPlayback" ? updateSettings(pick(message.patch)).then(playback)
+      : message?.type === "openShortcuts" ? openShortcuts()
+      : Promise.reject(new Error("Unknown message"));
+    run.then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }));
+    return true;
+  });
+}
 
 chrome.runtime.onInstalled.addListener((details) => {
   loadState().then(saveState).catch(() => {});
   checkForUpdate({ force: true }).catch(() => {});
-  refreshYoutube({ force: true }).catch(() => {});
+  refreshWhereMap({ force: true }).catch(() => {});
+  refreshIdMap({ force: true }).catch(() => {});
+  syncSiteScripts().catch(() => {});
+  setupImportAlarms();
+  applyImportHistoryFix().catch(() => {});
+  if (details?.reason === "install") openApp("#welcome").catch(() => {});
   if (details?.reason === "update") reopenAfterUpdate().catch(() => {});
 });
 
-// The Update button reloads the extension, which closes Crunchilist's tab; open it again on the new version.
+// The Update button reloads the extension, which closes the Kivori SekAI tab; open it again on the new version.
 async function reopenAfterUpdate() {
   const { crReopenApp } = await chrome.storage.local.get("crReopenApp");
   if (!crReopenApp) return;
@@ -314,14 +411,24 @@ async function reopenAfterUpdate() {
 }
 chrome.runtime.onStartup.addListener(() => {
   checkForUpdate().catch(() => {});
-  refreshYoutube().catch(() => {});
+  refreshWhereMap().catch(() => {});
+  refreshIdMap().catch(() => {});
+  syncSiteScripts().catch(() => {});
+  setupImportAlarms();
+  // Idempotent: covers Load unpacked reloads where onInstalled may not fire as "update".
+  applyImportHistoryFix().catch(() => {});
 });
+chrome.permissions.onAdded?.addListener(() => { syncSiteScripts().catch(() => {}); });
+chrome.permissions.onRemoved?.addListener(() => { syncSiteScripts().catch(() => {}); });
+chrome.alarms.onAlarm.addListener((alarm) => { onImportAlarm(alarm); });
+chrome.tabs.onRemoved.addListener((tabId) => { forgetTab(tabId).catch(() => {}); });
 
-async function openApp() {
-  const url = chrome.runtime.getURL("app/app.html");
-  const [existing] = await chrome.tabs.query({ url });
+async function openApp(hash = "") {
+  const base = chrome.runtime.getURL("app/app.html");
+  const url = hash ? `${base}${hash.startsWith("#") ? hash : `#${hash}`}` : base;
+  const [existing] = await chrome.tabs.query({ url: `${base}*` });
   if (existing?.id) {
-    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.update(existing.id, { active: true, url: hash ? url : undefined });
     if (existing.windowId != null) await chrome.windows.update(existing.windowId, { focused: true });
     return;
   }
@@ -331,7 +438,7 @@ async function openApp() {
 function paintActionBadge(enabled) {
   chrome.action.setBadgeText({ text: enabled ? "" : "OFF" }).catch(() => {});
   chrome.action.setBadgeBackgroundColor({ color: "#5a4f47" }).catch(() => {});
-  chrome.action.setTitle({ title: enabled ? "Crunchilist" : "Crunchilist (off on Crunchyroll)" }).catch(() => {});
+  chrome.action.setTitle({ title: enabled ? "Kivori SekAI" : "Kivori SekAI (off on Crunchyroll)" }).catch(() => {});
 }
 
 isEnabled().then(paintActionBadge).catch(() => {});
@@ -343,7 +450,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "activity") return false;
   handle(message, sender)
     .then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }))
+    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed", ...(error?.code ? { code: error.code } : {}) }))
     .finally(() => watchActivity());
   return true;
 });

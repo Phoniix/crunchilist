@@ -1,5 +1,5 @@
 import { ROUNDED, el, icon, progressMeter, roundedFontFace } from "../ui/dom.js";
-import { SEARCH_CSS, createSearchView } from "../ui/search-view.js";
+import { SEARCH_CSS, SEARCH_PLATFORMS, createSearchView } from "../ui/search-view.js";
 import { NOTICES_CSS, createNoticesView, noticeBadge, paintBadge } from "../ui/notices-view.js";
 import { SETTINGS_CSS, createSettingsView } from "../ui/settings-view.js";
 import { THEME_CSS } from "../ui/theme.js";
@@ -10,9 +10,11 @@ const SHELL_CSS = `
   :host { pointer-events: none; }
   .launcher, .backdrop, .panel, .drawer, .gather, .toast { pointer-events: auto; color: var(--text); font: 400 15px/1.45 ${ROUNDED}; }
   .toast {
-    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 10px; padding: 10px 8px 10px 16px;
+    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 14px; padding: 10px 8px 10px 16px;
     border-radius: 18px; animation: shell-toast .26s var(--ease) both;
   }
+  /* Keep catalog gather and episode toasts from stacking on top of each other. */
+  .gather:not([hidden]) ~ .toast, .toast:not([hidden]) ~ .gather { margin-bottom: 18px; }
   @keyframes shell-toast { from { opacity: 0; transform: translateY(8px); } }
   .toast-copy { flex: 1; min-width: 0; }
   .toast-title { margin: 0; font: 800 13.5px/1.3 ${ROUNDED}; }
@@ -34,7 +36,7 @@ const SHELL_CSS = `
     box-shadow: 0 14px 36px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .06);
     transition: transform .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
   }
-  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: rgba(255, 154, 92, .4); background: var(--glass-strong); }
+  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--glass-strong); }
   .launcher:active { transform: translateY(0); }
   .launcher.is-locked { cursor: progress; }
   .launcher.is-locked svg { animation: shell-pulse 1.4s ease-in-out infinite; }
@@ -72,25 +74,37 @@ const SHELL_CSS = `
   .drawer.is-open { display: block; animation: shell-fade .18s var(--ease) both; }
   :host(.fullscreen) .launcher { width: 12px; height: 60px; border-radius: 8px 0 0 8px; opacity: .5; }
   :host(.fullscreen) .launcher svg { display: none; }
-  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer { display: none !important; }
+  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer, :host(.fullscreen) .gather { display: none !important; }
 `;
 
-export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () => {}, onView = () => {} }) {
+export function createPanel(doc, {
+  send,
+  site = "crunchyroll",
+  // Same Where chips as other site panels (on → only → off), not Crunchyroll alone.
+  platforms = SEARCH_PLATFORMS,
+  accent = "",
+  gatherLabel = "Gathering the Crunchyroll list",
+  layout = null,
+  hostId = "cr-corner-host",
+  onOpenChange = () => {},
+  onCorner = () => {},
+  onView = () => {},
+} = {}) {
   const host = doc.createElement("div");
-  host.id = "cr-corner-host";
+  host.id = hostId;
   host.className = "cl-theme";
   const shadow = host.attachShadow({ mode: "open" });
   const style = doc.createElement("style");
   style.textContent = roundedFontFace() + THEME_CSS + SEARCH_CSS + SETTINGS_CSS + NOTICES_CSS + SHELL_CSS;
 
   const launcherBadge = noticeBadge();
-  const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Crunchilist search", title: "Search with Crunchilist" }, [icon("search", 22), launcherBadge]);
-  const gatherText = el("span", { text: "Gathering the Crunchyroll list" });
+  const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Kivori SekAI search", title: "Search with Kivori SekAI" }, [icon("search", 22), launcherBadge]);
+  const gatherText = el("span", { text: gatherLabel });
   const gatherMeter = progressMeter("Background progress");
   const gather = el("div", { class: "gather glass", role: "status", hidden: true }, [icon("sparkle", 15), el("div", { class: "gather-copy" }, [gatherText, gatherMeter.root])]);
-  const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Crunchilist", tabindex: "-1" });
-  const panel = el("section", { class: "panel glass", role: "dialog", "aria-label": "Crunchilist search", hidden: true });
-  const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Crunchilist settings", hidden: true });
+  const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Kivori SekAI", tabindex: "-1" });
+  const panel = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
+  const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Kivori SekAI settings", hidden: true });
   const toastTitle = el("p", { class: "toast-title" });
   const toastMeta = el("p", { class: "toast-meta" });
   const toastAction = el("button", { class: "btn primary", type: "button" });
@@ -109,7 +123,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
   let corner = "bottom-right";
   let hydrated = false;
 
-  const search = createSearchView({ send, site: "crunchyroll", onView });
+  const search = createSearchView({ send, site, platforms, onView });
   const moveButton = el("button", { class: "btn", type: "button", title: "Move the search button to the next corner" }, [icon("corner", 15), el("span", { text: "Move button" })]);
   const settings = createSettingsView({ send, onView, pageContext: true, extras: [moveButton] });
   const notices = createNoticesView({ send, onView });
@@ -120,17 +134,57 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
   const closeButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Close", title: "Close" }, [icon("close")]);
   const body = el("div", { class: "body" }, [search.root]);
   panel.append(
-    el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Crunchilist" }), fullButton, bellButton, settingsButton, closeButton]),
+    el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Kivori SekAI" }), fullButton, bellButton, settingsButton, closeButton]),
     body,
   );
   search.setScrollRoot(body);
   drawer.append(settings.root, notices.root);
   let drawerPane = "settings";
 
+  function applyAccent() {
+    if (!accent) return;
+    host.style.setProperty("--accent", accent);
+    host.style.setProperty("--accent-text", accent);
+    host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
+  }
+
+  // Lift the launcher above cookie / consent bars so Accept stays clickable (HIDIVE, etc.).
+  const COOKIE_SEL = [
+    "#onetrust-banner-sdk",
+    "#onetrust-consent-sdk",
+    "#CybotCookiebotDialog",
+    ".osano-cm-window",
+    "[id*='cookie' i][class*='banner' i]",
+    "[class*='cookie' i][class*='banner' i]",
+    "[aria-label*='cookie' i]",
+    "[aria-label*='consent' i]",
+  ].join(",");
+
+  function cookieLiftPx() {
+    if (!corner.startsWith("bottom") || fullscreen) return 0;
+    let lift = 0;
+    for (const node of document.querySelectorAll(COOKIE_SEL)) {
+      if (!(node instanceof HTMLElement)) continue;
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) continue;
+      const box = node.getBoundingClientRect();
+      if (box.height < 36 || box.width < 80) continue;
+      if (box.bottom < window.innerHeight - 8 || box.top > window.innerHeight) continue;
+      lift = Math.max(lift, Math.ceil(window.innerHeight - box.top + 12));
+    }
+    return Math.min(lift, Math.floor(window.innerHeight * 0.45));
+  }
+
+  function withBottomLift(css, lift) {
+    if (!lift) return css;
+    return css.replace(/bottom\s*:\s*(\d+)px/i, (_, px) => `bottom:${Number(px) + lift}px`);
+  }
+
   function place() {
+    const lift = cookieLiftPx();
     const edge = {
-      "bottom-right": "right:18px;bottom:18px;",
-      "bottom-left": "left:18px;bottom:18px;",
+      "bottom-right": withBottomLift(layout?.edge || "right:18px;bottom:18px;", lift),
+      "bottom-left": withBottomLift("left:18px;bottom:18px;", lift),
       "top-left": "left:18px;top:18px;",
       "top-right": "right:18px;top:18px;",
     };
@@ -139,7 +193,9 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     const base = `all:initial;position:fixed;z-index:2147483646;display:flex;flex-direction:${column};align-items:${align};pointer-events:none;`;
     host.classList.toggle("fullscreen", fullscreen);
     host.classList.toggle("at-top", !fullscreen && corner.startsWith("top"));
+    // Fullscreen: collapse to a thin mid-right strip so the popup never covers player chrome.
     host.style.cssText = fullscreen ? `${base}top:40%;right:0;` : `${base}${edge[corner] || edge["bottom-right"]}`;
+    applyAccent();
     placeDrawer();
   }
 
@@ -170,7 +226,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     drawer.classList.toggle("is-open", drawerOpen);
     settings.root.hidden = pane !== "settings";
     notices.root.hidden = pane !== "notices";
-    drawer.setAttribute("aria-label", pane === "notices" ? "Crunchilist notifications" : "Crunchilist settings");
+    drawer.setAttribute("aria-label", pane === "notices" ? "Kivori SekAI notifications" : "Kivori SekAI settings");
     for (const [button, name] of [[settingsButton, "settings"], [bellButton, "notices"]]) {
       const on = drawerOpen && pane === name;
       button.classList.toggle("is-on", on);
@@ -194,7 +250,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     gather.hidden = !showGather;
     launcher.classList.toggle("is-locked", gathering);
     launcher.disabled = fullscreen || gathering;
-    launcher.title = gathering ? gatherText.textContent : shown ? "Close Crunchilist" : "Search with Crunchilist";
+    launcher.title = gathering ? gatherText.textContent : shown ? "Close Kivori SekAI" : "Search with Kivori SekAI";
   }
 
   function setOpen(next, { silent = false } = {}) {
@@ -225,8 +281,11 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
     onCorner(corner);
   });
   window.addEventListener("resize", placeDrawer);
+  // Bubble-phase: stop site listeners that don't use capture. Capture-phase player
+  // shortcuts (HIDIVE etc.) are filtered in content/sites/key-guard.js (MAIN world).
+  const stopKeys = (event) => event.stopPropagation();
   host.addEventListener("keydown", (event) => {
-    event.stopPropagation();
+    stopKeys(event);
     if (event.key !== "Escape" || !open || fullscreen) return;
     if (drawerOpen) setDrawer(false);
     else {
@@ -234,6 +293,8 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
       launcher.focus();
     }
   });
+  host.addEventListener("keyup", stopKeys);
+  host.addEventListener("keypress", stopKeys);
   host.addEventListener("click", (event) => event.stopPropagation());
 
   let toastTimer = 0;
@@ -276,6 +337,13 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
 
   place();
   paint();
+  let cookieTimer = 0;
+  const cookieWatch = new MutationObserver(() => {
+    window.clearTimeout(cookieTimer);
+    cookieTimer = window.setTimeout(place, 120);
+  });
+  cookieWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
+  window.addEventListener("resize", place);
 
   return {
     host,
@@ -287,7 +355,7 @@ export function createPanel(doc, { send, onOpenChange = () => {}, onCorner = () 
       const count = view.notices?.length || 0;
       paintBadge(bellBadge, count);
       paintBadge(launcherBadge, view.settings?.muteNotifications ? 0 : count);
-      launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Crunchilist search, ${count} notifications` : "Open Crunchilist search");
+      launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Kivori SekAI search, ${count} notifications` : "Open Kivori SekAI search");
       if (syncOpen && !hydrated) {
         hydrated = true;
         corner = view.settings?.panelCorner || corner;

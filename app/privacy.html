@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Crunchilist privacy</title>
+  <title>Kivori SekAI privacy</title>
   <style>
     @font-face { font-family: "Inter"; src: url("../fonts/inter-latin.woff2") format("woff2"); font-weight: 100 900; }
     @font-face { font-family: "Sora"; src: url("../fonts/sora-latin.woff2") format("woff2"); font-weight: 100 900; }
@@ -20,46 +20,62 @@
     li { margin: 6px 0; }
     a { color: var(--accent); }
     .lead { font-size: 17px; color: var(--text); }
+    .updated { font-size: 13px; color: var(--muted); margin: 0 0 24px; }
   </style>
 </head>
 <body>
   <main>
     <h1>Privacy</h1>
-    <p>Crunchilist is a browser extension. It has no server and no analytics. The developer never receives your data.</p>
-    <p class="lead">Everything Crunchilist knows about you stays in your browser, except for the requests below, which go straight from your browser to the service named.</p>
+    <p class="updated">Last updated: 27 October 2026</p>
+    <p>Kivori SekAI is a browser extension. It has no developer server and no analytics. The developer never receives your data unless <strong>you</strong> paste diagnostics into a GitHub issue.</p>
+    <p class="lead">Everything Kivori SekAI knows about you stays in your browser, except for the requests below, which go straight from your browser to the service named.</p>
 
     <h2>What stays on your device</h2>
     <ul>
       <li><strong>Your list and progress</strong>: statuses, episodes watched, and shows you mark.</li>
-      <li><strong>Settings</strong>: theme, playback, search, notification and badge preferences.</li>
-      <li><strong>Catalog cache</strong>: Crunchyroll titles and AniList details, so pages load fast.</li>
-      <li><strong>Sign-in tokens and API keys</strong>: your AniList token and any AI keys you add. They are kept in Chrome's local extension storage, never synced, and only sent to the service they belong to.</li>
+      <li><strong>Settings</strong>: theme, playback, search, notification, badge, import and tracking preferences.</li>
+      <li><strong>Catalog cache</strong>: titles and AniList details so pages load fast.</li>
+      <li><strong>Continue watching activity</strong>: recent plays used to order Home.</li>
+      <li><strong>Import checkpoints, matches, pending picks, import history and activity log</strong>: so catch-up and Help → Activity log work.</li>
+      <li><strong>In-app notices</strong>: episode asks, sync/import previews, applied syncs, update reminders (bell drawer). They never leave the device by themselves.</li>
+      <li><strong>Favorite character preference</strong> when that feature is used.</li>
+      <li><strong>Sign-in tokens and API keys</strong>: AniList and MyAnimeList tokens, and any AI keys you add, in Chrome local extension storage (not synced). They are only sent to the service they belong to. AI keys are never included in backup files. A short-lived Crunchyroll session token may be kept in session storage while a Crunchyroll tab is open; it is cleared when you sign out of Crunchyroll or close the session.</li>
     </ul>
     <p>Removing the extension deletes all of it.</p>
 
     <h2>Crunchyroll</h2>
-    <p>On crunchyroll.com, Crunchilist reads the page you're on and uses your existing Crunchyroll session to load the catalog and, if you ask it to, your watch history. It adds the status badges and the "Back to Crunchilist" button there. It does not read or store your Crunchyroll password, payment details or profile.</p>
+    <p>On crunchyroll.com, Kivori SekAI reads the page you're on and uses your existing Crunchyroll session to load the catalog and, if you ask it to, your watch history. Daily sync re-reads about the last week of history (or since your last checkpoint if that's newer). A full Import is still how you backfill older history. It adds status badges and the "Back to Kivori SekAI" button. It does not read or store your Crunchyroll password, payment details or profile.</p>
 
-    <h2>AniList</h2>
-    <p>If you connect AniList, Crunchilist signs you in through AniList's own page and syncs your list and progress with your account. It also looks up public show details (art, scores, studios, airing dates) on AniList. If you import a public username instead, it only reads that public list.</p>
+    <h2>Other watch sites</h2>
+    <p>Netflix, Prime Video, HIDIVE, Tubi and Hulu are only reached after you grant access. History, progress and as-you-watch tracking follow the options you turn on. Disconnecting a site (and confirming) forgets that site's local data on this device.</p>
+
+    <h2>AniList, MyAnimeList and Kitsu</h2>
+    <p>If you connect AniList, Kivori SekAI signs you in through AniList's own page and syncs your list and progress. It also looks up public show details (art, scores, studios, airing dates). Importing a public username only reads that public list. MyAnimeList and Kitsu connections, when you enable them, pull or push list data according to your tracker settings.</p>
 
     <h2>AI ranking</h2>
-    <p>By default, AI ranking uses the model built into Chrome, which runs on your device. If you add a key for an AI provider (OpenAI, Google Gemini, Groq, OpenRouter, or a custom address you enter), searches you rank with AI send that provider your search text, the candidate titles with your status for each, and a short summary of the genres and tags you like. That request is covered by the provider's own privacy policy. Nothing is sent to a provider you haven't added.</p>
+    <p>By default, AI ranking can use the model built into Chrome on your device. If you add a key for an AI provider (OpenAI, Google Gemini, Groq, OpenRouter, or a custom address you enter), searches you rank with AI send that provider your search text, the candidate titles with your status for each, and a short summary of the genres and tags you like. That request is covered by the provider's own privacy policy. Nothing is sent to a provider you haven't added.</p>
+
+    <h2>GitHub</h2>
+    <p>Sideload copies check GitHub for new Releases and may download release zips or public feed files (for example id-map / where-map) from the project repository. When you use <strong>Help → Send feedback</strong>, diagnostics and the activity log are copied on your device; if you paste them into a GitHub Issue, that text becomes visible on GitHub (and to the developer).</p>
 
     <h2>Trailers</h2>
-    <p>Trailers play from youtube-nocookie.com, YouTube's privacy-enhanced embed, and only when a trailer is on screen. You can turn trailer previews off in Settings.</p>
+    <p>Trailers use a privacy-enhanced embed and only load when a trailer is on screen. You can turn trailer previews off in Settings.</p>
+
+    <h2>Backups and diagnostics</h2>
+    <p>Backups you download include matches, settings (without AI keys), import history and the activity log when present — not sign-in tokens. Diagnostics and the activity export are plain-text summaries (versions, connections, recent outcomes) with no passwords or API keys.</p>
 
     <h2>Permissions</h2>
     <ul>
-      <li><strong>Storage</strong>: keeps your list, settings and catalog cache on your device.</li>
-      <li><strong>Tabs and navigation</strong>: opens episodes in your Crunchyroll tab, reuses it, and offers to move extra Crunchyroll tabs into it.</li>
-      <li><strong>Identity</strong>: the AniList sign-in window.</li>
-      <li><strong>Network rules</strong>: lets trailers play inside the Crunchilist page.</li>
-      <li><strong>Site access</strong>: Crunchyroll, AniList, the listed AI providers and YouTube's embed. Other sites are only reached if you add a custom AI address and allow it.</li>
+      <li><strong>Storage</strong>: list, settings, catalogs, notices and logs on this device.</li>
+      <li><strong>Tabs and navigation</strong>: opens episodes in your Crunchyroll tab, reuses it, and can fold extra Crunchyroll tabs into it.</li>
+      <li><strong>Identity</strong>: AniList (and MAL when connected) sign-in windows.</li>
+      <li><strong>Alarms / scripting</strong>: daily sync, tracking and site scripts you allow.</li>
+      <li><strong>Network rules</strong>: lets trailers play inside the Kivori SekAI page.</li>
+      <li><strong>Site access</strong>: Crunchyroll, AniList, connected watch sites, listed AI providers, trailer embeds, and GitHub for updates/feeds. Other sites only if you add a custom AI address and allow it.</li>
     </ul>
 
     <h2>Contact</h2>
-    <p>Questions about privacy can go to the developer through the extension's Chrome Web Store page.</p>
+    <p>Questions about privacy or the product: open a <a href="https://github.com/Phoniix/crunchilist/issues">GitHub Issue</a>, or use Settings → Help → Send feedback.</p>
   </main>
 </body>
 </html>

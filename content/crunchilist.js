@@ -994,6 +994,111 @@
     });
   }
 
+  // lib/services.js
+  var SERVICES = [
+    {
+      id: "crunchyroll",
+      name: "Crunchyroll",
+      origins: ["https://www.crunchyroll.com/*"],
+      home: "https://www.crunchyroll.com/",
+      sites: ["Crunchyroll"],
+      imports: true,
+      why: "Reads your Crunchyroll watch history and notices what you play, using your own sign-in. Nothing is changed on Crunchyroll.",
+      // The page script only notices the sign-in token the site already uses; the content script passes it on.
+      scripts: [
+        { file: "crunchyroll-page", world: "MAIN", runAt: "document_start" },
+        { file: "crunchyroll", world: "ISOLATED", runAt: "document_start" }
+      ]
+    },
+    {
+      id: "netflix",
+      name: "Netflix",
+      origins: ["https://www.netflix.com/*"],
+      home: "https://www.netflix.com/",
+      sites: ["Netflix"],
+      imports: true,
+      why: "Reads your Netflix viewing activity and notices what you play, using your own sign-in. Nothing is changed on Netflix.",
+      // The page script only reports the site's build id and open profile; the content script reads activity pages.
+      scripts: [
+        { file: "netflix-page", world: "MAIN", runAt: "document_idle" },
+        { file: "netflix", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    },
+    {
+      id: "prime",
+      name: "Prime Video",
+      origins: ["https://www.primevideo.com/*", "https://www.amazon.com/gp/video/*"],
+      home: "https://www.primevideo.com/",
+      sites: ["Amazon Prime Video", "Prime Video", "Amazon"],
+      imports: true,
+      why: "Reads your Prime Video watch history, using your own sign-in. Nothing is changed on Prime Video.",
+      // Loads the Watch History page in the user's tab and passes on the list of what was watched.
+      scripts: [{ file: "prime", world: "ISOLATED", runAt: "document_idle" }]
+    },
+    {
+      id: "hulu",
+      name: "Hulu",
+      origins: ["https://www.hulu.com/*"],
+      home: "https://www.hulu.com/",
+      sites: ["Hulu"],
+      imports: false,
+      // No history to read, so episodes are noted as they're played.
+      tracks: true,
+      // Not connectable until it can be tested against a real account.
+      untested: true,
+      why: "Coming later \u2014 Hulu connection and tracking aren't ready yet.",
+      scripts: []
+    },
+    {
+      id: "tubi",
+      name: "Tubi",
+      origins: ["https://tubitv.com/*"],
+      home: "https://tubitv.com/",
+      sites: ["Tubi TV", "Tubi"],
+      imports: false,
+      tracks: true,
+      why: "Notices the anime episodes and films you finish on Tubi, and reads Tubi's Anime category. Nothing is changed on Tubi.",
+      // The page script only notices the guest token Tubi's app signs catalog requests with, and loads Anime pages with it.
+      scripts: [
+        { file: "tubi-page", world: "MAIN", runAt: "document_start" },
+        { file: "tubi", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    },
+    {
+      id: "hidive",
+      name: "HIDIVE",
+      origins: ["https://www.hidive.com/*"],
+      home: "https://www.hidive.com/login",
+      sites: ["HIDIVE"],
+      imports: true,
+      why: "Reads your HIDIVE watch history and notices what you play, using your own sign-in. Nothing is changed on HIDIVE.",
+      // The page script only notices the headers HIDIVE's app already sends, and loads history pages with them.
+      scripts: [
+        { file: "hidive-page", world: "MAIN", runAt: "document_start" },
+        { file: "hidive", world: "ISOLATED", runAt: "document_idle" }
+      ]
+    }
+  ];
+  var LISTING_SITES = SERVICES.map((service) => ({ site: service.name, service: service.id }));
+
+  // lib/play-url.js
+  var SERVICE_BRAND = {
+    crunchyroll: "#F47521",
+    netflix: "#E50914",
+    prime: "#00A8E1",
+    hidive: "#00AEEF",
+    tubi: "#7408FF",
+    hulu: "#1CE783"
+  };
+  var SERVICE_SHORT = {
+    crunchyroll: "CR",
+    netflix: "Netflix",
+    prime: "Prime",
+    hidive: "HIDIVE",
+    tubi: "Tubi",
+    hulu: "Hulu"
+  };
+
   // lib/taste.js
   var ANILIST_GENRES = [
     "Action",
@@ -1034,6 +1139,13 @@
   }
 
   // ui/search-view.js
+  var SEARCH_PLATFORMS = [
+    { id: "crunchyroll", label: "Crunchyroll", short: "CR", color: SERVICE_BRAND.crunchyroll },
+    { id: "netflix", label: "Netflix", short: "Netflix", color: SERVICE_BRAND.netflix },
+    { id: "hidive", label: "HIDIVE", short: "HIDIVE", color: SERVICE_BRAND.hidive },
+    { id: "tubi", label: "Tubi", short: "Tubi", color: SERVICE_BRAND.tubi },
+    { id: "prime", label: "Prime Video", short: "Prime", color: SERVICE_BRAND.prime }
+  ];
   var SEARCH_CSS = `
   .sv { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
   .sv-bar {
@@ -1042,16 +1154,24 @@
     background: rgba(16, 14, 12, .62); border: 1px solid var(--line-strong);
     transition: border-color .18s var(--ease), background .18s var(--ease), box-shadow .18s var(--ease);
   }
-  .sv-bar:hover { border-color: rgba(255, 226, 196, .3); }
-  .sv-bar:focus-within { border-color: rgba(255, 154, 92, .5); background: rgba(16, 14, 12, .78); box-shadow: 0 0 0 4px rgba(255, 122, 47, .08); }
+  .sv-bar:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong)); }
+  /* Glow follows host --accent (site panels set brand color; CR keeps the default orange). */
+  .sv-bar:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: rgba(16, 14, 12, .78);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
   .sv-bar::after {
     content: ""; position: absolute; left: 18px; right: 18px; bottom: -1px; height: 2px; border-radius: 2px;
-    background: linear-gradient(90deg, transparent, rgba(255, 154, 92, .85), transparent);
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
     background-size: 40% 100%; background-repeat: no-repeat; opacity: 0;
   }
   .sv-bar.is-busy::after { opacity: 1; animation: sv-sweep 1.1s var(--ease) infinite; }
   @keyframes sv-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
-  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; }
+  .sv-lead { display: grid; place-items: center; color: var(--faint); flex: none; position: relative; width: 22px; height: 22px; }
+  .sv-lead .sv-loader-mark { position: absolute; inset: -2px; width: 26px; height: 26px; opacity: 0; pointer-events: none; }
+  .sv-bar.is-busy .sv-lead > svg:not(.sv-loader-mark) { opacity: 0; }
+  .sv-bar.is-busy .sv-lead .sv-loader-mark { opacity: 1; }
   .sv-input {
     flex: 1; min-width: 0; height: 52px; padding: 0 4px; border: 0; border-radius: 0; background: transparent;
     font: 700 17px/1.2 ${ROUNDED}; color: var(--text);
@@ -1083,70 +1203,176 @@
   .sv-drop-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .sv-drop-title { font: 700 14px/1.25 ${ROUNDED}; }
   .sv-drop-reason { color: var(--muted); font: 600 12px/1.3 ${ROUNDED}; }
-  .sv-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-  .sv-chips, .sv-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
-  .sv-chips { flex: 1; }
+  .sv-filters {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 14px; border-radius: 16px;
+    background: color-mix(in srgb, var(--pane) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .sv-filter-label {
+    flex: none; min-width: 52px; color: var(--faint);
+    font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .sv-chips, .sv-toggles, .sv-sites { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .sv-chip, .sv-toggle {
     display: inline-flex; align-items: center; gap: 6px;
-    min-height: 30px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--pane); color: var(--muted);
-    font: 700 12.5px/1 ${ROUNDED};
-    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease);
+    min-height: 28px; padding: 3px 11px; border-radius: 999px; cursor: pointer;
+    border: 1px solid transparent; background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--muted);
+    font: 700 12px/1 ${ROUNDED};
+    transition: color .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease), box-shadow .16s var(--ease);
   }
-  .sv-chip:hover, .sv-toggle:hover { color: var(--text); border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-chip.is-on { color: #1a0d05; background: var(--accent); border-color: transparent; }
-  .sv-toggle svg { opacity: .35; }
-  .sv-toggle.is-on { color: var(--text); border-color: var(--line-strong); }
+  .sv-chip:hover, .sv-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text) 9%, transparent); }
+  .sv-chip.is-on {
+    color: var(--on-accent, #1a0d05); background: var(--accent); border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .sv-toggle svg { opacity: .4; }
+  .sv-toggle.is-on { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
   .sv-toggle.is-on svg { opacity: 1; color: var(--accent-text); }
-  .sv-refine { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 12px; padding-top: 12px; border-top: 1px solid rgba(255, 226, 196, .07); }
-  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; flex: 1 1 140px; max-width: 220px; }
+  .sv-site { --sv-site: var(--accent); gap: 7px; }
+  .sv-site-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--sv-site); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sv-site) 20%, transparent);
+  }
+  .sv-site:not(.is-on) {
+    color: color-mix(in srgb, var(--sv-site) 78%, var(--text));
+    background: color-mix(in srgb, var(--sv-site) 10%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 28%, transparent);
+  }
+  .sv-site:not(.is-on):hover {
+    background: color-mix(in srgb, var(--sv-site) 18%, transparent);
+    border-color: color-mix(in srgb, var(--sv-site) 48%, transparent);
+  }
+  .sv-site.is-on {
+    color: #fff;
+    background: color-mix(in srgb, var(--sv-site) 90%, #111);
+    border-color: transparent;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
+  .sv-site.is-on .sv-site-dot { background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .18); }
+  .sv-site.is-on svg { color: #fff; opacity: 1; }
+  /* Second click: exclusive to this site (ring + \u201Conly\u201D label). */
+  .sv-site.is-on.is-only {
+    background: color-mix(in srgb, var(--sv-site) 72%, #111);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--sv-site) 55%, #fff),
+      0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
+  .sv-refine {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 12px 14px; align-items: start;
+    padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  @media (max-width: 720px) {
+    .sv-refine { grid-template-columns: 1fr; }
+    .sv-refine-group.is-end { justify-self: stretch; align-items: stretch; }
+  }
+  .sv-refine-group { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
   .sv-refine-group .sv-under { justify-content: flex-start; }
-  .sv-refine-group.is-end { align-items: flex-end; flex: 0 0 auto; max-width: none; }
+  .sv-refine-group.is-end { align-items: flex-end; }
+  .sv-refine-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    color: var(--faint); font: 800 10px/1 ${ROUNDED}; letter-spacing: .08em; text-transform: uppercase;
+  }
   .sv-refine-group .sv-tag-input { flex: 1; width: auto; min-width: 0; }
-  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 340px; }
+  .sv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .sv-clear {
     border: 0; background: transparent; padding: 2px 4px; border-radius: 6px; cursor: pointer;
-    color: var(--muted); font: 700 11.5px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
+    color: var(--muted); font: 700 11px/1.2 ${ROUNDED}; transition: color .16s var(--ease), opacity .16s var(--ease);
   }
   .sv-clear:hover:not(:disabled) { color: var(--accent-text); }
   .sv-clear:disabled { opacity: .35; cursor: default; }
-  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .5); color: #ff8a80; }
-  .is-exclude .sv-tag-token { background: rgba(255, 69, 58, .12); color: #ff8a80; }
-  .is-exclude .sv-tag-token span { text-decoration: line-through; text-decoration-color: rgba(255, 138, 128, .55); }
-  .is-exclude .sv-tag-token:hover { background: rgba(255, 69, 58, .2); }
+  .is-exclude .sv-tag-pick:focus-within { border-color: rgba(255, 105, 97, .55); color: #ff8a80; box-shadow: 0 0 0 3px rgba(255, 105, 97, .12); }
+  .is-exclude .sv-tag-token {
+    background: color-mix(in srgb, #ff453a 16%, transparent); color: #ff8a80;
+    border: 1px solid color-mix(in srgb, #ff453a 28%, transparent);
+  }
+  .is-exclude .sv-tag-token .sv-tag-mark { background: color-mix(in srgb, #ff453a 28%, transparent); color: #ffb4ae; }
+  .is-exclude .sv-tag-token:hover { background: color-mix(in srgb, #ff453a 24%, transparent); }
   .sv-tag-pick {
-    position: relative; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 10px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--pane); color: var(--faint);
-    transition: border-color .16s var(--ease), background .16s var(--ease);
+    position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
+    background: color-mix(in srgb, var(--pane) 88%, transparent); color: var(--faint);
+    transition: border-color .16s var(--ease), background .16s var(--ease), box-shadow .16s var(--ease);
   }
   .sv-tag-pick:hover { border-color: var(--line-strong); background: var(--pane-hover); }
-  .sv-tag-pick:focus-within { border-color: rgba(255, 154, 92, .5); color: var(--accent-text); }
-  .sv-tag-input { width: 130px; height: 30px; padding: 0 6px 0 0; border: 0; border-radius: 0; background: transparent; font: 700 12.5px/1 ${ROUNDED}; }
-  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
-  .sv-tag-input::placeholder { color: var(--faint); }
-  .sv-tag-list {
-    position: absolute; z-index: 6; left: 0; top: calc(100% + 6px); width: 220px; max-height: 240px; overflow: auto;
-    display: flex; flex-direction: column; gap: 2px; padding: 5px; border-radius: 14px; background: var(--glass-strong);
+  .sv-tag-pick:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent-text);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
   }
-  .sv-tag-list button { text-align: left; border: 0; border-radius: 9px; padding: 7px 9px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
-  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: rgba(255, 226, 196, .08); }
+  .sv-tag-input { width: 100%; min-width: 0; height: 34px; padding: 0; border: 0; border-radius: 0; background: transparent; font: 700 13px/1 ${ROUNDED}; color: var(--text); }
+  .sv-tag-input:hover, .sv-tag-input:focus { border: 0; background: transparent; }
+  .sv-tag-input::placeholder { color: var(--faint); font-weight: 600; }
+  .sv-tag-list {
+    position: absolute; z-index: 6; left: 0; right: 0; top: calc(100% + 6px); max-height: 240px; overflow: auto;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 14px;
+    background: var(--glass-strong); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  }
+  .sv-tag-list button { text-align: left; border: 0; border-radius: 10px; padding: 8px 10px; cursor: pointer; background: transparent; color: var(--text); font: 700 12.5px/1.2 ${ROUNDED}; }
+  .sv-tag-list button.is-on, .sv-tag-list button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .sv-tag-tokens { display: flex; flex-wrap: wrap; gap: 6px; }
   .sv-tag-token {
-    display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px 0 12px; border: 0; border-radius: 999px; cursor: pointer;
-    background: var(--accent-soft); color: var(--accent-text); font: 800 12px/1 ${ROUNDED};
-    transition: background .16s var(--ease);
+    display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 0 8px 0 6px; border-radius: 999px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-text);
+    font: 800 12px/1 ${ROUNDED};
+    transition: background .16s var(--ease), border-color .16s var(--ease);
   }
-  .sv-tag-token:hover { background: rgba(255, 122, 47, .24); }
-  .sv-refine-spacer { flex: 1; }
+  .sv-tag-mark {
+    display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 22%, transparent); font: 800 11px/1 ${ROUNDED};
+  }
+  .sv-tag-token:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .sv-tag-token svg { opacity: .7; }
+  .sv-refine-spacer { display: none; }
   .sv-sort-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--faint); font: 700 12px/1 ${ROUNDED}; }
-  .sv-sort { height: 32px; padding: 0 10px; border-radius: 10px; font: 700 12.5px/1 ${ROUNDED}; background: rgba(255, 226, 196, .04); }
-  .sv-more { height: 1px; }
-  .sv-more.is-loading { height: 44px; display: grid; place-items: center; }
-  .sv-more.is-loading::after {
-    content: ""; width: 22px; height: 22px; border-radius: 50%;
-    border: 2px solid rgba(255, 226, 196, .14); border-top-color: var(--accent); animation: sv-spin .8s linear infinite;
+  .sv-sort {
+    height: 36px; padding: 0 12px; border-radius: 12px; font: 700 12.5px/1 ${ROUNDED};
+    background: color-mix(in srgb, var(--pane) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); color: var(--text);
   }
-  @keyframes sv-spin { to { transform: rotate(360deg); } }
+  .sv-more { height: 1px; }
+  .sv-more.is-loading { height: 56px; display: grid; place-items: center; }
+  .sv-more.is-loading .sv-loader { padding: 0; min-height: 0; }
+  .sv-more.is-loading .sv-loader-mark { width: 36px; height: 36px; }
+  .sv-loader {
+    display: grid; place-items: center; gap: 14px; padding: 48px 16px; min-height: 160px;
+    color: var(--muted); font: 600 13px/1.4 ${ROUNDED}; text-align: center;
+  }
+  .sv-loader-mark {
+    width: 64px; height: 64px; display: block;
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 28%, transparent));
+  }
+  .sv-loader-ring {
+    fill: none; stroke: color-mix(in srgb, var(--text) 14%, transparent); stroke-width: 2.5;
+  }
+  .sv-loader-arc {
+    fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round;
+    stroke-dasharray: 42 88; transform-origin: 34px 34px;
+    animation: sv-loader-spin 1.1s cubic-bezier(.45, .05, .55, .95) infinite;
+  }
+  .sv-loader-globe {
+    fill: none; stroke: color-mix(in srgb, var(--text) 78%, transparent); stroke-width: 2.2;
+  }
+  .sv-loader-meridian {
+    fill: none; stroke: color-mix(in srgb, var(--text) 42%, transparent); stroke-width: 1.6;
+  }
+  .sv-loader-slash {
+    transform-origin: 34px 34px;
+    animation: sv-loader-orbit 2.4s cubic-bezier(.4, .0, .2, 1) infinite;
+  }
+  .sv-loader-slash path { fill: none; stroke: #4fd1ff; stroke-width: 3.2; stroke-linecap: round; }
+  .sv-loader-slash circle { fill: #4fd1ff; }
+  .sv-loader.is-sm { padding: 18px 12px; min-height: 72px; gap: 8px; font-size: 12px; }
+  .sv-loader.is-sm .sv-loader-mark { width: 40px; height: 40px; }
+  .sv-drop .sv-loader { padding: 20px 12px; min-height: 88px; }
+  @keyframes sv-loader-spin { to { transform: rotate(360deg); } }
+  @keyframes sv-loader-orbit {
+    0% { transform: rotate(0deg); opacity: .85; }
+    50% { opacity: 1; }
+    100% { transform: rotate(360deg); opacity: .85; }
+  }
   .sv-note {
     position: relative; overflow: hidden; margin: 0; padding: 9px 12px; border-radius: 12px;
     background: var(--pane); border: 1px solid var(--line); color: var(--muted); font: 600 13px/1.4 ${ROUNDED};
@@ -1194,6 +1420,20 @@
   .sv-reason { margin: 0; color: var(--muted); font: 500 13.5px/1.45 ${ROUNDED}; }
   .sv-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sv-tag { padding: 3px 8px; border-radius: 8px; background: rgba(255, 226, 196, .06); color: var(--muted); font: 700 11.5px/1.3 ${ROUNDED}; }
+  .sv-svcs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .sv-svc {
+    --sv-svc: var(--accent);
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 7px 2px 4px; border-radius: 999px;
+    background: color-mix(in srgb, var(--sv-svc) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--sv-svc) 36%, transparent);
+    color: color-mix(in srgb, var(--sv-svc) 78%, #fff);
+    font: 800 10.5px/1.2 ${ROUNDED};
+  }
+  .sv-svc-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--sv-svc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sv-svc) 22%, transparent);
+  }
   .sv-foot-spacer { flex: 1; }
   .sv-status-select {
     height: 30px; padding: 0 10px; border-radius: 10px; font: 700 12px/1 ${ROUNDED};
@@ -1246,6 +1486,10 @@
   }
   .sv-empty { padding: 36px 12px; text-align: center; color: var(--muted); font: 600 14px/1.5 ${ROUNDED}; }
   .sv-empty strong { display: block; margin-bottom: 4px; color: var(--text); font: 800 16px/1.3 ${ROUNDED}; }
+  @media (prefers-reduced-motion: reduce) {
+    .sv-loader-arc, .sv-loader-slash { animation: none; }
+    .sv-loader-arc { stroke-dasharray: 70 60; }
+  }
 `;
   var CHIPS = [
     ["in-progress", "Watching", "Shows you have started"],
@@ -1270,6 +1514,7 @@
     send: send2,
     site = "all",
     siteToggle = true,
+    platforms = SEARCH_PLATFORMS,
     newTab = false,
     onView = () => {
     },
@@ -1280,7 +1525,10 @@
   } = {}) {
     let chip = "";
     let currentSite = site;
+    let siteOnly = false;
+    const sitePlatforms = (Array.isArray(platforms) ? platforms : SEARCH_PLATFORMS).map((row) => typeof row === "string" ? SEARCH_PLATFORMS.find((p) => p.id === row) : row).filter(Boolean);
     let useAi = true;
+    let liteMode = false;
     let hideWatched = false;
     let seq = 0;
     let suggestSeq = 0;
@@ -1316,8 +1564,9 @@
       el("span", { class: "sv-ai-dot", "aria-hidden": "true" })
     ]);
     const drop = el("div", { class: "sv-drop glass", role: "listbox", hidden: true });
+    const lead = el("span", { class: "sv-lead", "aria-hidden": "true" }, [icon("search", 19)]);
     const form = el("form", { class: "sv-bar", role: "search" }, [
-      el("span", { class: "sv-lead" }, [icon("search", 19)]),
+      lead,
       input,
       clearButton,
       aiButton,
@@ -1335,31 +1584,68 @@
       chipButtons.set(id, button);
       chipRow.append(button);
     }
-    const siteButton = el("button", { class: "sv-toggle", type: "button", title: "Only shows you can watch on Crunchyroll" }, [
-      icon("check", 14),
-      el("span", { text: "Crunchyroll only" })
-    ]);
-    siteButton.hidden = !siteToggle;
+    const siteButtons = /* @__PURE__ */ new Map();
+    const siteRow = el("div", { class: "sv-toggles sv-sites" });
+    for (const platform of sitePlatforms) {
+      const label = el("span", { class: "sv-site-label", text: platform.label });
+      const button = el("button", {
+        class: "sv-toggle sv-site",
+        type: "button",
+        title: `Titles on ${platform.label}. Click again for ${platform.label}-only titles, then once more to clear.`,
+        "aria-pressed": "false",
+        "data-site": platform.id
+      });
+      button.style.setProperty("--sv-site", platform.color || SERVICE_BRAND[platform.id] || "#ff7a2f");
+      button.append(el("span", { class: "sv-site-dot", "aria-hidden": "true" }), label);
+      button.addEventListener("click", () => {
+        if (currentSite === platform.id) {
+          if (!siteOnly) siteOnly = true;
+          else {
+            currentSite = "all";
+            siteOnly = false;
+          }
+        } else {
+          currentSite = platform.id;
+          siteOnly = false;
+        }
+        paintToggles();
+        send2("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {
+        });
+        run();
+      });
+      siteButtons.set(platform.id, button);
+      siteRow.append(button);
+    }
+    siteRow.hidden = !siteToggle || !sitePlatforms.length;
     const hideButton = el("button", { class: "sv-toggle", type: "button", title: "Leave out finished and dropped shows" }, [
       icon("eye", 14),
       el("span", { text: "Hide watched" })
     ]);
-    const filters = el("div", { class: "sv-filters" }, [chipRow, el("div", { class: "sv-toggles" }, [siteButton, hideButton])]);
-    const include = tagPicker({ label: "Filter by tag", glyph: "tag", removeLabel: "Remove tag", others: () => exclude.values });
-    const exclude = tagPicker({ label: "Exclude tag", glyph: "tagOff", removeLabel: "Stop excluding", others: () => include.values, tone: "is-exclude" });
+    const filters = el("div", { class: "sv-filters" }, [
+      el("div", { class: "sv-filter-row" }, [
+        el("span", { class: "sv-filter-label", text: "Show" }),
+        chipRow,
+        el("div", { class: "sv-toggles" }, [hideButton])
+      ]),
+      siteRow.hidden ? null : el("div", { class: "sv-filter-row" }, [
+        el("span", { class: "sv-filter-label", text: "Where" }),
+        siteRow
+      ])
+    ].filter(Boolean));
+    const include = tagPicker({ label: "Include tag", head: "Include", glyph: "tag", removeLabel: "Remove tag", mark: "+", others: () => exclude.values });
+    const exclude = tagPicker({ label: "Exclude tag", head: "Exclude", glyph: "tagOff", removeLabel: "Stop excluding", mark: "\u2212", others: () => include.values, tone: "is-exclude" });
     const sortSelect = el("select", { class: "sv-sort", "aria-label": "Sort results" });
     for (const [value, label] of SORTS) sortSelect.append(el("option", { value, text: label }));
     const sortClear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: "Back to best match" });
     const refine = el("div", { class: "sv-refine" }, [
       include.root,
       exclude.root,
-      el("span", { class: "sv-refine-spacer" }),
       el("div", { class: "sv-refine-group is-end" }, [
-        el("label", { class: "sv-sort-wrap" }, [el("span", { text: "Sort" }), sortSelect]),
-        el("div", { class: "sv-under" }, [sortClear])
+        el("div", { class: "sv-refine-head" }, [el("span", { text: "Sort" }), sortClear]),
+        el("label", { class: "sv-sort-wrap" }, [sortSelect])
       ])
     ]);
-    function tagPicker({ label, glyph, removeLabel, others, tone = "" }) {
+    function tagPicker({ label, head = label, glyph, removeLabel, mark = "+", others, tone = "" }) {
       const picker = { values: [] };
       let matches = [];
       let active2 = -1;
@@ -1368,8 +1654,9 @@
       const tokens = el("div", { class: "sv-tag-tokens" });
       const clear = el("button", { class: "sv-clear", type: "button", text: "Clear", title: `Clear ${label.toLowerCase()}` });
       picker.root = el("div", { class: `sv-refine-group ${tone}` }, [
+        el("div", { class: "sv-refine-head" }, [el("span", { text: head }), clear]),
         el("div", { class: "sv-tag-pick" }, [icon(glyph, 15), field, list]),
-        el("div", { class: "sv-under" }, [tokens, clear])
+        el("div", { class: "sv-under" }, [tokens])
       ]);
       const change = (next) => {
         picker.values = next;
@@ -1378,7 +1665,11 @@
       };
       function paintTokens() {
         tokens.replaceChildren(...picker.values.map((tag) => {
-          const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [el("span", { text: tag }), icon("close", 12)]);
+          const token = el("button", { class: "sv-tag-token", type: "button", "aria-label": `${removeLabel} ${tag}`, title: "Remove" }, [
+            el("span", { class: "sv-tag-mark", text: mark, "aria-hidden": "true" }),
+            el("span", { text: tag }),
+            icon("close", 12)
+          ]);
           token.addEventListener("click", () => change(picker.values.filter((value) => value !== tag)));
           return token;
         }));
@@ -1468,9 +1759,18 @@
       }
     }
     function paintToggles() {
-      const siteOn = currentSite === "crunchyroll";
-      siteButton.classList.toggle("is-on", siteOn);
-      siteButton.setAttribute("aria-pressed", siteOn ? "true" : "false");
+      for (const [id, button] of siteButtons) {
+        const platform = sitePlatforms.find((row) => row.id === id);
+        const name = platform?.label || id;
+        const on = currentSite === id;
+        const only = on && siteOnly;
+        button.classList.toggle("is-on", on);
+        button.classList.toggle("is-only", only);
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+        const label = button.querySelector(".sv-site-label");
+        if (label) label.textContent = only ? `${name} only` : name;
+        button.title = !on ? `Titles on ${name}. Click again for ${name}-only titles, then once more to clear.` : only ? `Only titles on ${name} alone. Click to clear.` : `Titles on ${name}. Click again for ${name}-only titles.`;
+      }
       hideButton.classList.toggle("is-on", hideWatched);
       hideButton.setAttribute("aria-pressed", hideWatched ? "true" : "false");
     }
@@ -1529,6 +1829,22 @@
       paint();
       return el("span", { class: "sv-status" }, [plan, select]);
     }
+    function servicePills(item) {
+      const ids = [...new Set(item.sources || [])].filter(Boolean);
+      if (!ids.length) return null;
+      const row = el("span", { class: "sv-svcs", "aria-label": "Available on" });
+      for (const id of ids.slice(0, 4)) {
+        const platform = SEARCH_PLATFORMS.find((row2) => row2.id === id);
+        const color = platform?.color || SERVICE_BRAND[id] || "#8a7b71";
+        const label = platform?.short || SERVICE_SHORT[id] || platform?.label || id;
+        const pill = el("span", { class: "sv-svc", title: platform?.label || label, text: label });
+        pill.style.setProperty("--sv-svc", color);
+        pill.prepend(el("span", { class: "sv-svc-dot", "aria-hidden": "true" }));
+        row.append(pill);
+      }
+      if (ids.length > 4) row.append(el("span", { class: "sv-tag", text: `+${ids.length - 4}` }));
+      return row;
+    }
     function card(item, kind = "result", index = 0) {
       const confidence = kind === "pick" && Number.isInteger(item.confidence) ? item.confidence : null;
       const head = el("div", { class: "sv-card-head" }, [
@@ -1540,6 +1856,8 @@
         ]) : null
       ]);
       const foot = el("div", { class: "sv-foot" });
+      const services = kind !== "mention" ? servicePills(item) : null;
+      if (services) foot.append(services);
       if (kind !== "mention") for (const tag of (item.tags || []).slice(0, 5)) foot.append(el("span", { class: "sv-tag", text: tag }));
       foot.append(el("span", { class: "sv-foot-spacer" }), statusControl(item));
       const node = el("article", { class: `sv-card is-${kind}${index >= 0 ? " is-appear" : ""}` }, [
@@ -1562,11 +1880,13 @@
     }
     function poster(item) {
       const mark = STATUS_LABEL[item.status];
+      const services = servicePills(item);
       return el("article", { class: "sv-poster" }, [
         el("a", linkAttrs(item, { class: "sv-poster-link" }), [
           el("span", { class: "sv-poster-art" }, [art(item), mark ? el("span", { class: "sv-mark", text: mark }) : null]),
           el("span", { class: "sv-poster-title", text: item.title })
         ]),
+        services,
         statusControl(item)
       ]);
     }
@@ -1576,6 +1896,35 @@
     function empty(title, detail) {
       return el("div", { class: "sv-empty" }, [el("strong", { text: title }), el("span", { text: detail })]);
     }
+    function logoMark() {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", "sv-loader-mark");
+      svg.setAttribute("viewBox", "0 0 68 68");
+      svg.setAttribute("aria-hidden", "true");
+      svg.innerHTML = `
+      <circle class="sv-loader-ring" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-arc" cx="34" cy="34" r="22"/>
+      <circle class="sv-loader-globe" cx="34" cy="34" r="14"/>
+      <ellipse class="sv-loader-meridian" cx="34" cy="34" rx="6" ry="14"/>
+      <path class="sv-loader-meridian" d="M20 34h28"/>
+      <g class="sv-loader-slash">
+        <path d="M23 42L45 26"/>
+        <circle cx="45" cy="26" r="2.8"/>
+      </g>`;
+      return svg;
+    }
+    function logoLoader({ label = "Searching\u2026", size = "" } = {}) {
+      return el("div", {
+        class: size ? `sv-loader ${size}` : "sv-loader",
+        role: "status",
+        "aria-live": "polite",
+        "aria-label": label
+      }, [logoMark(), el("span", { text: label })]);
+    }
+    function showResultsLoader(label = "Searching\u2026") {
+      results.replaceChildren(logoLoader({ label }));
+    }
+    lead.append(logoMark());
     function renderHome(payload, picked = null, by = "") {
       results.replaceChildren();
       const forYouRow = (payload.sections || []).find((row) => row.rerank);
@@ -1601,18 +1950,25 @@
       }
       const list = el("div", { class: "sv-list" });
       results.append(section("Browse all", [list]));
-      startPager(seq, { query: "", chip: "", site: currentSite, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
+      startPager(seq, { query: "", chip: "", site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
+    }
+    function resultsTitle() {
+      const platform = sitePlatforms.find((row) => row.id === currentSite);
+      if (!platform) return "Results";
+      if (!input.value.trim()) return `On ${platform.label}`;
+      return `Results on ${platform.label}`;
     }
     function renderInstant(items, { pending, note: note2 = "", total = items.length }) {
       results.replaceChildren();
       if (!items.length) {
-        const hint = currentSite === "crunchyroll" ? "Try fewer words, or turn off Crunchyroll only." : "Try fewer words, or turn off a filter.";
+        const platform = sitePlatforms.find((row) => row.id === currentSite);
+        const hint = platform ? `Nothing matched on ${platform.label} yet. Read its catalog under Where to watch, or turn the filter off.` : "Try fewer words, or turn off a filter.";
         results.append(empty("No matches", note2 && note2 !== "No matches." ? note2 : hint));
         return null;
       }
       const extra = pending ? aiState("Ranking with AI", true) : null;
       const list = el("div", { class: "sv-list" }, [cardPage(items)]);
-      results.append(section("Results", [list], { count: total, extra }));
+      results.append(section(resultsTitle(), [list], { count: total, extra }));
       return list;
     }
     function cardPage(items) {
@@ -1655,10 +2011,12 @@
       const current = pager;
       if (!current || current.loading || !current.hasMore || current.id !== seq || !current.target?.isConnected) return;
       current.loading = true;
+      sentinel.replaceChildren(logoLoader({ label: "Loading more\u2026", size: "is-sm" }));
       sentinel.classList.add("is-loading");
       const response = await send2("catalogSearch", { ...current.params, offset: current.offset });
       current.loading = false;
       sentinel.classList.remove("is-loading");
+      sentinel.replaceChildren();
       if (current !== pager || current.id !== seq || !response?.ok) return;
       const items = response.results || [];
       current.loaded.push(...items);
@@ -1748,7 +2106,7 @@
       if (head) head.replaceWith(aiState(text2, false));
     }
     async function rerank(id, query2, items, render) {
-      const answer = await send2("catalogRerank", { query: query2, chip, site: currentSite, ids: items.slice(0, 20).map((item) => item.id) });
+      const answer = await send2("catalogRerank", { query: query2, chip, site: currentSite, siteOnly, ids: items.slice(0, 20).map((item) => item.id) });
       if (id !== seq) return;
       if (answer?.ok && answer.results?.length) {
         render(answer.results, answer.by);
@@ -1771,6 +2129,7 @@
         query: "",
         chip: "",
         site: currentSite,
+        siteOnly,
         ids: row.items.map((item) => item.id),
         ...current ? { reroll: true, seen: [...forYouSeen], last } : {}
       });
@@ -1793,20 +2152,29 @@
       renderHome(payload);
       aiFailed(answer);
     }
+    function browsingCatalog() {
+      if (input.value.trim()) return false;
+      return currentSite !== "all" || Boolean(chip) || include.values.length > 0 || exclude.values.length > 0 || sort !== "relevance";
+    }
     async function run() {
       const id = ++seq;
       closeDrop();
       closeAsk(false);
       window.clearInterval(modelPoll);
       const query2 = input.value.trim();
+      const browse = browsingCatalog();
       pager = null;
+      sentinel.classList.remove("is-loading");
+      sentinel.replaceChildren();
       form.classList.add("is-busy");
-      const params = { query: query2, chip, site: currentSite, sort, tags: include.values, without: exclude.values };
+      showResultsLoader(query2 ? "Searching\u2026" : browse ? "Loading titles\u2026" : "Loading\u2026");
+      const params = { query: query2, chip, site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse };
       const response = await send2("catalogSearch", params);
       if (id !== seq) return;
       form.classList.remove("is-busy");
       if (!response?.ok) {
         writeNote(response?.error || "Could not search.");
+        results.replaceChildren(empty("Couldn't search", response?.error || "Try again in a moment."));
         return;
       }
       lastRun = { query: query2, response };
@@ -1816,9 +2184,12 @@
         renderHome(response);
         return;
       }
-      writeNote(response.results?.length ? [response.notice, response.note].filter(Boolean).join(" ") : "");
+      const platform = sitePlatforms.find((row) => row.id === currentSite);
+      const fallbackNote = platform ? query2 ? `Only titles watchable on ${platform.label}.` : `Titles watchable on ${platform.label}.` : "";
+      const note2 = response.results?.length ? [response.notice, response.note || fallbackNote].filter(Boolean).join(" ") : "";
+      writeNote(note2);
       const items = response.results || [];
-      const pending = Boolean(useAi && response.rerank);
+      const pending = Boolean(useAi && !liteMode && response.rerank && query2 && !browse);
       const list = renderInstant(items, { pending, note: response.note, total: response.total ?? items.length });
       if (list) startPager(id, params, list, items, Boolean(response.hasMore));
       if (!pending) return;
@@ -1863,17 +2234,27 @@
       clearButton.hidden = !input.value;
       window.clearTimeout(suggestTimer);
       if (!query2) {
+        form.classList.remove("is-busy");
         closeDrop();
         return;
       }
       const token = ++suggestSeq;
+      form.classList.add("is-busy");
+      if (!suggestions.length) {
+        drop.replaceChildren(logoLoader({ label: "Looking up\u2026", size: "is-sm" }));
+        drop.hidden = false;
+      }
+      if (!results.querySelector(".sv-card, .sv-poster, .sv-section")) {
+        showResultsLoader("Looking up\u2026");
+      }
       suggestTimer = window.setTimeout(async () => {
-        const response = await send2("catalogSuggest", { query: query2, chip, site: currentSite });
+        const response = await send2("catalogSuggest", { query: query2, chip, site: currentSite, siteOnly });
         if (token !== suggestSeq || input.value.trim() !== query2) return;
+        form.classList.remove("is-busy");
         suggestions = response?.suggestions || [];
         activeSuggestion = -1;
         paintDrop();
-      }, 130);
+      }, liteMode ? 450 : 130);
     }
     async function refreshModel() {
       const response = await send2("modelStatus");
@@ -1941,11 +2322,6 @@
       send2("setSettings", { patch: { useAi } });
       if (useAi && lastRun?.response?.rerank && lastRun.query === input.value.trim()) run();
     });
-    siteButton.addEventListener("click", () => {
-      currentSite = currentSite === "crunchyroll" ? "all" : "crunchyroll";
-      paintToggles();
-      run();
-    });
     hideButton.addEventListener("click", async () => {
       hideWatched = !hideWatched;
       paintToggles();
@@ -1984,6 +2360,7 @@
       setView(view) {
         const settings = view?.settings || {};
         if (typeof settings.useAi === "boolean") useAi = settings.useAi;
+        if (typeof settings.liteMode === "boolean") liteMode = settings.liteMode;
         if (typeof settings.hideWatched === "boolean") hideWatched = settings.hideWatched;
         if (typeof settings.askModelDownload === "boolean") askDownload = settings.askModelDownload;
         if (Array.isArray(view?.tagSuggestions)) tagOptions = view.tagSuggestions;
@@ -2585,9 +2962,24 @@
   .st-link { margin-left: auto; color: var(--accent-text); font: 700 12.5px/1.2 ${ROUNDED}; text-decoration: none; }
   .st-link:hover { text-decoration: underline; }
   .st-provider + .switch, .st-actions + .switch { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .st-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .st-seg button {
+    border: 0; border-radius: 9px; padding: 7px 12px; cursor: pointer;
+    background: transparent; color: var(--muted); font: 700 12.5px/1.2 ${ROUNDED};
+    position: relative; z-index: 0;
+  }
+  .st-seg button.is-on {
+    background: var(--accent);
+    /* Contrast on the fill \u2014 not --accent-text (that tracks the accent hue in Prism embeds). */
+    color: var(--on-accent, var(--p-on-accent, #1a0d05));
+    z-index: 1;
+  }
+  .st-seg button:disabled { opacity: .45; cursor: not-allowed; }
+  .st-card.is-soon { opacity: .55; pointer-events: none; }
+  .st-soon { margin: 0; color: var(--faint); font: 700 11.5px/1.3 ${ROUNDED}; letter-spacing: .06em; text-transform: uppercase; }
 `;
   function createSettingsView({ send: send2, onView = () => {
-  }, pageContext = false, extras = [] } = {}) {
+  }, pageContext = false, extras = [], section = null } = {}) {
     let view = null;
     let catalogPoll = 0;
     const focused = () => root.getRootNode()?.activeElement || document.activeElement;
@@ -2624,6 +3016,7 @@
     const tasteBox = el("div");
     const taste = el("details", { class: "st-card" }, [el("summary", { text: "Taste preferences" }), tasteBox]);
     const modelLine = el("p", { class: "st-model" });
+    let lastModelStatus = null;
     const service = el("select", { "aria-label": "AI service" });
     service.append(el("option", { value: "auto", text: "Auto (recommended)" }));
     for (const provider of PROVIDERS) service.append(el("option", { value: provider.id, text: provider.free ? `${provider.label} (free)` : provider.label }));
@@ -2657,7 +3050,7 @@
       return { provider, input, remove, state, row };
     });
     service.addEventListener("change", () => act("setSettings", { patch: { aiService: service.value } }, "Saved."));
-    const ai = el("details", { class: "st-card" }, [
+    const ai = el("details", { class: "st-card", "data-st": "ai", open: true }, [
       el("summary", { text: "AI preferences" }),
       modelLine,
       el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "AI service" }), service, serviceHint]),
@@ -2673,11 +3066,18 @@
         el("span", { class: "switch-copy" }, [el("span", { class: "switch-label", text: label }), el("span", { class: "switch-hint", text: hint })])
       ]);
     }
-    ai.append(switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB."));
-    const tracking = el("details", { class: "st-card" }, [
+    const askDownloadRow = switchRow("askModelDownload", "Ask before downloading the AI model", "Chrome's built-in model is a one-time download of a few GB.");
+    ai.append(askDownloadRow);
+    const notifySeg = el("div", { class: "st-seg", role: "group", "aria-label": "Notification style" });
+    for (const [value, label] of [["ask", "Ask"], ["silent", "Silent"], ["off", "Off toasts"]]) {
+      const button = el("button", { type: "button", text: label, "data-notify": value });
+      button.addEventListener("click", () => act("setSettings", { patch: { notificationStyle: value } }, "Saved."));
+      notifySeg.append(button);
+    }
+    const notifyHint = el("span", { class: "st-hint", text: "Ask confirms episode updates. Silent skips dialogs but still fills Notifications. Off toasts hides Crunchyroll pop-ups, in-player Continue watching / marked-watched guide bubbles on connected sites, and the Find badge count." });
+    const tracking = el("details", { class: "st-card", "data-st": "notifications", open: true }, [
       el("summary", { text: "Notification preferences" }),
-      switchRow("episodeDialogs", "Episode update dialogs", "Ask before updating your list when you finish an episode, and confirm automatic updates. When off, updates happen without a dialog and show up in Notifications."),
-      switchRow("muteNotifications", "Mute notifications", "No pop-ups on Crunchyroll and no count on the Find button. Notifications still collect under the bell.")
+      el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Notification style" }), notifySeg, notifyHint])
     ]);
     const badgeSelect = (key, label, choices) => {
       const select = el("select", { "aria-label": label });
@@ -2690,7 +3090,9 @@
     const badgeSize = badgeSelect("badgeSize", "Badge size", [["normal", "Normal"], ["small", "Small"]]);
     const badgeUnwatched = badgeSelect("badgeUnwatched", "Unwatched shows", [["hover", "Show on hover"], ["always", "Always show"], ["never", "Never show"]]);
     const badgeMotion = badgeSelect("badgeMotion", "Badge animation", [["animated", "Animated"], ["static", "Static"]]);
+    const badgeMotionField = el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion]);
     const cornerHint = el("span", { class: "st-hint", text: "The glass footer always sits along the bottom.", hidden: true });
+    const liteMotionHint = el("span", { class: "st-hint", text: "Performance mode forces static badges.", hidden: true });
     const previewPosters = PREVIEW_SHOWS.map((show) => {
       const badge = el("span");
       badge.addEventListener("click", (event) => event.preventDefault());
@@ -2708,7 +3110,7 @@
         badge.title = "";
       }
     }
-    const badges = el("details", { class: "st-card" }, [
+    const badges = el("details", { class: "st-card", "data-st": "badges", open: true }, [
       el("summary", { text: "Status badge preferences" }),
       el("span", { class: "st-hint", text: "Hover a poster to preview. On Crunchyroll, click a badge to change the show's status." }),
       el("div", { class: "st-preview" }, previewPosters.map((item) => item.poster)),
@@ -2717,27 +3119,33 @@
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Corner" }), badgeCorner]),
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Size" }), badgeSize]),
         el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Unwatched shows" }), badgeUnwatched]),
-        el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Animation" }), badgeMotion])
+        badgeMotionField
       ]),
       cornerHint,
+      liteMotionHint,
       switchRow("badgeProgress", "Show episode progress", "Adds the episode you're on, like 7/24, to in-progress and dropped shows.")
     ]);
-    const search = el("details", { class: "st-card" }, [
+    const search = el("details", { class: "st-card", "data-st": "account", open: true }, [
       el("summary", { text: "Search preferences" }),
-      switchRow("favorNamed", "Favor the named show", "In searches like \u201Clike Frieren but sadder,\u201D being close to the named show counts more than the other words."),
-      switchRow("youtubeTitles", "Include free YouTube shows", "Complete, official uploads of shows Crunchyroll doesn't carry. They appear in the Crunchilist app with a YouTube label, never on Crunchyroll pages.")
+      switchRow("favorNamed", "Favor the named show", "In searches like \u201Clike Frieren but sadder,\u201D being close to the named show counts more than the other words.")
     ]);
     const liteBox = el("input", { type: "checkbox", role: "switch", "aria-label": "Performance mode" });
     liteBox.addEventListener("change", () => act("setSettings", { patch: { liteMode: liteBox.checked } }, liteBox.checked ? "Performance mode on." : "Performance mode off."));
     const liteSwitch = el("label", {
       class: "switch",
-      title: "Turns off blur, glow animations, and transitions, and checks Crunchyroll pages less often. Try it if things feel slow."
+      title: "Cuts blur, glow, and transitions; skips AI ranking and model downloads; slows Crunchyroll page scans; holds background AniList cover matching. Try it if things feel slow."
     }, [liteBox, el("span", { class: "switch-label", text: "Performance mode" })]);
     const refreshCatalog = el("button", { class: "btn", type: "button", title: "Update Crunchyroll titles and AniList details" }, [icon("refresh", 15), el("span", { text: "Refresh catalog" })]);
-    const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "" });
+    const refreshedLine = el("span", { class: "st-hint st-refreshed", text: "", "data-st": "account" });
+    const catalogActions = el("div", { class: "st-actions", "data-st": "account" }, [refreshCatalog, ...extras]);
     const statusMeter = progressMeter("Catalog progress");
     const statusBar = statusMeter.root;
+    statusBar.setAttribute("data-st", "account");
     const status = el("p", { class: "st-status", role: "status" });
+    account.setAttribute("data-st", "account");
+    context.setAttribute("data-st", "account");
+    taste.setAttribute("data-st", "account");
+    taste.open = true;
     const root = el("div", { class: "st" }, [
       el("div", { class: "st-head" }, [el("h2", { class: "st-title", text: "Settings" }), liteSwitch]),
       account,
@@ -2748,10 +3156,11 @@
       badges,
       ai,
       refreshedLine,
-      el("div", { class: "st-actions" }, [refreshCatalog, ...extras]),
+      catalogActions,
       statusBar,
       status
     ]);
+    let activeSection = section;
     const history = createHistoryView({ send: send2, onView, onClose: () => checkHistory() });
     root.append(history.root);
     async function checkHistory() {
@@ -2870,7 +3279,8 @@
         say("Refreshing AniList\u2026");
         act("refreshAnilist", {}, (response) => `Refreshed ${response.imported} anime from AniList.`);
       } else {
-        send2("openOptions");
+        say("Opening AniList\u2026");
+        act("startAnilistOneClick", {}, (response) => response.viewerName ? `Connected as ${response.viewerName}.` : "AniList connected.");
       }
     });
     publicRow.addEventListener("submit", (event) => {
@@ -2916,6 +3326,7 @@
     async function refreshModel() {
       const response = await send2("modelStatus");
       const state = response?.ok ? response.status : { label: "Unknown" };
+      lastModelStatus = state;
       modelLine.replaceChildren(
         document.createTextNode(`${view?.settings?.modelLabel || "Chrome"} model: `),
         el("strong", { text: state.label || "Unknown" }),
@@ -2923,8 +3334,22 @@
       );
     }
     ai.addEventListener("toggle", () => ai.open && refreshModel());
+    function applySection(nextSection) {
+      activeSection = nextSection || null;
+      const showAll = !activeSection;
+      for (const node of root.querySelectorAll("[data-st]")) {
+        node.hidden = !(showAll || node.getAttribute("data-st") === activeSection);
+      }
+      if (activeSection) {
+        for (const card of root.querySelectorAll(`details.st-card[data-st="${activeSection}"]`)) card.open = true;
+      }
+    }
+    applySection(activeSection);
     return {
       root,
+      focus(nextSection) {
+        applySection(nextSection);
+      },
       setView(next) {
         view = next || view;
         if (!view) return;
@@ -2976,19 +3401,27 @@
         liteBox.checked = Boolean(settings.liteMode);
         const themeHost = root.closest(".cl-theme") || root.getRootNode()?.host;
         themeHost?.classList.toggle("cl-lite", Boolean(settings.liteMode));
+        const style = settings.notificationStyle || (settings.muteNotifications ? "off" : settings.episodeDialogs === false ? "silent" : "ask");
+        for (const button of notifySeg.querySelectorAll("button")) button.classList.toggle("is-on", button.dataset.notify === style);
+        askDownloadRow.hidden = Boolean(settings.hasKey);
         const badgeChoices = badgeOptions(settings);
         for (const [select, value] of [[badgeStyle, badgeChoices.style], [badgeCorner, badgeChoices.corner], [badgeSize, badgeChoices.size], [badgeUnwatched, badgeChoices.unwatched], [badgeMotion, badgeChoices.motion]]) {
           if (focused() !== select) select.value = value;
         }
         badgeCorner.disabled = badgeChoices.style === "footer";
         cornerHint.hidden = badgeChoices.style !== "footer";
+        badgeMotionField.hidden = Boolean(settings.liteMode);
+        liteMotionHint.hidden = !settings.liteMode;
+        if (settings.liteMode) badgeMotion.value = "static";
         paintPreview(settings);
+        applySection(activeSection);
         for (const [field, tokens] of Object.entries(fields)) tokenList(tokens, view.taste?.[field], field);
         if (focused() !== audio) audio.value = view.taste?.subDub || "any";
         const keys = settings.keys || {};
         const savedCount = Object.values(keys).filter(Boolean).length;
         if (focused() !== service) service.value = settings.aiService || "auto";
-        serviceHint.textContent = !savedCount ? "No key saved, so Chrome's built-in model runs on this PC. A free key from Gemini, Groq, or OpenRouter is faster." : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
+        const chromeHint = lastModelStatus?.label === "Unavailable here" || /not supported|unavailable here/i.test(lastModelStatus?.detail || "") ? "No key saved, and Chrome's on-device model isn't available here. Add a free key from Gemini, Groq, or OpenRouter to rank results." : lastModelStatus?.label === "Not downloaded" || lastModelStatus?.needsDownload ? "No key saved. Chrome can download its on-device model the first time you let AI rank results, or add a free API key instead." : "No key saved, so Chrome's built-in model runs on this PC when it's available. A free key from Gemini, Groq, or OpenRouter is faster.";
+        serviceHint.textContent = !savedCount ? chromeHint : service.value === "auto" ? savedCount > 1 ? "Tries the service that answered last first. If it takes more than about 12 seconds, hits a limit, or fails, the next saved service answers instead." : "Save a second key so Auto has a backup when one service is slow or out of free requests." : keys[service.value] ? "Only this service is used." : "This service has no key yet, so Auto is used.";
         for (const item of providerRows) {
           const saved = Boolean(keys[item.provider.id]);
           item.remove.hidden = !saved;
@@ -3124,9 +3557,11 @@
   :host { pointer-events: none; }
   .launcher, .backdrop, .panel, .drawer, .gather, .toast { pointer-events: auto; color: var(--text); font: 400 15px/1.45 ${ROUNDED}; }
   .toast {
-    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 10px; padding: 10px 8px 10px 16px;
+    display: flex; align-items: center; gap: 10px; width: min(340px, calc(100vw - 36px)); margin: 0 0 14px; padding: 10px 8px 10px 16px;
     border-radius: 18px; animation: shell-toast .26s var(--ease) both;
   }
+  /* Keep catalog gather and episode toasts from stacking on top of each other. */
+  .gather:not([hidden]) ~ .toast, .toast:not([hidden]) ~ .gather { margin-bottom: 18px; }
   @keyframes shell-toast { from { opacity: 0; transform: translateY(8px); } }
   .toast-copy { flex: 1; min-width: 0; }
   .toast-title { margin: 0; font: 800 13.5px/1.3 ${ROUNDED}; }
@@ -3148,7 +3583,7 @@
     box-shadow: 0 14px 36px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .06);
     transition: transform .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
   }
-  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: rgba(255, 154, 92, .4); background: var(--glass-strong); }
+  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--glass-strong); }
   .launcher:active { transform: translateY(0); }
   .launcher.is-locked { cursor: progress; }
   .launcher.is-locked svg { animation: shell-pulse 1.4s ease-in-out infinite; }
@@ -3186,26 +3621,38 @@
   .drawer.is-open { display: block; animation: shell-fade .18s var(--ease) both; }
   :host(.fullscreen) .launcher { width: 12px; height: 60px; border-radius: 8px 0 0 8px; opacity: .5; }
   :host(.fullscreen) .launcher svg { display: none; }
-  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer { display: none !important; }
+  :host(.fullscreen) .panel, :host(.fullscreen) .backdrop, :host(.fullscreen) .drawer, :host(.fullscreen) .gather { display: none !important; }
 `;
-  function createPanel(doc, { send: send2, onOpenChange = () => {
-  }, onCorner = () => {
-  }, onView = () => {
-  } }) {
+  function createPanel(doc, {
+    send: send2,
+    site = "crunchyroll",
+    // Same Where chips as other site panels (on → only → off), not Crunchyroll alone.
+    platforms = SEARCH_PLATFORMS,
+    accent = "",
+    gatherLabel = "Gathering the Crunchyroll list",
+    layout = null,
+    hostId = "cr-corner-host",
+    onOpenChange = () => {
+    },
+    onCorner = () => {
+    },
+    onView = () => {
+    }
+  } = {}) {
     const host = doc.createElement("div");
-    host.id = "cr-corner-host";
+    host.id = hostId;
     host.className = "cl-theme";
     const shadow = host.attachShadow({ mode: "open" });
     const style = doc.createElement("style");
     style.textContent = roundedFontFace() + THEME_CSS + SEARCH_CSS + SETTINGS_CSS + NOTICES_CSS + SHELL_CSS;
     const launcherBadge = noticeBadge();
-    const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Crunchilist search", title: "Search with Crunchilist" }, [icon("search", 22), launcherBadge]);
-    const gatherText = el("span", { text: "Gathering the Crunchyroll list" });
+    const launcher = el("button", { class: "launcher", type: "button", "aria-expanded": "false", "aria-label": "Open Kivori SekAI search", title: "Search with Kivori SekAI" }, [icon("search", 22), launcherBadge]);
+    const gatherText = el("span", { text: gatherLabel });
     const gatherMeter = progressMeter("Background progress");
     const gather = el("div", { class: "gather glass", role: "status", hidden: true }, [icon("sparkle", 15), el("div", { class: "gather-copy" }, [gatherText, gatherMeter.root])]);
-    const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Crunchilist", tabindex: "-1" });
-    const panel2 = el("section", { class: "panel glass", role: "dialog", "aria-label": "Crunchilist search", hidden: true });
-    const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Crunchilist settings", hidden: true });
+    const backdrop = el("button", { class: "backdrop", type: "button", "aria-label": "Close Kivori SekAI", tabindex: "-1" });
+    const panel2 = el("section", { class: "panel glass", role: "dialog", "aria-label": "Kivori SekAI search", hidden: true });
+    const drawer = el("section", { class: "drawer glass", role: "dialog", "aria-label": "Kivori SekAI settings", hidden: true });
     const toastTitle = el("p", { class: "toast-title" });
     const toastMeta = el("p", { class: "toast-meta" });
     const toastAction = el("button", { class: "btn primary", type: "button" });
@@ -3222,7 +3669,7 @@
     let tasks = [];
     let corner = "bottom-right";
     let hydrated = false;
-    const search = createSearchView({ send: send2, site: "crunchyroll", onView });
+    const search = createSearchView({ send: send2, site, platforms, onView });
     const moveButton = el("button", { class: "btn", type: "button", title: "Move the search button to the next corner" }, [icon("corner", 15), el("span", { text: "Move button" })]);
     const settings = createSettingsView({ send: send2, onView, pageContext: true, extras: [moveButton] });
     const notices = createNoticesView({ send: send2, onView });
@@ -3233,16 +3680,51 @@
     const closeButton = el("button", { class: "icon-btn", type: "button", "aria-label": "Close", title: "Close" }, [icon("close")]);
     const body = el("div", { class: "body" }, [search.root]);
     panel2.append(
-      el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Crunchilist" }), fullButton, bellButton, settingsButton, closeButton]),
+      el("div", { class: "topbar" }, [el("p", { class: "brand", text: "Kivori SekAI" }), fullButton, bellButton, settingsButton, closeButton]),
       body
     );
     search.setScrollRoot(body);
     drawer.append(settings.root, notices.root);
     let drawerPane = "settings";
+    function applyAccent() {
+      if (!accent) return;
+      host.style.setProperty("--accent", accent);
+      host.style.setProperty("--accent-text", accent);
+      host.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 22%, transparent)`);
+    }
+    const COOKIE_SEL = [
+      "#onetrust-banner-sdk",
+      "#onetrust-consent-sdk",
+      "#CybotCookiebotDialog",
+      ".osano-cm-window",
+      "[id*='cookie' i][class*='banner' i]",
+      "[class*='cookie' i][class*='banner' i]",
+      "[aria-label*='cookie' i]",
+      "[aria-label*='consent' i]"
+    ].join(",");
+    function cookieLiftPx() {
+      if (!corner.startsWith("bottom") || fullscreen) return 0;
+      let lift = 0;
+      for (const node of document.querySelectorAll(COOKIE_SEL)) {
+        if (!(node instanceof HTMLElement)) continue;
+        const style2 = getComputedStyle(node);
+        if (style2.display === "none" || style2.visibility === "hidden" || Number(style2.opacity) === 0) continue;
+        const box = node.getBoundingClientRect();
+        if (box.height < 36 || box.width < 80) continue;
+        if (box.bottom < window.innerHeight - 8 || box.top > window.innerHeight) continue;
+        lift = Math.max(lift, Math.ceil(window.innerHeight - box.top + 12));
+      }
+      return Math.min(lift, Math.floor(window.innerHeight * 0.45));
+    }
+    function withBottomLift(css, lift) {
+      if (!lift) return css;
+      return css.replace(/bottom\s*:\s*(\d+)px/i, (_, px) => `bottom:${Number(px) + lift}px`);
+    }
     function place() {
+      const lift = cookieLiftPx();
       const edge = {
-        "bottom-right": "right:18px;bottom:18px;",
-        "bottom-left": "left:18px;bottom:18px;",
+        "bottom-right": withBottomLift(layout?.edge || "right:18px;bottom:18px;", lift),
+        "bottom-left": withBottomLift("left:18px;bottom:18px;", lift),
         "top-left": "left:18px;top:18px;",
         "top-right": "right:18px;top:18px;"
       };
@@ -3252,6 +3734,7 @@
       host.classList.toggle("fullscreen", fullscreen);
       host.classList.toggle("at-top", !fullscreen && corner.startsWith("top"));
       host.style.cssText = fullscreen ? `${base}top:40%;right:0;` : `${base}${edge[corner] || edge["bottom-right"]}`;
+      applyAccent();
       placeDrawer();
     }
     function placeDrawer() {
@@ -3280,7 +3763,7 @@
       drawer.classList.toggle("is-open", drawerOpen);
       settings.root.hidden = pane !== "settings";
       notices.root.hidden = pane !== "notices";
-      drawer.setAttribute("aria-label", pane === "notices" ? "Crunchilist notifications" : "Crunchilist settings");
+      drawer.setAttribute("aria-label", pane === "notices" ? "Kivori SekAI notifications" : "Kivori SekAI settings");
       for (const [button, name] of [[settingsButton, "settings"], [bellButton, "notices"]]) {
         const on = drawerOpen && pane === name;
         button.classList.toggle("is-on", on);
@@ -3302,7 +3785,7 @@
       gather.hidden = !showGather;
       launcher.classList.toggle("is-locked", gathering);
       launcher.disabled = fullscreen || gathering;
-      launcher.title = gathering ? gatherText.textContent : shown ? "Close Crunchilist" : "Search with Crunchilist";
+      launcher.title = gathering ? gatherText.textContent : shown ? "Close Kivori SekAI" : "Search with Kivori SekAI";
     }
     function setOpen(next, { silent = false } = {}) {
       if (next && (fullscreen || gathering)) return;
@@ -3331,8 +3814,9 @@
       onCorner(corner);
     });
     window.addEventListener("resize", placeDrawer);
+    const stopKeys = (event) => event.stopPropagation();
     host.addEventListener("keydown", (event) => {
-      event.stopPropagation();
+      stopKeys(event);
       if (event.key !== "Escape" || !open || fullscreen) return;
       if (drawerOpen) setDrawer(false);
       else {
@@ -3340,6 +3824,8 @@
         launcher.focus();
       }
     });
+    host.addEventListener("keyup", stopKeys);
+    host.addEventListener("keypress", stopKeys);
     host.addEventListener("click", (event) => event.stopPropagation());
     let toastTimer = 0;
     let toastHandler = null;
@@ -3380,6 +3866,13 @@
     });
     place();
     paint();
+    let cookieTimer = 0;
+    const cookieWatch = new MutationObserver(() => {
+      window.clearTimeout(cookieTimer);
+      cookieTimer = window.setTimeout(place, 120);
+    });
+    cookieWatch.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden"] });
+    window.addEventListener("resize", place);
     return {
       host,
       setView(view, { syncOpen = false } = {}) {
@@ -3390,7 +3883,7 @@
         const count = view.notices?.length || 0;
         paintBadge2(bellBadge, count);
         paintBadge2(launcherBadge, view.settings?.muteNotifications ? 0 : count);
-        launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Crunchilist search, ${count} notifications` : "Open Crunchilist search");
+        launcher.setAttribute("aria-label", count && !view.settings?.muteNotifications ? `Open Kivori SekAI search, ${count} notifications` : "Open Kivori SekAI search");
         if (syncOpen && !hydrated) {
           hydrated = true;
           corner = view.settings?.panelCorner || corner;
@@ -3425,6 +3918,16 @@
       hideToast
     };
   }
+
+  // lib/brand-logo.js
+  var KIVORI_LOGO_SVG = `<svg viewBox="0 0 68 68" width="20" height="20" aria-hidden="true">
+  <rect width="68" height="68" rx="15" fill="#5b4bff"/>
+  <circle cx="34" cy="34" r="18" fill="none" stroke="#eef0ff" stroke-width="3.5"/>
+  <ellipse cx="34" cy="34" rx="8" ry="18" fill="none" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M16 34h36" stroke="#eef0ff" stroke-width="2.5" opacity=".55"/>
+  <path d="M20 46L48 22" stroke="#4fd1ff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="48" cy="22" r="4" fill="#4fd1ff"/>
+</svg>`;
 
   // content/player-bar.js
   var CSS = `
@@ -3490,21 +3993,14 @@
   .ask .later:hover { color: #f7efe9; background: rgba(255, 226, 196, .1); }
   [hidden] { display: none !important; }
 `;
-  var LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="clb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff8f3f"/><stop offset="1" stop-color="#ef5418"/></linearGradient></defs><path fill="url(#clb)" d="M406.51,82.09A230,230 0 1 0 406.51,429.91A190,190 0 1 1 406.51,82.09Z"/><path transform="translate(210 116) scale(.153)" fill="#ffc54d" stroke="#ffc54d" stroke-width="60" stroke-linejoin="round" fill-rule="evenodd" d="M68.98,29.53l1862.04,315.6L952.66,692.29V1970.47L116.32,234.67l867.9,110.46H305.68L873.76,1591.75V613.39l710.1-268.26Z"/></svg>`;
+  var LOGO = KIVORI_LOGO_SVG;
   var PLAYER = ".video-player-wrapper, iframe.video-player, iframe[src*='vilos']";
   var IDLE_MS = 3e3;
   var GAP = 12;
   var TIP_MS = 9e3;
   var TIP_WIDTH = 250;
   var TIP_SEEN = "crunchilist-back-tip";
-  function playerBox(doc) {
-    const video = doc.querySelector("video");
-    for (const node of [...doc.querySelectorAll(PLAYER), video]) {
-      const rect = node?.getBoundingClientRect();
-      if (rect && rect.width > 240 && rect.height > 135) return rect;
-    }
-    return null;
-  }
+  var BACK_LABEL = "Open Kivori SekAI";
   function headerBottom(doc) {
     const header = doc.querySelector(".erc-large-header");
     const bar = header && [...header.querySelectorAll("*")].find((node) => node.getBoundingClientRect().height > 30);
@@ -3529,19 +4025,31 @@
     }
     return best;
   }
+  function playerBox(doc) {
+    const main = mainVideo(doc.querySelectorAll("video"));
+    if (main) {
+      const rect = main.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    for (const node of doc.querySelectorAll(PLAYER)) {
+      const rect = node.getBoundingClientRect();
+      if (rect.width > 240 && rect.height > 135) return rect;
+    }
+    return null;
+  }
   function createPlayerBar(doc, { send: send2, tips = false, frame = false }) {
     const win = doc.defaultView;
     const host = doc.createElement("div");
     host.id = "crunchilist-tabbar";
     const shadow = host.attachShadow({ mode: "open" });
-    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Crunchilist">
+    shadow.innerHTML = `<style>${CSS}</style><div class="bar" role="region" aria-label="Kivori SekAI">
     <button class="pip" type="button" role="switch" aria-checked="false" title="Float the episode in a small player that stays above your other windows" hidden>${PIP_ICON}<span>Always on top</span><i></i></button>
-    <button class="back" type="button" hidden>${LOGO}<span>Back to Crunchilist</span></button>
+    <button class="back" type="button" hidden>${LOGO}<span>${BACK_LABEL}</span></button>
     <div class="msg" hidden><i class="spin" hidden></i><span></span></div>
     <button class="act primary" type="button" hidden></button>
     <button class="act2" type="button" hidden></button>
   </div><div class="tip" role="status" hidden>
-    <b>Click here to go back</b><small>Returns to your Crunchilist tab whenever you're done watching.</small>
+    <b>Click here to open Kivori SekAI</b><small>Switches to your Kivori SekAI tab whenever you're done watching.</small>
     <label><input type="checkbox">Don't show again</label>
   </div><div class="ask" role="dialog" aria-label="Open the mini player" hidden>
     <div class="ask-card">${PIP_ICON}<b>Click anywhere to open the mini player</b>
@@ -3575,7 +4083,7 @@
     let canPip = false;
     let frameRoom = 0;
     let sentRoom = -1;
-    function adopt() {
+    function adopt2() {
       if (!host.parentNode) return;
       const element = doc.fullscreenElement || doc.webkitFullscreenElement;
       covered = Boolean(element && /^(IFRAME|VIDEO)$/.test(element.tagName));
@@ -3793,16 +4301,23 @@
     }, { passive: true, capture: true });
     win.addEventListener("scroll", schedulePlace, { passive: true, capture: true });
     win.addEventListener("resize", schedulePlace, { passive: true });
+    let liteTick = false;
     win.setInterval(() => {
       if (!host.isConnected) return;
       syncPip();
+      if (role?.liteMode) {
+        liteTick = !liteTick;
+        if (liteTick) return;
+      } else {
+        liteTick = false;
+        maybeTip();
+      }
       schedulePlace();
-      maybeTip();
     }, 1e3);
     back.addEventListener("click", async () => {
       hideTip();
       const response = await send2("backToCrunchilist");
-      if (!response?.ok) flash(response?.error || "Couldn't find your Crunchilist tab.");
+      if (!response?.ok) flash(response?.error || "Couldn't find your Kivori SekAI tab.");
     });
     const button = (node, label, onClick) => {
       node.hidden = !label;
@@ -3886,7 +4401,7 @@
         awake = false;
         hovered = false;
         win.clearTimeout(idleTimer);
-        adopt();
+        adopt2();
         paint();
       },
       clear() {
@@ -4007,9 +4522,207 @@
     return stored[ENABLED_KEY] !== false;
   }
 
+  // content/watch-guide.js
+  var HOST_ID = "ks-watch-guide";
+  var SHOW_MS = 3500;
+  var CSS2 = `
+:host {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  pointer-events: none;
+  font-family: "Nunito", system-ui, sans-serif;
+}
+.card {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: auto;
+}
+.card.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.portrait {
+  flex: none;
+  width: 64px;
+  height: 72px;
+  border-radius: 12px;
+  border: 3px solid #1a1210;
+  background: #fffaf4;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+  overflow: hidden;
+}
+.portrait img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+.bubble {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  background: #fffaf4;
+  color: #1a1210;
+  border: 3px solid #1a1210;
+  box-shadow: 3px 3px 0 rgba(26,18,16,.22);
+}
+.bubble::before,
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  bottom: 16px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+.bubble::before {
+  left: -17px;
+  bottom: 14px;
+  border-width: 8px 16px 8px 0;
+  border-color: transparent #1a1210 transparent transparent;
+}
+.bubble::after {
+  border-width: 6px 12px 6px 0;
+  border-color: transparent #fffaf4 transparent transparent;
+}
+.name {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 2px solid #1a1210;
+  background: #ff9a4a;
+  color: #1a0d05;
+  font: 800 10px/1.2 system-ui, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.text {
+  margin: 0;
+  font: 750 15px/1.35 system-ui, sans-serif;
+  letter-spacing: -.01em;
+  overflow-wrap: anywhere;
+}
+`;
+  function esc(value) {
+    return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function ensureHost(doc = document) {
+    let host = doc.getElementById(HOST_ID);
+    if (host) return host;
+    host = doc.createElement("div");
+    host.id = HOST_ID;
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `<style>${CSS2}</style><div class="card" part="card"></div>`;
+    (doc.documentElement || doc.body).append(host);
+    return host;
+  }
+  function adopt(host, doc = document) {
+    const element = doc.fullscreenElement || doc.webkitFullscreenElement;
+    const parent = element || doc.documentElement || doc.body;
+    if (host.parentNode !== parent) parent.append(host);
+  }
+  function createWatchGuide(doc = document) {
+    let hideTimer = 0;
+    let hideAt = 0;
+    let remaining = SHOW_MS;
+    let paused = false;
+    const host = ensureHost(doc);
+    const card = host.shadowRoot.querySelector(".card");
+    function onFs() {
+      adopt(host, doc);
+    }
+    function clearHide() {
+      clearTimeout(hideTimer);
+      hideTimer = 0;
+    }
+    function hide() {
+      clearHide();
+      paused = false;
+      remaining = 0;
+      card.classList.remove("show");
+    }
+    function scheduleHide(ms) {
+      clearHide();
+      remaining = Math.max(0, ms);
+      hideAt = Date.now() + remaining;
+      paused = false;
+      if (remaining <= 0) {
+        hide();
+        return;
+      }
+      hideTimer = setTimeout(hide, remaining);
+    }
+    function pauseHide() {
+      if (!hideTimer || paused) return;
+      remaining = Math.max(0, hideAt - Date.now());
+      clearHide();
+      paused = true;
+    }
+    function resumeHide() {
+      if (!paused) return;
+      scheduleHide(remaining);
+    }
+    doc.addEventListener("fullscreenchange", onFs);
+    doc.addEventListener("webkitfullscreenchange", onFs);
+    card.addEventListener("pointerenter", pauseHide);
+    card.addEventListener("pointerleave", resumeHide);
+    function show(payload = {}) {
+      const text2 = String(payload.text || "").trim();
+      if (!text2) return;
+      adopt(host, doc);
+      const name = String(payload.name || "Kivi").trim() || "Kivi";
+      const portrait = String(payload.portraitUrl || "").trim();
+      card.innerHTML = `${portrait ? `<div class="portrait"><img src="${esc(portrait)}" alt=""></div>` : ""}
+      <figure class="bubble">
+        <figcaption class="name">${esc(name)}</figcaption>
+        <blockquote class="text">${esc(text2)}</blockquote>
+      </figure>`;
+      card.classList.remove("show");
+      void card.offsetWidth;
+      card.classList.add("show");
+      scheduleHide(SHOW_MS);
+    }
+    function destroy() {
+      clearHide();
+      card.removeEventListener("pointerenter", pauseHide);
+      card.removeEventListener("pointerleave", resumeHide);
+      doc.removeEventListener("fullscreenchange", onFs);
+      doc.removeEventListener("webkitfullscreenchange", onFs);
+      host.remove();
+    }
+    return { show, destroy };
+  }
+  function bootWatchGuide(doc = document) {
+    if (globalThis.__ksWatchGuideBooted) return globalThis.__ksWatchGuide;
+    globalThis.__ksWatchGuideBooted = true;
+    const guide = createWatchGuide(doc);
+    globalThis.__ksWatchGuide = guide;
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "watchGuide") guide.show(message);
+    });
+    return guide;
+  }
+
   // content/main.js
   if (!globalThis.__crCornerBooted) {
     globalThis.__crCornerBooted = true;
+    bootWatchGuide();
     boot();
   }
   function boot() {
@@ -4053,6 +4766,7 @@
     if (!panel) {
       panel = createPanel(document, {
         send,
+        platforms: SEARCH_PLATFORMS,
         onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
         onCorner: (panelCorner) => send("setUi", { panelCorner }),
         onView: (view) => renderView(view)
@@ -4130,7 +4844,7 @@
   }
   function schedule() {
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 1200 : 450);
+    scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 2e3 : 450);
   }
   function observationSignature(observation) {
     return JSON.stringify({
@@ -4234,6 +4948,7 @@
         return;
       }
       if (!response.toast || response.mode === "none") return;
+      if (response.watchGuide) globalThis.__ksWatchGuide?.show(response.watchGuide);
       showEpisodeToast(response);
     });
   }
