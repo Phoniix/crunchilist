@@ -1,5 +1,5 @@
 import { ROUNDED, el, icon, progressMeter, roundedFontFace } from "../ui/dom.js";
-import { SEARCH_CSS, createSearchView } from "../ui/search-view.js";
+import { SEARCH_CSS, SEARCH_PLATFORMS, createSearchView } from "../ui/search-view.js";
 import { NOTICES_CSS, createNoticesView, noticeBadge, paintBadge } from "../ui/notices-view.js";
 import { SETTINGS_CSS, createSettingsView } from "../ui/settings-view.js";
 import { THEME_CSS } from "../ui/theme.js";
@@ -36,7 +36,7 @@ const SHELL_CSS = `
     box-shadow: 0 14px 36px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .06);
     transition: transform .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
   }
-  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: rgba(255, 154, 92, .4); background: var(--glass-strong); }
+  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--glass-strong); }
   .launcher:active { transform: translateY(0); }
   .launcher.is-locked { cursor: progress; }
   .launcher.is-locked svg { animation: shell-pulse 1.4s ease-in-out infinite; }
@@ -80,7 +80,8 @@ const SHELL_CSS = `
 export function createPanel(doc, {
   send,
   site = "crunchyroll",
-  platforms = ["crunchyroll"],
+  // Same Where chips as other site panels (on → only → off), not Crunchyroll alone.
+  platforms = SEARCH_PLATFORMS,
   accent = "",
   gatherLabel = "Gathering the Crunchyroll list",
   layout = null,

@@ -1154,11 +1154,16 @@
     background: rgba(16, 14, 12, .62); border: 1px solid var(--line-strong);
     transition: border-color .18s var(--ease), background .18s var(--ease), box-shadow .18s var(--ease);
   }
-  .sv-bar:hover { border-color: rgba(255, 226, 196, .3); }
-  .sv-bar:focus-within { border-color: rgba(255, 154, 92, .5); background: rgba(16, 14, 12, .78); box-shadow: 0 0 0 4px rgba(255, 122, 47, .08); }
+  .sv-bar:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong)); }
+  /* Glow follows host --accent (site panels set brand color; CR keeps the default orange). */
+  .sv-bar:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: rgba(16, 14, 12, .78);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
   .sv-bar::after {
     content: ""; position: absolute; left: 18px; right: 18px; bottom: -1px; height: 2px; border-radius: 2px;
-    background: linear-gradient(90deg, transparent, rgba(255, 154, 92, .85), transparent);
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
     background-size: 40% 100%; background-repeat: no-repeat; opacity: 0;
   }
   .sv-bar.is-busy::after { opacity: 1; animation: sv-sweep 1.1s var(--ease) infinite; }
@@ -1247,6 +1252,13 @@
   }
   .sv-site.is-on .sv-site-dot { background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .18); }
   .sv-site.is-on svg { color: #fff; opacity: 1; }
+  /* Second click: exclusive to this site (ring + \u201Conly\u201D label). */
+  .sv-site.is-on.is-only {
+    background: color-mix(in srgb, var(--sv-site) 72%, #111);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--sv-site) 55%, #fff),
+      0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
   .sv-refine {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     gap: 12px 14px; align-items: start;
@@ -1513,6 +1525,7 @@
   } = {}) {
     let chip = "";
     let currentSite = site;
+    let siteOnly = false;
     const sitePlatforms = (Array.isArray(platforms) ? platforms : SEARCH_PLATFORMS).map((row) => typeof row === "string" ? SEARCH_PLATFORMS.find((p) => p.id === row) : row).filter(Boolean);
     let useAi = true;
     let liteMode = false;
@@ -1574,18 +1587,27 @@
     const siteButtons = /* @__PURE__ */ new Map();
     const siteRow = el("div", { class: "sv-toggles sv-sites" });
     for (const platform of sitePlatforms) {
+      const label = el("span", { class: "sv-site-label", text: platform.label });
       const button = el("button", {
         class: "sv-toggle sv-site",
         type: "button",
-        title: `Empty search: browse titles on ${platform.label}. With a search: keep only matches watchable there.`,
+        title: `Titles on ${platform.label}. Click again for ${platform.label}-only titles, then once more to clear.`,
         "aria-pressed": "false",
-        "data-site": platform.id,
-        text: platform.label
+        "data-site": platform.id
       });
       button.style.setProperty("--sv-site", platform.color || SERVICE_BRAND[platform.id] || "#ff7a2f");
-      button.prepend(el("span", { class: "sv-site-dot", "aria-hidden": "true" }));
+      button.append(el("span", { class: "sv-site-dot", "aria-hidden": "true" }), label);
       button.addEventListener("click", () => {
-        currentSite = currentSite === platform.id ? "all" : platform.id;
+        if (currentSite === platform.id) {
+          if (!siteOnly) siteOnly = true;
+          else {
+            currentSite = "all";
+            siteOnly = false;
+          }
+        } else {
+          currentSite = platform.id;
+          siteOnly = false;
+        }
         paintToggles();
         send2("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {
         });
@@ -1738,9 +1760,16 @@
     }
     function paintToggles() {
       for (const [id, button] of siteButtons) {
+        const platform = sitePlatforms.find((row) => row.id === id);
+        const name = platform?.label || id;
         const on = currentSite === id;
+        const only = on && siteOnly;
         button.classList.toggle("is-on", on);
+        button.classList.toggle("is-only", only);
         button.setAttribute("aria-pressed", on ? "true" : "false");
+        const label = button.querySelector(".sv-site-label");
+        if (label) label.textContent = only ? `${name} only` : name;
+        button.title = !on ? `Titles on ${name}. Click again for ${name}-only titles, then once more to clear.` : only ? `Only titles on ${name} alone. Click to clear.` : `Titles on ${name}. Click again for ${name}-only titles.`;
       }
       hideButton.classList.toggle("is-on", hideWatched);
       hideButton.setAttribute("aria-pressed", hideWatched ? "true" : "false");
@@ -1921,7 +1950,7 @@
       }
       const list = el("div", { class: "sv-list" });
       results.append(section("Browse all", [list]));
-      startPager(seq, { query: "", chip: "", site: currentSite, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
+      startPager(seq, { query: "", chip: "", site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
     }
     function resultsTitle() {
       const platform = sitePlatforms.find((row) => row.id === currentSite);
@@ -2077,7 +2106,7 @@
       if (head) head.replaceWith(aiState(text2, false));
     }
     async function rerank(id, query2, items, render) {
-      const answer = await send2("catalogRerank", { query: query2, chip, site: currentSite, ids: items.slice(0, 20).map((item) => item.id) });
+      const answer = await send2("catalogRerank", { query: query2, chip, site: currentSite, siteOnly, ids: items.slice(0, 20).map((item) => item.id) });
       if (id !== seq) return;
       if (answer?.ok && answer.results?.length) {
         render(answer.results, answer.by);
@@ -2100,6 +2129,7 @@
         query: "",
         chip: "",
         site: currentSite,
+        siteOnly,
         ids: row.items.map((item) => item.id),
         ...current ? { reroll: true, seen: [...forYouSeen], last } : {}
       });
@@ -2138,7 +2168,7 @@
       sentinel.replaceChildren();
       form.classList.add("is-busy");
       showResultsLoader(query2 ? "Searching\u2026" : browse ? "Loading titles\u2026" : "Loading\u2026");
-      const params = { query: query2, chip, site: currentSite, sort, tags: include.values, without: exclude.values, browse };
+      const params = { query: query2, chip, site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse };
       const response = await send2("catalogSearch", params);
       if (id !== seq) return;
       form.classList.remove("is-busy");
@@ -2218,7 +2248,7 @@
         showResultsLoader("Looking up\u2026");
       }
       suggestTimer = window.setTimeout(async () => {
-        const response = await send2("catalogSuggest", { query: query2, chip, site: currentSite });
+        const response = await send2("catalogSuggest", { query: query2, chip, site: currentSite, siteOnly });
         if (token !== suggestSeq || input.value.trim() !== query2) return;
         form.classList.remove("is-busy");
         suggestions = response?.suggestions || [];
@@ -3552,7 +3582,7 @@
     box-shadow: 0 14px 36px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .06);
     transition: transform .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease), background .18s var(--ease);
   }
-  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: rgba(255, 154, 92, .4); background: var(--glass-strong); }
+  .launcher:hover { transform: translateY(-2px); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--glass-strong); }
   .launcher:active { transform: translateY(0); }
   .launcher.is-locked { cursor: progress; }
   .launcher.is-locked svg { animation: shell-pulse 1.4s ease-in-out infinite; }
@@ -3595,7 +3625,8 @@
   function createPanel(doc, {
     send: send2,
     site = "crunchyroll",
-    platforms = ["crunchyroll"],
+    // Same Where chips as other site panels (on → only → off), not Crunchyroll alone.
+    platforms = SEARCH_PLATFORMS,
     accent = "",
     gatherLabel = "Gathering the Crunchyroll list",
     layout = null,
@@ -4521,6 +4552,7 @@
     if (!panel) {
       panel = createPanel(document, {
         send,
+        platforms: SEARCH_PLATFORMS,
         onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
         onCorner: (panelCorner) => send("setUi", { panelCorner }),
         onView: (view) => renderView(view)

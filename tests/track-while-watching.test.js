@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { KEYS } from "../lib/keys.js";
+import { matchKey } from "../lib/remembered.js";
 import { STORAGE_KEY } from "../lib/state.js";
 import { mainVideo } from "../lib/watch-loop.js";
 
@@ -54,9 +55,11 @@ globalThis.chrome = {
     onRemoved: { addListener() {} },
   },
   tabs: {
-    get: async (id) => ({ id }),
+    get: async (id) => ({ id, status: "complete", url: "https://www.netflix.com/" }),
     query: async () => [],
     sendMessage: async () => null,
+    reload: async () => {},
+    create: async () => ({ id: 99 }),
     onRemoved: { addListener() {} },
     onUpdated: { addListener() {} },
   },
@@ -125,6 +128,65 @@ test("mainVideo ignores short ads and picks the longest played video", () => {
   assert.equal(mainVideo({ querySelectorAll: () => [] }), null);
 });
 
+test("mainVideo accepts a lower floor for Netflix-length specials", () => {
+  const doc = {
+    querySelectorAll: () => [
+      { duration: 45, currentTime: 45, played: { length: 1 } },
+      { duration: 90, currentTime: 80, played: { length: 1 } },
+    ],
+  };
+  assert.equal(mainVideo(doc), null);
+  assert.equal(mainVideo(doc, { minSeconds: 61 }).duration, 90);
+});
+
+test("Netflix started bumps provisional Continue Watching without scheduling AniList catch-up", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: {
+      anilistId: 1535,
+      how: "auto",
+      names: ["Death Note — Season 1"],
+    },
+  };
+  stored.crCatalog = {
+    items: [{ id: "GY35BM4", title: "Death Note", anilistId: 1535, url: "https://www.crunchyroll.com/series/GY35BM4", episodes: 37 }],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixWatchNow") {
+      return {
+        ok: true,
+        payload: {
+          series: "Death Note",
+          season: "Season 1",
+          seasonNumber: 1,
+          episode: 1,
+          anime: true,
+          title: "Death Note: Season 1: Rebirth",
+        },
+      };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixStarted", videoId: "1", labels: ["Death Note: Season 1: Rebirth"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/1", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity];
+  assert.equal(activity[0].id, "GY35BM4");
+  assert.equal(activity[0].provisional, true);
+  assert.equal(activity[0].service, "netflix");
+  assert.equal(alarms.length, 0);
+  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].status, "in_progress");
+  assert.ok(stored[STORAGE_KEY].library["anilist:1535"].lastWatchedAt > 0);
+});
+
 test("Tubi watched notes the episode and schedules the watch-track alarm", async () => {
   reset();
   withTracking();
@@ -168,7 +230,7 @@ test("Netflix and HIDIVE watched signals schedule a history catch-up when tracki
   );
   await handleImportMessage(
     { type: "hidiveWatched" },
-    { id: "ext-id", frameId: 0, url: "https://www.hidive.com/stream/x", tab: { id: 2 } },
+    { id: "ext-id", frameId: 0, url: "https://www.hidive.com/video/590403", tab: { id: 2 } },
   );
   assert.ok(alarms.some((alarm) => alarm.name === "ks-track-netflix" && alarm.delayInMinutes === 2));
   assert.ok(alarms.some((alarm) => alarm.name === "ks-track-hidive" && alarm.delayInMinutes === 2));
@@ -182,6 +244,343 @@ test("Netflix watched does nothing when tracking is off", async () => {
     { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/123", tab: { id: 1 } },
   );
   assert.equal(alarms.length, 0);
+});
+
+test("Netflix watched bumps Continue Watching from activity then schedules AniList catch-up", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: {
+      anilistId: 1535,
+      how: "auto",
+      confidence: "high",
+      names: ["Death Note — Season 1"],
+    },
+  };
+  stored.crCatalog = {
+    items: [{ id: "GY35BM4", title: "Death Note", anilistId: 1535, url: "https://www.crunchyroll.com/series/GY35BM4", episodes: 37 }],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (tabId, message) => {
+    assert.equal(tabId, 1);
+    if (message?.type === "netflixActivity") {
+      return {
+        ok: true,
+        payload: {
+          vhSize: 2,
+          viewedItems: [
+            {
+              seriesTitle: "Death Note",
+              series: 70143836,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Confrontation",
+              movieID: 70157540,
+              date: Date.now(),
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Death Note: Season 1: Confrontation",
+            },
+            {
+              seriesTitle: "Death Note",
+              series: 70143836,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Rebirth",
+              movieID: 70157539,
+              date: Date.now() - 86_400_000,
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Death Note: Season 1: Rebirth",
+            },
+          ],
+        },
+      };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "70157540" },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/70157540", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity];
+  assert.ok(Array.isArray(activity) && activity.length >= 1);
+  assert.equal(activity[0].id, "GY35BM4");
+  assert.equal(activity[0].service, "netflix");
+  assert.equal(activity[0].progress, 2);
+  assert.equal(activity[0].next, 3);
+  assert.equal(activity[0].anilistId, 1535);
+  assert.ok(alarms.some((alarm) => alarm.name === "ks-track-netflix" && alarm.delayInMinutes === 2));
+});
+
+test("Netflix activity bump never promotes a different show still at the top of history", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "reincarnated as a sword", "")]: {
+      anilistId: 151807,
+      how: "auto",
+      names: ["Reincarnated as a Sword"],
+    },
+    [matchKey("netflix", "tetsuryo meet with tetsudou musume", "")]: {
+      anilistId: 180000,
+      how: "auto",
+      names: ["TETSURYO! Meet with Tetsudou Musume"],
+    },
+  };
+  stored.crCatalog = {
+    items: [
+      { id: "GSWORD", title: "Reincarnated as a Sword", anilistId: 151807, url: "https://www.crunchyroll.com/series/GSWORD", episodes: 12 },
+      { id: "GTETSU", title: "TETSURYO! Meet with Tetsudou Musume", anilistId: 180000, url: "https://www.crunchyroll.com/series/GTETSU", episodes: 12 },
+    ],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixWatchNow") return { ok: true, payload: null };
+    if (message?.type === "netflixActivity") {
+      return {
+        ok: true,
+        payload: {
+          vhSize: 2,
+          viewedItems: [
+            // Still the newest history row — must NOT become Continue Watching for a different /watch/id.
+            {
+              seriesTitle: "Reincarnated as a Sword",
+              series: 1,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 3",
+              movieID: 111,
+              date: Date.now(),
+              duration: 1400,
+              bookmark: 0,
+              genres: ["Anime Series"],
+              title: "Reincarnated as a Sword: Season 1: Episode 3",
+            },
+            {
+              seriesTitle: "TETSURYO! Meet with Tetsudou Musume",
+              series: 2,
+              seasonDescriptor: "Season 1",
+              episodeTitle: "Episode 1",
+              movieID: 222,
+              date: Date.now() - 60_000,
+              duration: 1400,
+              bookmark: 100,
+              genres: ["Anime Series"],
+              title: "TETSURYO! Meet with Tetsudou Musume: Season 1: Episode 1",
+            },
+          ],
+        },
+      };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixStarted", videoId: "222", labels: [] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/222", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity] || [];
+  assert.ok(!activity.some((row) => row.anilistId === 151807 || /reincarnated/i.test(row.title || "")), "must not bump the previous history title");
+  assert.ok(activity.some((row) => row.anilistId === 180000 || /tetsuryo/i.test(row.title || "")), "must bump the /watch/id being played");
+});
+
+test("HIDIVE history bump never promotes a different show still at the top of history", async () => {
+  reset();
+  withTracking();
+  session[KEYS.hidiveTab] = 2;
+  stored[KEYS.matches] = {
+    [matchKey("hidive", "reincarnated as a sword", "s1")]: {
+      anilistId: 151807,
+      how: "auto",
+      names: ["Reincarnated as a Sword"],
+    },
+    [matchKey("hidive", "tetsuryo meet with tetsudou musume", "s1")]: {
+      anilistId: 180000,
+      how: "auto",
+      names: ["TETSURYO! Meet with Tetsudou Musume"],
+    },
+  };
+  stored.crCatalog = {
+    items: [
+      { id: "GSWORD", title: "Reincarnated as a Sword", anilistId: 151807, url: "https://www.crunchyroll.com/series/GSWORD", episodes: 12 },
+      { id: "GTETSU", title: "TETSURYO! Meet with Tetsudou Musume", anilistId: 180000, url: "https://www.crunchyroll.com/series/GTETSU", episodes: 12 },
+    ],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "hidiveHistory") {
+      return {
+        ok: true,
+        payload: {
+          entries: [
+            {
+              id: "111",
+              title: "Episode 3",
+              series: "Reincarnated as a Sword",
+              seasonTitle: "Season 1",
+              season: 1,
+              episode: 3,
+              at: Date.now(),
+              duration: 1400,
+              position: null,
+              episodic: true,
+            },
+            {
+              id: "222",
+              title: "Episode 1",
+              series: "TETSURYO! Meet with Tetsudou Musume",
+              seasonTitle: "Season 1",
+              season: 1,
+              episode: 1,
+              at: Date.now() - 60_000,
+              duration: 1400,
+              position: 120,
+              episodic: true,
+            },
+          ],
+        },
+      };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "hidiveStarted", videoId: "222", entry: null },
+      { id: "ext-id", frameId: 0, url: "https://www.hidive.com/video/222", tab: { id: 2 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity] || [];
+  assert.ok(!activity.some((row) => row.anilistId === 151807 || /reincarnated/i.test(row.title || "")), "must not bump the previous HIDIVE history title");
+  assert.ok(activity.some((row) => row.anilistId === 180000 || /tetsuryo/i.test(row.title || "")), "must bump the /video/id being played");
+  assert.equal(activity[0]?.service, "hidive");
+});
+
+test("HIDIVE start with known videoId does not fall back to newest history when that id is missing", async () => {
+  reset();
+  withTracking();
+  session[KEYS.hidiveTab] = 2;
+  stored[KEYS.matches] = {
+    [matchKey("hidive", "reincarnated as a sword", "s1")]: {
+      anilistId: 151807,
+      how: "auto",
+      names: ["Reincarnated as a Sword"],
+    },
+  };
+  stored.crCatalog = {
+    items: [
+      { id: "GSWORD", title: "Reincarnated as a Sword", anilistId: 151807, url: "https://www.crunchyroll.com/series/GSWORD", episodes: 12 },
+    ],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "hidiveHistory") {
+      return {
+        ok: true,
+        payload: {
+          entries: [{
+            id: "111",
+            title: "Episode 3",
+            series: "Reincarnated as a Sword",
+            seasonTitle: "Season 1",
+            season: 1,
+            episode: 3,
+            at: Date.now(),
+            duration: 1400,
+            position: null,
+            episodic: true,
+          }],
+        },
+      };
+    }
+    return null;
+  };
+  const wait = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => wait(fn, ms === 2500 ? 0 : ms, ...args);
+  try {
+    await handleImportMessage(
+      { type: "hidiveStarted", videoId: "222", entry: null },
+      { id: "ext-id", frameId: 0, url: "https://www.hidive.com/video/222", tab: { id: 2 } },
+    );
+  } finally {
+    globalThis.setTimeout = wait;
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity] || [];
+  assert.equal(activity.length, 0, "missing /video/id must not promote another history title");
+});
+
+test("Netflix Continue Watching bump never regresses when activity page undercounts", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[STORAGE_KEY] = {
+    ...stored[STORAGE_KEY],
+    library: {
+      "anilist:1535": {
+        key: "anilist:1535",
+        anilistId: 1535,
+        title: "Death Note",
+        status: "in_progress",
+        progress: 11,
+        episodes: 37,
+        dirty: false,
+        removed: false,
+      },
+    },
+  };
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: { anilistId: 1535, how: "auto", names: ["Death Note — Season 1"] },
+  };
+  stored[KEYS.continueActivity] = [{
+    id: "G4",
+    title: "Death Note",
+    progress: 11,
+    next: 12,
+    episodes: 37,
+    service: "netflix",
+    at: Date.now() - 1000,
+    anilistId: 1535,
+  }];
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async () => ({
+    ok: true,
+    payload: {
+      vhSize: 1,
+      viewedItems: [{
+        seriesTitle: "Death Note",
+        series: 70143836,
+        seasonDescriptor: "Season 1",
+        episodeTitle: "Love",
+        movieID: 99,
+        date: Date.now(),
+        duration: 1400,
+        bookmark: 0,
+        genres: ["Anime Series"],
+        title: "Death Note: Season 1: Love",
+      }],
+    },
+  });
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched" },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/99", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(stored[KEYS.continueActivity][0].progress, 11);
+  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].progress, 11);
 });
 
 test("a finished Tubi episode newer than the checkpoint is due for tracking", async () => {

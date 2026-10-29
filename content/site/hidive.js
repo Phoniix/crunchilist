@@ -136,6 +136,8 @@
   }
 
   // lib/watch-tracking.js
+  var FINISHED = 0.85;
+  var MIN_SECONDS = 300;
   var REPEAT_MS = 6 * 60 * 60 * 1e3;
 
   // lib/hidive-history.js
@@ -163,23 +165,100 @@
       };
     });
   }
+  function hidiveEntryFinished(entry) {
+    if (!entry?.id || !entry.at) return false;
+    if (entry.position == null) return true;
+    return entry.duration > 0 && entry.position / entry.duration >= FINISHED;
+  }
+
+  // lib/watch-loop.js
+  var START_SECONDS = 5;
 
   // content/sites/hidive.js
   var PAGE_SOURCE = "crunchilist-search-page";
+  var CHECK_MS = 5e3;
+  var HISTORY_EVERY = 3;
   if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {
   });
-  var FINISHED2 = 0.9;
+  function videosIn(root, out = []) {
+    for (const video of root.querySelectorAll("video")) out.push(video);
+    for (const node of root.querySelectorAll("*")) {
+      if (node.shadowRoot) videosIn(node.shadowRoot, out);
+    }
+    return out;
+  }
+  function mainVideo() {
+    const videos = videosIn(document).filter((video) => Number.isFinite(video.duration) && video.duration >= MIN_SECONDS && video.played?.length);
+    return videos.sort((a, b) => b.duration - a.duration)[0] || null;
+  }
+  function videoDone() {
+    const video = mainVideo();
+    return Boolean(video && video.currentTime / video.duration >= FINISHED);
+  }
+  function videoStarted() {
+    const video = mainVideo();
+    return Boolean(video && video.currentTime >= START_SECONDS);
+  }
+  function hintFrom(entry) {
+    return entry ? {
+      series: entry.series || entry.title || "",
+      season: entry.seasonTitle || "",
+      seasonNumber: entry.season,
+      episode: entry.episode || 1
+    } : null;
+  }
+  var started = /* @__PURE__ */ new Set();
+  var named = /* @__PURE__ */ new Set();
   var finished = /* @__PURE__ */ new Set();
+  var historyTick = 0;
+  var historyChecking = false;
   if (window.top === window) {
-    setInterval(() => {
+    setInterval(async () => {
       const id2 = /^\/video\/(\d+)/.exec(location.pathname)?.[1];
-      if (!id2 || finished.has(id2)) return;
-      const video = document.querySelector("video");
-      if (!video || !(video.duration > 300) || video.currentTime / video.duration < FINISHED2) return;
-      finished.add(id2);
-      chrome.runtime.sendMessage({ type: "hidiveWatched" }).catch(() => {
-      });
-    }, 5e3);
+      if (!id2) return;
+      const signalStart = (entry = null) => {
+        if (finished.has(id2)) return;
+        if (entry) {
+          if (named.has(id2)) return;
+          named.add(id2);
+          started.add(id2);
+          chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+          });
+          return;
+        }
+        if (started.has(id2)) return;
+        started.add(id2);
+        chrome.runtime.sendMessage({ type: "hidiveStarted", videoId: id2, entry: null }).catch(() => {
+        });
+      };
+      const signalFinish = (entry = null) => {
+        if (entry) {
+          if (finished.has(id2) && named.has(id2)) return;
+          named.add(id2);
+        } else if (finished.has(id2)) {
+          return;
+        }
+        finished.add(id2);
+        started.add(id2);
+        chrome.runtime.sendMessage({ type: "hidiveWatched", videoId: id2, entry: hintFrom(entry) }).catch(() => {
+        });
+      };
+      if (videoDone()) signalFinish();
+      else if (videoStarted()) signalStart();
+      historyTick = (historyTick + 1) % HISTORY_EVERY;
+      if (historyTick !== 0 || historyChecking) return;
+      historyChecking = true;
+      try {
+        const reply = await askPage("hidive-history", { page: 1 });
+        if (!reply?.ok || !reply.body) return;
+        const entry = hidiveEntries(reply.body).find((row) => row.id === id2);
+        if (!entry) return;
+        if (hidiveEntryFinished(entry)) signalFinish(entry);
+        else if ((Number(entry.position) || 0) >= START_SECONDS) signalStart(entry);
+      } finally {
+        historyChecking = false;
+      }
+    }, CHECK_MS);
   }
   async function digest(value) {
     if (!value) return "";

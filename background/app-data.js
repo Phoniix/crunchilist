@@ -6,11 +6,12 @@ import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable,
 import { changeLibrary } from "./anilist-sync.js";
 import { readCatalogs } from "./catalog-reader.js";
 import { loadServiceCatalogs } from "./catalog-store.js";
-import { loadContinueActivity } from "./continue-activity.js";
+import { expireProvisionalContinueActivity, loadContinueActivity } from "./continue-activity.js";
 import { refreshIdMap } from "./id-map-store.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
 import { loadDead } from "./dead-links.js";
+import { loadUnrecommended } from "./unrecommended.js";
 import { loadGaps, refreshWhereMap } from "./where-map-store.js";
 
 async function loadShows(state) {
@@ -35,8 +36,10 @@ export async function appData() {
   refreshWhereMap().catch(() => {});
   refreshIdMap().catch(() => {});
   readCatalogs(["crunchyroll"]).catch(() => {});
-  const continueActivity = await loadContinueActivity();
-  return { shows, library: libraryMirror(shows, state.library), continueActivity, view: makeView(state, catalog) };
+  const continueActivity = await expireProvisionalContinueActivity().catch(() => loadContinueActivity());
+  const view = makeView(state, catalog);
+  view.unrecommended = await loadUnrecommended();
+  return { shows, library: libraryMirror(shows, state.library), continueActivity, view, unrecommended: view.unrecommended };
 }
 
 export async function setSeasonState(showId, changes) {

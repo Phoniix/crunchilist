@@ -170,7 +170,8 @@ test("a switched-off site is hidden unless it's connected", () => {
   assert.equal(visibleLink("Netflix", ["Netflix"], ["netflix"]), false, "connected services can be hidden too");
   assert.equal(visibleLink("Amazon Prime Video", ["Prime Video"]), false);
   assert.equal(visibleLink("HIDIVE", ["hidive"]), false);
-  assert.equal(visibleLink("Some New Site", ["Netflix"]), true);
+  assert.equal(visibleLink("Some New Site", ["Netflix"]), false, "unknown AniList hosts stay hidden");
+  assert.equal(visibleLink("YouTube", []), false);
 });
 
 test("settings keep only known sites and a real true for setup", () => {

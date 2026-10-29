@@ -20,7 +20,9 @@ import { listChange, safeChange, sameDate } from "../lib/safe-change.js";
 import { anilistSession } from "../lib/settings.js";
 import { connectedIds, serviceById } from "../lib/services.js";
 import { cleanKitsuLink } from "../lib/trackers.js";
-import { mirrorAppliedChanges } from "./continue-activity.js";
+import { shouldBumpContinueFromImport } from "../lib/continue-activity.js";
+import { noteActivity, pushSystemNotice } from "./app-notices.js";
+import { mirrorAppliedChanges, noteContinueFromTrackedPlay } from "./continue-activity.js";
 import { pullMalRows, pushMalChange } from "./mal-store.js";
 import { findOpenServiceTab, injectSiteScripts } from "./site-scripts.js";
 import { loadState } from "./store.js";
@@ -53,6 +55,75 @@ async function boundTabId(serviceId) {
     if (tabId != null) await chrome.storage.session.set({ [key]: tabId });
   }
   return tabId;
+}
+
+async function waitTabComplete(tabId, { tries = 40, ms = 500 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return false;
+    if (tab.status === "complete") return true;
+    await sleep(ms);
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return Boolean(tab && tab.status === "complete");
+}
+
+// True when the site's content script can already answer — skip reload then (Netflix especially races after reload).
+// Netflix uses a cheap ping (full profile can take many seconds while the page boots).
+async function siteTabAlive(serviceId, tabId) {
+  const probe = {
+    netflix: { type: "netflixPing" },
+    hidive: { type: "hidiveHistory", page: 1 },
+    prime: { type: "primeHistory", token: "" },
+    tubi: { type: "tubiCatalog" },
+  }[serviceId];
+  if (!probe || tabId == null) return false;
+  const reply = await chrome.tabs.sendMessage(tabId, probe).catch(() => null);
+  return Boolean(reply?.ok);
+}
+
+async function waitSiteAlive(serviceId, tabId, { tries = 24, ms = 500 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    if (cancelled) return false;
+    if (await siteTabAlive(serviceId, tabId)) return true;
+    if (attempt === 2 || attempt === 8) await injectSiteScripts(serviceId, tabId).catch(() => {});
+    await sleep(ms);
+  }
+  return false;
+}
+
+// Soft-refresh already-open site tabs so content scripts / sessions are live before a history read.
+// Tabs that already answer are left alone — reloading Netflix mid-session often yields an empty activity page.
+// requireAlive: single-site import fails clearly when the tab never comes back; Import all keeps going.
+async function refreshOpenSiteTabs(serviceIds, { requireAlive = false } = {}) {
+  const ids = [...new Set((serviceIds || []).filter(Boolean))];
+  for (const id of ids) {
+    if (cancelled) return;
+    let tabId = TAB_KEYS[id] ? await boundTabId(id) : null;
+    if (tabId == null && id === "crunchyroll") tabId = await findOpenServiceTab("crunchyroll");
+    if (tabId == null) continue;
+    const name = serviceById(id)?.name || id;
+    if (TAB_KEYS[id] && await siteTabAlive(id, tabId)) {
+      setJob({ note: `Using open ${name} tab…` });
+      continue;
+    }
+    setJob({ note: `Refreshing ${name}…` });
+    await chrome.tabs.reload(tabId).catch(() => {});
+    await waitTabComplete(tabId);
+    if (TAB_KEYS[id]) {
+      await injectSiteScripts(id, tabId);
+      if (!(await waitSiteAlive(id, tabId))) {
+        if (requireAlive) {
+          throw Object.assign(
+            new Error(`Open ${name} in a tab while signed in${id === "netflix" ? " and pick your profile" : ""}, then try again.`),
+            { code: "tab" },
+          );
+        }
+      }
+    } else {
+      await sleep(250);
+    }
+  }
 }
 const MAX_PAGES = 5000;
 const DRAFT_EVERY = 10;
@@ -506,26 +577,45 @@ async function buildPreview({ service, groups, checkpoints = [], seen, notes, tr
     notes,
   };
   await writePreview(preview);
+  // Seed Continue Watching as soon as the preview knows a bumpable play — don't wait for Apply.
+  for (const change of preview.changes || []) {
+    if (!shouldBumpContinueFromImport({
+      after: change.after,
+      before: change.before,
+      episodes: change.episodes,
+      watched: change.watched,
+    })) continue;
+    const source = change.sources?.[0];
+    const fromKey = String(source?.key || "").split(":")[0];
+    const playService = fromKey || (service !== "all" ? service : "import");
+    await noteContinueFromTrackedPlay({
+      service: playService,
+      series: change.title || source?.series || "",
+      season: source?.season || "",
+      episode: change.after?.progress,
+      anilistId: change.anilistId,
+    }).catch(() => {});
+  }
   await notifyPreviewReady(preview).catch(() => {});
   return preview;
 }
 
 async function notifyPreviewReady(preview) {
   if (!preview?.changes?.length) return;
-  const { pushSystemNotice } = await import("./app-notices.js");
   const n = preview.changes.length;
   const fromSync = preview.trigger === "daily" || preview.trigger === "tracking";
   const label = TRIGGERS[preview.trigger] || "Import";
+  const skipNote = (preview.notes || []).find((note) => /^Skipped:/i.test(note)) || "";
   await pushSystemNotice({
     kind: fromSync ? "sync_preview" : preview.trigger === "tracker" ? "tracker_preview" : "import_preview",
     title: fromSync ? `${label} found changes` : "Import preview ready",
-    message: `${n} change${n === 1 ? "" : "s"} ready to review in Import.`,
+    message: `${n} change${n === 1 ? "" : "s"} ready to review in Import.${skipNote ? ` ${skipNote}` : ""}`,
     href: "#settings/import",
     count: n,
   }, {
     kind: fromSync ? (preview.trigger === "tracking" ? "tracking" : "sync") : "import",
-    title: `${label}: ${n} change${n === 1 ? "" : "s"} to review`,
-    ok: true,
+    title: `${label}: ${n} change${n === 1 ? "" : "s"} to review${skipNote ? ` · ${skipNote}` : ""}`,
+    ok: !skipNote,
   });
 }
 
@@ -557,17 +647,24 @@ async function readyToStart(service = "") {
 export async function startImport({ service = "crunchyroll", full = false } = {}) {
   if (!SOURCES[service]) throw new Error("That service's import isn't ready yet.");
   await readyToStart(service);
-  if (service === "crunchyroll") await crunchyrollToken();
-  else if (TAB_KEYS[service] && (await boundTabId(service)) == null) {
-    throw Object.assign(new Error(`Open ${serviceById(service)?.name || service} in a tab (reload it if it's already open), then try again.`), { code: "tab" });
-  }
-  const source = await SOURCES[service]();
   cancelled = false;
-  setJob({ phase: "reading", running: true, service, note: `Connecting to ${source.name}…`, done: 0, total: 0, error: "", message: "", sites: null });
-  runImport(async () => {
-    const read = await readHistory(source, { full });
-    return { ...read, notes: [...(source.notes || []), ...read.notes], group: source.group };
-  }, service).catch(() => {});
+  setJob({ phase: "reading", running: true, service, note: `Refreshing ${serviceById(service)?.name || service}…`, done: 0, total: 0, error: "", message: "", sites: null });
+  try {
+    await refreshOpenSiteTabs([service], { requireAlive: Boolean(TAB_KEYS[service]) });
+    if (service === "crunchyroll") await crunchyrollToken();
+    else if (TAB_KEYS[service] && (await boundTabId(service)) == null) {
+      throw Object.assign(new Error(`Open ${serviceById(service)?.name || service} in a tab (reload it if it's already open), then try again.`), { code: "tab" });
+    }
+    const source = await SOURCES[service]();
+    setJob({ note: `Connecting to ${source.name}…` });
+    runImport(async () => {
+      const read = await readHistory(source, { full });
+      return { ...read, notes: [...(source.notes || []), ...read.notes], group: source.group };
+    }, service).catch(() => {});
+  } catch (error) {
+    setJob({ phase: "idle", running: false, error: error?.name === "AbortError" ? "" : (error?.message || "Import failed."), note: "" });
+    throw error;
+  }
 }
 
 // Netflix's "Download all" file: read once, no checkpoint, the same matching and preview.
@@ -747,12 +844,19 @@ export async function startImportAll() {
   connected.add("crunchyroll");
   const services = Object.keys(SOURCES).filter((id) => connected.has(id));
   if (!services.length) throw new Error("Connect a site first (Crunchyroll, Netflix, Prime Video or HIDIVE), under Where to watch.");
-  // Bind any already-open tabs so Import all doesn't skip them for a missing hello.
+  // Bind and soft-refresh already-open tabs so Import all doesn't skip them for a missing hello.
   for (const id of services) if (TAB_KEYS[id]) await boundTabId(id);
   cancelled = false;
   const sites = services.map((id) => ({ id, name: serviceById(id)?.name || id, state: "waiting", seen: 0, found: 0, note: "" }));
-  setJob({ phase: "reading", running: true, service: "all", note: "Starting Import all…", done: 0, total: 0, error: "", message: "", sites });
-  runImportAll(services).catch(() => {});
+  setJob({ phase: "reading", running: true, service: "all", note: "Refreshing open site tabs…", done: 0, total: 0, error: "", message: "", sites });
+  try {
+    await refreshOpenSiteTabs(services);
+    setJob({ note: "Starting Import all…" });
+    runImportAll(services).catch(() => {});
+  } catch (error) {
+    setJob({ phase: "idle", running: false, error: error?.name === "AbortError" ? "" : (error?.message || "Import failed."), note: "" });
+    throw error;
+  }
 }
 
 // Reads each site in turn; a site that fails is skipped and listed, the rest carry on.
@@ -820,45 +924,52 @@ export async function backgroundSync(services, { trigger, apply }) {
   const sites = ids.map((id) => ({ id, name: serviceById(id)?.name || id, state: "waiting", seen: 0, found: 0, note: "" }));
   setJob({ phase: "reading", running: true, service, note: `${label}: starting…`, done: 0, total: 0, error: "", message: "", sites, trigger });
   try {
+    // Daily sync / tracking leave open tabs alone; Import all / single-site import soft-refresh them.
+    for (const id of ids) if (TAB_KEYS[id]) await boundTabId(id);
     const read = await readSites(ids, { catchUp: true });
     const lines = [...read.summary, ...read.skippedNote];
+    const skipNote = read.skippedNote.join(" ");
     if (!read.groups.length) {
       if (read.checkpoints.length) await commitCheckpoint({ checkpoints: read.checkpoints });
       const message = `${label}: ${lines.join(" ") || "nothing new."}`;
       setJob({ phase: "idle", running: false, note: "", message });
-      return { ran: true, attempted: ids, message };
+      if (skipNote) noteActivity({ kind: "sync", title: message, ok: !read.skipped.length, detail: skipNote }).catch(() => {});
+      return { ran: true, attempted: ids, message, skipped: read.skipped };
     }
     const preview = await buildPreview({ service, groups: read.groups, checkpoints: read.checkpoints, seen: read.seen, notes: [...lines, ...read.notes], trigger });
     setJob({ phase: "preview", running: false, note: "" });
     if (!apply) {
       await chrome.action.setBadgeText({ text: "!" }).catch(() => {});
       const n = preview.changes.length;
-      const message = `${label}: found ${n} change${n === 1 ? "" : "s"} to review.`;
-      return { ran: true, attempted: ids, message };
+      const message = `${label}: found ${n} change${n === 1 ? "" : "s"} to review.${skipNote ? ` ${skipNote}` : ""}`;
+      return { ran: true, attempted: ids, message, skipped: read.skipped };
     }
-    const { noteActivity, pushSystemNotice } = await import("./app-notices.js");
     if (!preview.changes.length) {
       await commitCheckpoint(preview);
-      const message = `${label}: AniList was already up to date.`;
+      const message = `${label}: AniList was already up to date.${skipNote ? ` ${skipNote}` : ""}`;
       setJob({ phase: "idle", message });
       noteActivity({ kind: "sync", title: message, ok: true }).catch(() => {});
-      return { ran: true, attempted: ids, message };
+      return { ran: true, attempted: ids, message, skipped: read.skipped };
     }
     const result = await applyImport();
-    const message = result.error ? `${label} stopped: ${result.error}` : `${label}: updated ${result.applied} on AniList.`;
+    const message = result.error
+      ? `${label} stopped: ${result.error}${skipNote ? ` ${skipNote}` : ""}`
+      : `${label}: updated ${result.applied} on AniList.${skipNote ? ` ${skipNote}` : ""}`;
     setJob({ message });
     if (!result.error && result.applied > 0) {
       pushSystemNotice({
         kind: "sync_applied",
         title: `${label} updated AniList`,
-        message: `Updated ${result.applied} on AniList. Open Past imports to undo if needed.`,
+        message: `Updated ${result.applied} on AniList.${skipNote ? ` ${skipNote}` : ""} Open Past imports to undo if needed.`,
         href: "#imports",
         count: result.applied,
-      }, { kind: trigger === "tracking" ? "tracking" : "sync", title: message, ok: true }).catch(() => {});
+      }, { kind: trigger === "tracking" ? "tracking" : "sync", title: message, ok: !read.skipped.length }).catch(() => {});
     } else if (result.error) {
       noteActivity({ kind: "error", title: message, ok: false }).catch(() => {});
+    } else if (skipNote) {
+      noteActivity({ kind: "sync", title: message, ok: false, detail: skipNote }).catch(() => {});
     }
-    return { ran: true, attempted: ids, message };
+    return { ran: true, attempted: ids, message, skipped: read.skipped };
   } catch (error) {
     const message = error.name === "AbortError" ? `${label} was stopped.` : `${label} stopped: ${error.message}`;
     setJob({ phase: "idle", running: false, error: error.name === "AbortError" ? "" : message, note: "" });

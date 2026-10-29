@@ -10,6 +10,7 @@ import {
   fillThemes,
   HOME_ROWS_ACTIVITY_MS,
   HOME_ROWS_CYCLE_AVOID,
+  HOME_ROWS_HARD_AVOID,
   HOME_ROWS_MAX,
   HOME_ROWS_MIN,
   HOME_ROWS_RETRY_MS,
@@ -17,11 +18,15 @@ import {
   needsRefresh,
   NUDGE_MAX,
   parseHomeRows,
+  recentHardTokens,
   recentThemeTokens,
   recordCycle,
+  rotateWatched,
+  sessionMood,
   shortTitle,
   themeTokens,
 } from "../lib/home-rows.js";
+import { updatesInLabel } from "../lib/update-eta.js";
 
 const row = (title, query, why = "Because.") => ({ title, query, why });
 
@@ -175,14 +180,46 @@ test("cleanThemes prefers queries that are not in the recent genre window", () =
   assert.ok(rows.some((item) => item.title === "Cozy again"), "recent genres stay as fillers if needed");
 });
 
+test("hard genre tokens from the last few cycles are dropped, not deferred", () => {
+  const hard = themeTokens("cozy slice of life");
+  const rows = cleanThemes(
+    [row("Cozy again", "cozy slice of life"), row("Space", "set in space"), row("Sports", "short sports"), row("Mystery", "underrated mystery")],
+    [],
+    { hardTokens: hard },
+  );
+  assert.ok(!rows.some((item) => item.title === "Cozy again"));
+  assert.equal(rows[0].title, "Space");
+  assert.ok(HOME_ROWS_HARD_AVOID >= 2);
+});
+
+test("fillThemes demotes recently featured ids but still fills the row", () => {
+  const results = { a: ["old", "1", "2", "3", "4", "5"] };
+  const rows = fillThemes([row("A", "a")], (query) => results[query], { perRow: 5, minRow: 3, demoteIds: ["old"] });
+  assert.deepEqual(rows[0].ids, ["1", "2", "3", "4", "5"]);
+  const short = fillThemes([row("A", "a")], () => ["old", "1", "2"], { perRow: 5, minRow: 3, demoteIds: ["old"] });
+  assert.deepEqual(short[0].ids, ["1", "2", "old"]);
+});
+
+test("watched anchors rotate across cycles", () => {
+  assert.deepEqual(rotateWatched(["A", "B", "C"], 0), ["A", "B", "C"]);
+  assert.deepEqual(rotateWatched(["A", "B", "C"], 1), ["B", "C", "A"]);
+  assert.deepEqual(rotateWatched(["A", "B", "C"], 1, ["B"]), ["C", "A", "B"]);
+  assert.ok(String(sessionMood()).length > 3);
+});
+
 test("the prompt asks the model to avoid recent themes, and fallbacks rotate stock genres", () => {
   const prompt = buildHomeRowsPrompt({
     profile: {},
     recentThemes: ["cozy slice of life", "short sports"],
+    sessionMood: "evening cozy or binge",
   });
   assert.match(prompt.system, /recentThemes/);
+  assert.match(prompt.system, /sessionMood/);
   assert.deepEqual(JSON.parse(prompt.user).recentThemes, ["cozy slice of life", "short sports"]);
+  assert.equal(JSON.parse(prompt.user).sessionMood, "evening cozy or binge");
   const a = fallbackThemes({ cycle: 0 }).map((item) => item.query);
   const b = fallbackThemes({ cycle: 3 }).map((item) => item.query);
   assert.notDeepEqual(a.slice(0, 3), b.slice(0, 3), "stock fillers shift each cycle");
+  assert.equal(updatesInLabel(Date.now() + 3 * 60 * 60 * 1000, Date.now()), "Updates in: 0D 3H");
+  assert.ok(Array.isArray(recentHardTokens([])));
 });

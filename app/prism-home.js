@@ -1,10 +1,11 @@
 // Prism's Home: the banner slideshow, the Ctrl+K palette and the ambient backdrop that follows whatever you focus.
 let m = null;
 let slide = 0, slideTimer = 0, videoTimer = 0, heroPlayer = null, ambientFlip = false;
-let heroRunning = false, heroInView = true, previewPlaying = false, heroClock = 0, slideLeft = 0, videoLeft = -1, heroTrailer = "";
+let heroRunning = false, heroInView = true, previewPlaying = false, heroHeld = false, heroClock = 0, slideLeft = 0, videoLeft = -1, heroTrailer = "";
 let heroIds = [];
 let heroRows = new Map();
 const bgUrl = (url) => `url("${String(url || "").replace(/["'()\\\s]/g, (c) => encodeURIComponent(c))}")`;
+const bannerOn = () => m?.prefs?.().banner !== false;
 
 const PAGE_SIZE = 6;
 const pageOf = (i) => Math.floor(i / PAGE_SIZE);
@@ -47,18 +48,60 @@ function heroSpots(rows = m.bannerRows()) {
   heroIds = rows.map((row) => row.id);
   return heroIds.map((id) => m.byId.get(id));
 }
+function heroToggleHtml() {
+  const on = bannerOn();
+  return `<div class="hero-banner-toggle">
+      <span>Banner</span>
+      <button class="switch ${on ? "on" : ""}" type="button" data-pref="banner" role="switch" aria-checked="${on ? "true" : "false"}" aria-label="Show home banner"></button>
+    </div>`;
+}
+function heroToolsHtml() {
+  return `<div class="hero-tools">
+      <button class="nav-btn hero-trailer" type="button" data-act="hero-trailer" title="Play full trailer" aria-label="Play full trailer" hidden>${m.icon("film")}</button>
+      <button class="nav-btn hero-pause" type="button" data-act="hero-pause" title="Pause trailer" aria-label="Pause trailer" hidden>${m.icon("pause")}</button>
+      ${m.soundButton("nav-btn hero-sound")}
+    </div>`;
+}
+function paintPauseBtn() {
+  const btn = document.querySelector(".hero-pause");
+  if (!btn) return;
+  btn.innerHTML = m.icon(heroHeld ? "play" : "pause");
+  const label = heroHeld ? "Resume trailer" : "Pause trailer";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+}
+function heroWelcomeHtml() {
+  const line = m.welcomeLine?.() || { text: "Good evening. What are we finding today?" };
+  const who = line.character?.name || "Kivi";
+  const text = line.text || "Good evening.";
+  return `<div class="hero-welcome" aria-label="${m.esc(who)} says: ${m.esc(text)}">
+      <div class="hero-kivi" aria-hidden="true">
+        <img src="../icons/kivi.png" alt="" width="160" height="160" decoding="async">
+      </div>
+      <figure class="hero-bubble">
+        <figcaption class="hero-bubble-name">${m.esc(who)}</figcaption>
+        <blockquote class="hero-bubble-text">${m.esc(text)}</blockquote>
+      </figure>
+    </div>`;
+}
 function heroHtml(spots) {
+  if (!bannerOn()) {
+    return `<section class="hero is-off" aria-label="Home banner hidden">${heroWelcomeHtml()}${heroToggleHtml()}</section>`;
+  }
   return `<section class="hero">
+      ${heroToggleHtml()}
       <div class="hero-bg"></div><div class="hero-video"></div>
       <div class="hero-copy"></div>
       <div class="hero-nav"><div class="hero-bars">${heroBars(spots)}</div><div class="hero-roll">${rollHtml()}</div></div>
-      ${m.soundButton("nav-btn hero-sound")}
+      ${heroToolsHtml()}
     </section>`;
 }
 function rollHtml() {
   const { busy, last } = m.bannerRoll();
+  const eta = m.updatesInLabel?.(m.bannerExpiresAt?.()) || "";
   return `<button class="hero-roll-btn" data-act="hero-reroll" ${busy ? "disabled" : ""} title="Show different banner picks">${m.icon("refresh")}<span>${busy ? "Rolling…" : "Reroll"}</span></button>
-    ${last ? `<button class="hero-roll-btn" data-act="hero-last" ${busy ? "disabled" : ""} title="Bring back the banner picks from before">${m.icon("history")}<span>Last roll</span></button>` : ""}`;
+    ${last ? `<button class="hero-roll-btn" data-act="hero-last" ${busy ? "disabled" : ""} title="Bring back the banner picks from before">${m.icon("history")}<span>Last roll</span></button>` : ""}
+    ${eta ? `<span class="hero-eta muted">${m.esc(eta)}</span>` : ""}`;
 }
 function paintRoll() {
   const box = document.querySelector(".hero-roll");
@@ -69,8 +112,11 @@ function render(api) {
   m = api;
   const spots = heroSpots();
   const pool = m.homePool;
-  return `${spots.length ? heroHtml(spots) : ""}
+  // Banner off still leaves a short top strip (with the switch) before Continue watching.
+  const head = !bannerOn() ? heroHtml([]) : (spots.length ? heroHtml(spots) : "");
+  return `${head}
     ${m.rail("Continue watching", pool(m.continueWatching()), { render: m.wide, href: "#list/watching" })}
+    ${m.newForYouRail()}
     ${m.forYouRail()}
     ${m.homeRowsHtml()}
     ${m.rail("Top 10 on Crunchyroll", pool(m.popular()).slice(0, 10), { ranked: true, sub: "Most popular right now" })}
@@ -105,14 +151,19 @@ function heroTag(s, row) {
 function refreshBanner(api, { restart = false } = {}) {
   m = api;
   if (document.body.dataset.page !== "home") return;
+  if (!bannerOn()) return;
   const rows = m.bannerRows();
   if (!rows.length) return paintRoll();
   const hero = document.querySelector(".hero");
-  if (!hero) {
-    document.querySelector("main")?.insertAdjacentHTML("afterbegin", heroHtml(heroSpots(rows)));
-    heroWatch.observe(document.querySelector(".hero"));
-    showSlide(0);
-    syncHero();
+  if (!hero || hero.classList.contains("is-off")) {
+    if (hero) hero.outerHTML = heroHtml(heroSpots(rows));
+    else document.querySelector("main")?.insertAdjacentHTML("afterbegin", heroHtml(heroSpots(rows)));
+    const next = document.querySelector(".hero:not(.is-off)");
+    if (next) {
+      heroWatch.observe(next);
+      showSlide(0);
+      syncHero();
+    }
     return;
   }
   paintRoll();
@@ -147,10 +198,11 @@ function heroCopy(s) {
   const size = titleSize(s.title);
   return `<div class="hero-tag"><i></i>${heroTag(s, row)}</div>
     <h1${size ? ` data-size="${size}"` : ""} title="${m.esc(s.title)}">${m.esc(s.title)}</h1>
-    <div class="peek-meta">${m.statusBadge(s, { inline: true, focusable: true })}${m.matchBadge(row.match, "hero-match")}<span class="star">★ ${m.score(s)}</span>${s.year ? `<span>${s.year}</span>` : ""}<span>${m.seasonCount(s)}</span>${s.genres.length ? `<span>${m.esc(s.genres.slice(0, 3).join(" · "))}</span>` : ""}</div>
+    <div class="peek-meta"><span class="watched-status-label">Watched Status:</span>${m.statusBadge(s, { inline: true, focusable: true })}${m.matchBadge(row.match, "hero-match")}<span class="star">★ ${m.score(s)}</span>${s.year ? `<span>${s.year}</span>` : ""}<span>${m.seasonCount(s)}</span>${s.genres.length ? `<span>${m.esc(s.genres.slice(0, 3).join(" · "))}</span>` : ""}</div>
     ${row.reason ? `<p class="hero-why">${m.icon("sparkle")} ${m.esc(row.reason)}</p>` : s.about ? `<p>${m.esc(s.about)}</p>` : ""}
     <div class="peek-actions" data-show="${m.esc(s.id)}"><button class="btn accent" data-act="watch">${m.icon(m.onCrunchyroll(s) ? "play" : "right")} ${m.esc(m.playLabel(s))}</button>
-      <button class="btn" data-act="toggle">${m.icon(item ? "check" : "plus")} ${item ? m.STATUS[item.status] : "My list"}</button><a class="btn" href="#show/${m.esc(s.id)}">Details</a></div>`;
+      <button class="btn" data-act="toggle">${m.icon(item ? "check" : "plus")} ${item ? m.STATUS[item.status] : "My list"}</button><a class="btn" href="#show/${m.esc(s.id)}">Details</a>
+      <button class="btn ghost" data-act="mute-title" data-show="${m.esc(s.id)}" title="Hide this title from Home recommendations">Don’t recommend</button></div>`;
 }
 
 // The next slide's art fades in on its own layer over the last one, which fades out and is then removed.
@@ -181,15 +233,18 @@ function crossfade(hero, url) {
 
 function showSlide(i) {
   const hero = document.querySelector(".hero");
-  if (!hero || !heroIds.length) return;
+  if (!hero || hero.classList.contains("is-off") || !heroIds.length) return;
   slide = (i + heroIds.length) % heroIds.length;
   const s = m.byId.get(heroIds[slide]);
   if (!s) return;
   const prefs = m.prefs();
+  const hasTrailer = Boolean(s.trailer);
   const withVideo = Boolean(prefs.previews && !prefs.reduce && s.trailer);
+  heroHeld = false;
   heroPlayer?.destroy({ fade: prefs.reduce ? 0 : FADE_MS }); heroPlayer = null;
   crossfade(hero, m.artOf(s));
   const copy = hero.querySelector(".hero-copy");
+  if (!copy) return;
   if (!prefs.reduce) { copy.style.animation = "none"; void copy.offsetWidth; copy.style.animation = ""; }
   copy.innerHTML = heroCopy(s);
   fitHeroCopy(hero);
@@ -201,12 +256,18 @@ function showSlide(i) {
     bar.classList.toggle("on", n === slide);
     bar.style.setProperty("--dur", `${dur}s`);
   });
-  hero.querySelector(".hero-sound").hidden = !withVideo;
+  const sound = hero.querySelector(".hero-sound");
+  const pause = hero.querySelector(".hero-pause");
+  const trailer = hero.querySelector(".hero-trailer");
+  if (sound) sound.hidden = !withVideo;
+  if (pause) pause.hidden = !withVideo;
+  if (trailer) trailer.hidden = !hasTrailer;
+  paintPauseBtn();
   setAmbient(m.artOf(s));
   clearTimeout(slideTimer); clearTimeout(videoTimer);
   slideLeft = dur * 1000;
   videoLeft = withVideo ? 2000 : -1;
-  heroTrailer = s.trailer;
+  heroTrailer = s.trailer || "";
   if (heroRunning) startHeroTimers();
   else hero.querySelector(".hero-bar.on")?.classList.add("paused");
 }
@@ -225,8 +286,8 @@ function stopHeroTimers() {
   if (videoLeft >= 0) videoLeft = Math.max(0, videoLeft - spent);
 }
 function syncHero() {
-  const hero = document.querySelector(".hero");
-  const run = Boolean(hero) && heroInView && !previewPlaying && !document.hidden;
+  const hero = document.querySelector(".hero:not(.is-off)");
+  const run = Boolean(hero) && heroInView && !previewPlaying && !document.hidden && !heroHeld;
   if (run === heroRunning) return;
   heroRunning = run;
   hero?.querySelector(".hero-bar.on")?.classList.toggle("paused", !run);
@@ -319,8 +380,9 @@ function after(page, api) {
   m = api;
   if (!document.querySelector(".ambient")) document.body.insertAdjacentHTML("afterbegin", '<div class="ambient"><i></i><i></i></div>');
   clearTimeout(slideTimer); clearTimeout(videoTimer); heroPlayer?.destroy(); heroPlayer = null;
-  heroRunning = false; heroInView = true; previewPlaying = false; clearTimeout(resumeTimer); heroWatch.disconnect();
-  if (page === "home" && document.querySelector(".hero")) { showSlide(0); heroWatch.observe(document.querySelector(".hero")); syncHero(); }
+  heroRunning = false; heroInView = true; previewPlaying = false; heroHeld = false; clearTimeout(resumeTimer); heroWatch.disconnect();
+  const hero = page === "home" ? document.querySelector(".hero:not(.is-off)") : null;
+  if (hero) { showSlide(0); heroWatch.observe(hero); syncHero(); }
   if (page === "show") { const s = m.byId.get(decodeURIComponent(location.hash.split("/")[1] || "")); if (s) setAmbient(m.artOf(s)); }
 }
 
@@ -338,6 +400,16 @@ function bind() {
     if (t.dataset.act === "kpal") palette(true);
     if (t.dataset.act === "hero") showSlide(Number(t.dataset.i));
     if (t.dataset.act === "hero-page") showSlide(Number(t.dataset.page) * PAGE_SIZE);
+    if (t.dataset.act === "hero-pause") {
+      heroHeld = !heroHeld;
+      paintPauseBtn();
+      syncHero();
+    }
+    if (t.dataset.act === "hero-trailer") {
+      const id = heroIds[slide];
+      const start = Math.floor(heroPlayer?.time?.() || 0);
+      if (id) m.openTrailer?.(id, { start });
+    }
   });
   document.addEventListener("keydown", (e) => {
     // Typing inside the embedded search shows up here as its shadow host, so look at where the key really went.

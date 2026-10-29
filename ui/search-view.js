@@ -19,11 +19,16 @@ export const SEARCH_CSS = `
     background: rgba(16, 14, 12, .62); border: 1px solid var(--line-strong);
     transition: border-color .18s var(--ease), background .18s var(--ease), box-shadow .18s var(--ease);
   }
-  .sv-bar:hover { border-color: rgba(255, 226, 196, .3); }
-  .sv-bar:focus-within { border-color: rgba(255, 154, 92, .5); background: rgba(16, 14, 12, .78); box-shadow: 0 0 0 4px rgba(255, 122, 47, .08); }
+  .sv-bar:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong)); }
+  /* Glow follows host --accent (site panels set brand color; CR keeps the default orange). */
+  .sv-bar:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: rgba(16, 14, 12, .78);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
   .sv-bar::after {
     content: ""; position: absolute; left: 18px; right: 18px; bottom: -1px; height: 2px; border-radius: 2px;
-    background: linear-gradient(90deg, transparent, rgba(255, 154, 92, .85), transparent);
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
     background-size: 40% 100%; background-repeat: no-repeat; opacity: 0;
   }
   .sv-bar.is-busy::after { opacity: 1; animation: sv-sweep 1.1s var(--ease) infinite; }
@@ -112,6 +117,13 @@ export const SEARCH_CSS = `
   }
   .sv-site.is-on .sv-site-dot { background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .18); }
   .sv-site.is-on svg { color: #fff; opacity: 1; }
+  /* Second click: exclusive to this site (ring + “only” label). */
+  .sv-site.is-on.is-only {
+    background: color-mix(in srgb, var(--sv-site) 72%, #111);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--sv-site) 55%, #fff),
+      0 4px 14px color-mix(in srgb, var(--sv-site) 30%, transparent);
+  }
   .sv-refine {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     gap: 12px 14px; align-items: start;
@@ -380,6 +392,8 @@ export function createSearchView({
 } = {}) {
   let chip = "";
   let currentSite = site;
+  // Where chips: off → titles on site → site-only titles → off.
+  let siteOnly = false;
   const sitePlatforms = (Array.isArray(platforms) ? platforms : SEARCH_PLATFORMS)
     .map((row) => (typeof row === "string" ? SEARCH_PLATFORMS.find((p) => p.id === row) : row))
     .filter(Boolean);
@@ -444,18 +458,27 @@ export function createSearchView({
   const siteButtons = new Map();
   const siteRow = el("div", { class: "sv-toggles sv-sites" });
   for (const platform of sitePlatforms) {
+    const label = el("span", { class: "sv-site-label", text: platform.label });
     const button = el("button", {
       class: "sv-toggle sv-site",
       type: "button",
-      title: `Empty search: browse titles on ${platform.label}. With a search: keep only matches watchable there.`,
+      title: `Titles on ${platform.label}. Click again for ${platform.label}-only titles, then once more to clear.`,
       "aria-pressed": "false",
       "data-site": platform.id,
-      text: platform.label,
     });
     button.style.setProperty("--sv-site", platform.color || SERVICE_BRAND[platform.id] || "#ff7a2f");
-    button.prepend(el("span", { class: "sv-site-dot", "aria-hidden": "true" }));
+    button.append(el("span", { class: "sv-site-dot", "aria-hidden": "true" }), label);
     button.addEventListener("click", () => {
-      currentSite = currentSite === platform.id ? "all" : platform.id;
+      if (currentSite === platform.id) {
+        if (!siteOnly) siteOnly = true;
+        else {
+          currentSite = "all";
+          siteOnly = false;
+        }
+      } else {
+        currentSite = platform.id;
+        siteOnly = false;
+      }
       paintToggles();
       // Remember the chip for site panels when Settings → Where uses “Remember last”.
       send("setSettings", { patch: { lastWhereSite: currentSite === "all" ? "" : currentSite } }).catch(() => {});
@@ -615,9 +638,20 @@ export function createSearchView({
 
   function paintToggles() {
     for (const [id, button] of siteButtons) {
+      const platform = sitePlatforms.find((row) => row.id === id);
+      const name = platform?.label || id;
       const on = currentSite === id;
+      const only = on && siteOnly;
       button.classList.toggle("is-on", on);
+      button.classList.toggle("is-only", only);
       button.setAttribute("aria-pressed", on ? "true" : "false");
+      const label = button.querySelector(".sv-site-label");
+      if (label) label.textContent = only ? `${name} only` : name;
+      button.title = !on
+        ? `Titles on ${name}. Click again for ${name}-only titles, then once more to clear.`
+        : only
+          ? `Only titles on ${name} alone. Click to clear.`
+          : `Titles on ${name}. Click again for ${name}-only titles.`;
     }
     hideButton.classList.toggle("is-on", hideWatched);
     hideButton.setAttribute("aria-pressed", hideWatched ? "true" : "false");
@@ -816,7 +850,7 @@ export function createSearchView({
     }
     const list = el("div", { class: "sv-list" });
     results.append(section("Browse all", [list]));
-    startPager(seq, { query: "", chip: "", site: currentSite, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
+    startPager(seq, { query: "", chip: "", site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse: true }, list, [], true);
   }
 
   function resultsTitle() {
@@ -988,7 +1022,7 @@ export function createSearchView({
   }
 
   async function rerank(id, query, items, render) {
-    const answer = await send("catalogRerank", { query, chip, site: currentSite, ids: items.slice(0, 20).map((item) => item.id) });
+    const answer = await send("catalogRerank", { query, chip, site: currentSite, siteOnly, ids: items.slice(0, 20).map((item) => item.id) });
     if (id !== seq) return;
     if (answer?.ok && answer.results?.length) {
       render(answer.results, answer.by);
@@ -1012,6 +1046,7 @@ export function createSearchView({
       query: "",
       chip: "",
       site: currentSite,
+      siteOnly,
       ids: row.items.map((item) => item.id),
       ...(current ? { reroll: true, seen: [...forYouSeen], last } : {}),
     });
@@ -1054,7 +1089,7 @@ export function createSearchView({
     sentinel.replaceChildren();
     form.classList.add("is-busy");
     showResultsLoader(query ? "Searching…" : browse ? "Loading titles…" : "Loading…");
-    const params = { query, chip, site: currentSite, sort, tags: include.values, without: exclude.values, browse };
+    const params = { query, chip, site: currentSite, siteOnly, sort, tags: include.values, without: exclude.values, browse };
     const response = await send("catalogSearch", params);
     if (id !== seq) return;
     form.classList.remove("is-busy");
@@ -1147,7 +1182,7 @@ export function createSearchView({
       showResultsLoader("Looking up…");
     }
     suggestTimer = window.setTimeout(async () => {
-      const response = await send("catalogSuggest", { query, chip, site: currentSite });
+      const response = await send("catalogSuggest", { query, chip, site: currentSite, siteOnly });
       if (token !== suggestSeq || input.value.trim() !== query) return;
       form.classList.remove("is-busy");
       suggestions = response?.suggestions || [];

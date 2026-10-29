@@ -20,6 +20,12 @@ test("createPanel accepts site/accent/gatherLabel/layout options", () => {
   assert.match(source, /accent\s*=/);
   assert.match(source, /layout\s*=/);
   assert.match(source, /createSearchView\(\{\s*send,\s*site,\s*platforms/);
+  assert.match(source, /platforms\s*=\s*SEARCH_PLATFORMS/);
+});
+
+test("CR corner panel passes the full Where chip set", () => {
+  const source = readFileSync(join(root, "content/main.js"), "utf8");
+  assert.match(source, /platforms:\s*SEARCH_PLATFORMS/);
 });
 
 test("non-CR sites register a MAIN-world key guard before the panel", () => {

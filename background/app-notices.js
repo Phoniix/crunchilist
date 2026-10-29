@@ -2,6 +2,7 @@
 import { appendActivity, formatActivityExport, normalizeActivityLog } from "../lib/activity-log.js";
 import { KEYS } from "../lib/keys.js";
 import { addNotice, SYSTEM_KINDS } from "../lib/notices.js";
+import { currentView } from "./page.js";
 import { loadState, saveState } from "./store.js";
 
 async function loadActivity() {
@@ -44,7 +45,6 @@ export async function pushSystemNotice(notice, activity = null) {
   state.notices = addNotice(state.notices, notice, Date.now());
   await saveState(state);
   if (activity) await noteActivity(activity).catch(() => {});
-  const { currentView } = await import("./page.js");
   const view = await currentView(state);
   chrome.runtime.sendMessage({ type: "enriched", view }).catch(() => {});
   return view;
@@ -56,6 +56,5 @@ export async function dismissSystemNotice(kindOrId) {
   state.notices = (state.notices || []).filter((row) => row.id !== kindOrId && row.kind !== kindOrId);
   if (state.notices.length === before) return null;
   await saveState(state);
-  const { currentView } = await import("./page.js");
   return currentView(state);
 }

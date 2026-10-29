@@ -194,19 +194,38 @@
 
   // lib/watch-loop.js
   var CHECK_MS = 5e3;
-  function mainVideo(doc = document) {
-    const videos = [...doc.querySelectorAll("video")].filter((video) => Number.isFinite(video.duration) && video.duration >= MIN_SECONDS && video.played?.length);
+  var START_SECONDS = 5;
+  function mainVideo(doc = document, { minSeconds = MIN_SECONDS } = {}) {
+    const floor = Number(minSeconds) > 0 ? Number(minSeconds) : MIN_SECONDS;
+    const videos = [...doc.querySelectorAll("video")].filter((video) => Number.isFinite(video.duration) && video.duration >= floor && video.played?.length);
     return videos.sort((a, b) => b.duration - a.duration)[0] || null;
   }
-  function watchLoop(service, { place, identify }) {
+  function watchLoop(service, { place, identify, startSeconds = START_SECONDS } = {}) {
     if (window.top !== window) return;
+    const started = /* @__PURE__ */ new Set();
     const done = /* @__PURE__ */ new Set();
     let checking = false;
     setInterval(async () => {
       const id = place();
-      if (!id || done.has(id) || checking) return;
+      if (!id || checking) return;
       const video = mainVideo();
-      if (!video || video.currentTime / video.duration < FINISHED) return;
+      if (!video) return;
+      if (!started.has(id) && video.currentTime >= startSeconds) {
+        started.add(id);
+        checking = true;
+        try {
+          const found = await identify(id);
+          chrome.runtime.sendMessage({ type: "watchedStart", service, ...found?.item ? { item: found.item } : { miss: String(found?.miss || "").slice(0, 200) } }).catch(() => {
+          });
+        } catch {
+          chrome.runtime.sendMessage({ type: "watchedStart", service, miss: "the page couldn't be read" }).catch(() => {
+          });
+        } finally {
+          checking = false;
+        }
+        return;
+      }
+      if (done.has(id) || video.currentTime / video.duration < FINISHED) return;
       checking = true;
       done.add(id);
       try {

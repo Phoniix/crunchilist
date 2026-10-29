@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kivori SekAI",
-  "version": "1.0.115",
+  "version": "1.0.118",
   "minimum_chrome_version": "114",
   "description": "Find anime across your services, get AI-ranked picks, and track what you watch with AniList.",
   "permissions": ["storage", "unlimitedStorage", "identity", "tabs", "scripting", "alarms", "webNavigation", "declarativeNetRequestWithHostAccess"],

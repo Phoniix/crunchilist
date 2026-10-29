@@ -3,25 +3,71 @@
 // HIDIVE sign-in. Only what was watched and the catalog's titles leave this tab; the profile id is hashed first.
 // Nothing is changed on HIDIVE.
 import { CATALOG_MAX_ITEMS, HIDIVE_GRIDS, HIDIVE_MAX_PAGES, hidiveGridUrl, hidivePageUrl, parseHidiveGrid } from "../lib/catalogs.js";
-import { hidiveEntries } from "../lib/hidive-history.js";
+import { hidiveEntries, hidiveEntryFinished } from "../lib/hidive-history.js";
+import { FINISHED, MIN_SECONDS } from "../lib/watch-tracking.js";
 
 const PAGE_SOURCE = "crunchilist-search-page";
+const CHECK_MS = 5000;
+const HISTORY_EVERY = 3;
 
 if (window.top === window) chrome.runtime.sendMessage({ type: "hidiveHello" }).catch(() => {});
 
-// Tracking as you watch: once most of an episode has played, the background is told that something finished
-// (nothing about what), and catches up on watch history a little later if tracking is switched on.
-const FINISHED = 0.9;
+// Videos in open shadow roots (DICE/Bitmovin UI) as well as the light DOM.
+function videosIn(root, out = []) {
+  for (const video of root.querySelectorAll("video")) out.push(video);
+  for (const node of root.querySelectorAll("*")) {
+    if (node.shadowRoot) videosIn(node.shadowRoot, out);
+  }
+  return out;
+}
+
+// Longest episode-length video that's actually been played (skip ads / trailers / empty players).
+function mainVideo() {
+  const videos = videosIn(document).filter((video) => Number.isFinite(video.duration) && video.duration >= MIN_SECONDS && video.played?.length);
+  return videos.sort((a, b) => b.duration - a.duration)[0] || null;
+}
+
+function videoDone() {
+  const video = mainVideo();
+  return Boolean(video && video.currentTime / video.duration >= FINISHED);
+}
+
+// Tracking as you watch: HIDIVE's player often keeps <video> out of reach (cross-origin / closed shadow),
+// so also ask watch history for the current /video/{id} — once HIDIVE marks it finished, catch up.
 const finished = new Set();
+let historyTick = 0;
+let historyChecking = false;
 if (window.top === window) {
-  setInterval(() => {
+  setInterval(async () => {
     const id = /^\/video\/(\d+)/.exec(location.pathname)?.[1];
     if (!id || finished.has(id)) return;
-    const video = document.querySelector("video");
-    if (!video || !(video.duration > 300) || video.currentTime / video.duration < FINISHED) return;
-    finished.add(id);
-    chrome.runtime.sendMessage({ type: "hidiveWatched" }).catch(() => {});
-  }, 5000);
+    const signal = (entry = null) => {
+      finished.add(id);
+      const hint = entry ? {
+        series: entry.series || entry.title || "",
+        season: entry.seasonTitle || "",
+        seasonNumber: entry.season,
+        episode: entry.episode || 1,
+      } : null;
+      chrome.runtime.sendMessage({ type: "hidiveWatched", videoId: id, entry: hint }).catch(() => {});
+    };
+    if (videoDone()) {
+      signal();
+      return;
+    }
+    historyTick = (historyTick + 1) % HISTORY_EVERY;
+    if (historyTick !== 0 || historyChecking) return;
+    historyChecking = true;
+    try {
+      const reply = await askPage("hidive-history", { page: 1 });
+      if (finished.has(id) || !reply?.ok || !reply.body) return;
+      const entry = hidiveEntries(reply.body).find((row) => row.id === id);
+      if (!hidiveEntryFinished(entry)) return;
+      signal(entry);
+    } finally {
+      historyChecking = false;
+    }
+  }, CHECK_MS);
 }
 
 async function digest(value) {

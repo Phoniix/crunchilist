@@ -1,5 +1,6 @@
 import { isStoreChannel } from "../lib/build-channel.js";
 import { LATEST_RELEASE_API, dueForCheck, fromRelease, updateStatus } from "../lib/update-check.js";
+import { pushSystemNotice } from "./app-notices.js";
 
 const UPDATE_KEY = "crUpdate";
 
@@ -41,7 +42,6 @@ export async function checkForUpdate({ force = false } = {}) {
   })().finally(() => { running = null; });
   const status = updateStatus(await running, current);
   if (status.announce && status.latest?.version) {
-    const { pushSystemNotice } = await import("./app-notices.js");
     pushSystemNotice({
       kind: "update",
       title: `Kivori SekAI ${status.latest.version} is out`,

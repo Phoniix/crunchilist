@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, FOR_YOU_PICKS_TTL_MS, galleryBanner, noveltyOf, orderForYou, pickExclusiveBanner, rankBanner, tasteMatches } from "../lib/banner.js";
+import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, FOR_YOU_MIDWEEK_MS, FOR_YOU_PICKS_TTL_MS, galleryBanner, noveltyOf, orderForYou, pickExclusiveBanner, rankBanner, tasteMatches } from "../lib/banner.js";
 
 const shows = "abcdefghijklmnop".split("").map((id) => ({ id }));
 const trending = shows.map((show) => show.id);
@@ -54,8 +54,28 @@ test("For you prefers titles that have not shown recently", () => {
   assert.deepEqual(rows.map((row) => row.id), ["b", "a", "c"], "fresher titles lead even if AI ranked them lower");
 });
 
-test("Picked for you cache lasts a week", () => {
+test("Picked for you cache lasts a week, with a mid-week shuffle window", () => {
   assert.equal(FOR_YOU_PICKS_TTL_MS, 7 * 24 * 60 * 60 * 1000);
+  assert.equal(FOR_YOU_MIDWEEK_MS, 3 * 24 * 60 * 60 * 1000);
+});
+
+test("For you midweek and exclude skip muted or leading titles", () => {
+  const now = 1_000_000;
+  const recentShown = new Map([["a", now - 1000], ["b", now - FOR_YOU_HISTORY_MS + 1000]]);
+  const rows = orderForYou({
+    tasteIds: ["a", "b", "c"],
+    picks: [
+      { id: "a", rank: 1, confidence: 90 },
+      { id: "b", rank: 2, confidence: 80 },
+      { id: "c", rank: 3, confidence: 70 },
+    ],
+    recentShown,
+    now,
+    midweek: true,
+    exclude: new Set(["c"]),
+  });
+  assert.ok(!rows.some((row) => row.id === "c"));
+  assert.equal(rows[0].id, "b");
 });
 
 test("banner skips finished, dropped and art-less shows", () => {

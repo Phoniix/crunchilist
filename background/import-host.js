@@ -7,10 +7,14 @@ import { LIST_SOURCES } from "../lib/list-import.js";
 import { anilistSession } from "../lib/settings.js";
 import { SERVICES, connectedIds, contentScriptsFor, onService, returnNote, serviceById } from "../lib/services.js";
 import { cleanKitsuLink, publicKitsuLink } from "../lib/trackers.js";
+import { hidiveEntries, hidiveEntryFinished } from "../lib/hidive-history.js";
+import { groupNetflix, parseActivity, splitPlayerTitle, usablePlayerSeries } from "../lib/netflix-history.js";
 import { TRACKED, TRACK_SETTING, addToLog, cleanItem, itemText } from "../lib/watch-tracking.js";
 import { titleReadiness } from "../lib/title-api.js";
 import { watchActivity } from "./activity.js";
+import { clearActivityLog, exportActivityText, listActivity, noteActivity } from "./app-notices.js";
 import { appData } from "./app-data.js";
+import { expireProvisionalContinueActivity, noteContinueFromTrackedPlay } from "./continue-activity.js";
 import { checkShowLinks } from "./dead-links.js";
 import { idMapStatus } from "./id-map-store.js";
 import { loadCatalogs, readCatalogs } from "./catalog-reader.js";
@@ -32,6 +36,7 @@ const TRACK_HIDIVE_ALARM = "ks-track-hidive";
 const WATCH_ALARM = "ks-watch-track";
 const CATALOG_ALARM = "ks-catalogs";
 const TRACKER_ALARM = "ks-tracker-pull";
+const CW_EXPIRE_ALARM = "ks-cw-expire";
 const TRACK_DELAY_MIN = 2;
 const TRACK_RETRY_MIN = 1;
 const TRACK_TRIES = 4;
@@ -195,6 +200,182 @@ async function runTracking(id) {
   await chrome.storage.local.set({ [KEYS.syncState]: { ...(await loadSync()), lastTrack: Date.now(), trackResult: result.ran ? result.message : WAITING[result.why] || result.message || "" } });
 }
 
+async function askSiteTab(id, message, preferTabId = null) {
+  const key = SITE_TABS[id];
+  if (!key) return null;
+  const stored = (await chrome.storage.session.get(key))[key];
+  const tabId = preferTabId != null ? preferTabId : stored;
+  if (tabId == null) return null;
+  const reply = await chrome.tabs.sendMessage(tabId, message).catch(() => null);
+  if (reply?.ok) return reply.payload ?? reply;
+  // Watch tab may differ from the last hello tab — fall back to the remembered one.
+  if (preferTabId != null && stored != null && stored !== preferTabId) {
+    const again = await chrome.tabs.sendMessage(stored, message).catch(() => null);
+    return again?.ok ? again.payload ?? again : null;
+  }
+  return null;
+}
+
+function metaFromLabels(labels = []) {
+  const list = (Array.isArray(labels) ? labels : []).map((label) => String(label || "").trim()).filter(Boolean);
+  // Prefer "Show: …" lines — a single bare token is often the episode title, not the series.
+  const ordered = [
+    ...list.filter((label) => label.includes(": ")),
+    ...list.filter((label) => !label.includes(": ")),
+  ];
+  for (const label of ordered) {
+    const split = splitPlayerTitle(label);
+    // Bare single-token labels are last-resort only and still need usablePlayerSeries.
+    if (!split?.series) continue;
+    if (!label.includes(": ") && ordered.some((row) => row.includes(": "))) continue;
+    return {
+      series: split.series,
+      season: split.season || "",
+      seasonNumber: split.seasonNumber,
+      episode: 1,
+      anime: null,
+      title: label,
+    };
+  }
+  return null;
+}
+
+async function bumpFromNetflixMeta(meta, { provisional }) {
+  const series = usablePlayerSeries(meta?.series);
+  if (!series || meta.anime === false) return null;
+  return noteContinueFromTrackedPlay({
+    service: "netflix",
+    series,
+    season: meta.season || "",
+    seasonNumber: meta.seasonNumber,
+    episode: Math.max(1, Number(meta.episode) || 1),
+    provisional,
+  });
+}
+
+// Track-while-watching rule (Netflix + HIDIVE): when the player URL names a video id, history may
+// only bump that title (or its series group). Never promote whatever is still sitting at the top.
+async function bumpFromNetflixActivity({ provisional, videoId, tabId }) {
+  const payload = await askSiteTab("netflix", { type: "netflixActivity", page: 0 }, tabId);
+  if (!payload) return null;
+  const wanted = Number(videoId);
+  let items = Array.isArray(payload.viewedItems) ? payload.viewedItems : [];
+  if (Number.isInteger(wanted)) {
+    const hit = items.find((row) => row?.movieID === wanted);
+    if (!hit) return null;
+    // Keep the whole series so groupNetflix can number episodes; drop every other show.
+    const seriesId = hit.series;
+    items = seriesId != null ? items.filter((row) => row?.series === seriesId) : [hit];
+  }
+  const { rows } = parseActivity({ ...payload, viewedItems: items }, 0);
+  // Starts may still be mid-bookmark; include unfinished rows for provisional only.
+  const all = rows.length ? groupNetflix(provisional ? rows.map((row) => ({ ...row, watched: true })) : rows) : [];
+  const groups = all.filter((group) => group.anime !== false && group.episodes?.length);
+  const newest = groups.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))[0];
+  if (!newest) return null;
+  return noteContinueFromTrackedPlay({
+    service: "netflix",
+    series: newest.series,
+    season: newest.season || "",
+    seasonNumber: newest.seasonNumber,
+    episode: Math.max(...newest.episodes),
+    provisional,
+  });
+}
+
+// Speeds Continue Watching from Netflix; provisional start names the /watch/{id} title (activity often lags).
+async function bumpContinueFromNetflix({ provisional = false, videoId = "", labels = [], tabId = null } = {}) {
+  const tryBump = async () => {
+    const fromLabels = () => bumpFromNetflixMeta(metaFromLabels(labels), { provisional });
+    const fromWatchNow = async () => {
+      if (!videoId) return null;
+      const meta = await askSiteTab("netflix", { type: "netflixWatchNow", videoId, labels }, tabId);
+      return bumpFromNetflixMeta(meta, { provisional });
+    };
+    const fromActivity = () => bumpFromNetflixActivity({ provisional, videoId, tabId });
+    // Prefer Netflix APIs (seriesTitle) over page labels — mediaSession.title is often only the episode name.
+    // Finishes: activity first (real episode count). Starts: watchNow, then activity, labels last.
+    const order = provisional
+      ? [fromWatchNow, fromActivity, fromLabels]
+      : [fromActivity, fromWatchNow, fromLabels];
+    for (const step of order) {
+      const row = await step().catch(() => null);
+      if (row) return row;
+    }
+    return null;
+  };
+  // Early starts often beat Netflix writing activity — retry once. Finishes still get the track alarm.
+  const first = await tryBump();
+  if (first) return first;
+  if (!provisional) return null;
+  if (tabId == null && (await chrome.storage.session.get(KEYS.netflixTab))[KEYS.netflixTab] == null) return null;
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  return (await tryBump()) || null;
+}
+
+function pickHidiveHistoryEntry(entries, { videoId = "", provisional = false } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  const wanted = String(videoId || "");
+  if (wanted) {
+    const hit = list.find((row) => String(row.id) === wanted) || null;
+    if (!hit) return null;
+    if (!provisional && !hidiveEntryFinished(hit)) return null;
+    return hit;
+  }
+  // No /video/{id} on the message: last-resort newest (start) or newest finished (watch).
+  return provisional ? (list[0] || null) : (list.find((row) => hidiveEntryFinished(row)) || null);
+}
+
+async function bumpContinueFromHidive({ hint = null, videoId = "", provisional = false } = {}) {
+  const tryBump = async () => {
+    if (hint?.series && hint.episode) {
+      return noteContinueFromTrackedPlay({
+        service: "hidive",
+        series: hint.series,
+        season: hint.season || "",
+        seasonNumber: hint.seasonNumber,
+        episode: hint.episode,
+        provisional,
+      });
+    }
+    const payload = await askSiteTab("hidive", { type: "hidiveHistory", page: 1 });
+    const entries = Array.isArray(payload?.entries) ? payload.entries : hidiveEntries(payload);
+    const entry = pickHidiveHistoryEntry(entries, { videoId, provisional });
+    if (!entry) return null;
+    return noteContinueFromTrackedPlay({
+      service: "hidive",
+      series: entry.series || entry.title,
+      season: entry.seasonTitle || "",
+      seasonNumber: entry.season,
+      episode: entry.episode || 1,
+      provisional,
+    });
+  };
+  // Early starts often beat HIDIVE writing history — retry once. Finishes still get the track alarm.
+  const first = await tryBump();
+  if (first) return first;
+  if (!provisional) return null;
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  return (await tryBump()) || null;
+}
+
+async function noteWatchedStart({ service: id, item }, sender) {
+  const service = serviceById(String(id || ""));
+  if (!service || !TRACKED.includes(service.id) || sender?.id !== chrome.runtime.id || sender.frameId !== 0 || !onService(service, sender.url)) return {};
+  if (!(await loadImportSettings())[TRACK_SETTING[service.id]]) return {};
+  const clean = cleanItem(item);
+  if (!clean || clean.anime === false) return {};
+  await noteContinueFromTrackedPlay({
+    service: service.id,
+    series: clean.series,
+    season: clean.season ? `Season ${clean.season}` : "",
+    seasonNumber: clean.season,
+    episode: clean.episode,
+    provisional: true,
+  }).catch(() => {});
+  return {};
+}
+
 async function noteWatched({ service: id, item, miss }, sender) {
   const service = serviceById(String(id || ""));
   if (!service || !TRACKED.includes(service.id) || sender?.id !== chrome.runtime.id || sender.frameId !== 0 || !onService(service, sender.url)) return {};
@@ -208,6 +389,14 @@ async function noteWatched({ service: id, item, miss }, sender) {
     if (added) {
       await chrome.storage.local.set({ [KEYS.watchLog]: log });
       await chrome.alarms.create(WATCH_ALARM, { delayInMinutes: WATCH_DELAY_MIN });
+      noteContinueFromTrackedPlay({
+        service: service.id,
+        series: clean.series,
+        season: clean.season ? `Season ${clean.season}` : "",
+        seasonNumber: clean.season,
+        episode: clean.episode,
+        provisional: false,
+      }).catch(() => {});
     }
     note = added ? `${itemText(clean)} finished.` : `${itemText(clean)} finished again; already noted.`;
   }
@@ -397,22 +586,14 @@ const pageHandlers = {
     await chrome.storage.local.set(data);
     return { restored: Object.keys(data).length, theme, ...(await importSnapshot()) };
   },
-  activityLog: async ({ kind } = {}) => {
-    const { listActivity } = await import("./app-notices.js");
-    return { rows: await listActivity({ kind }) };
-  },
-  exportActivity: async () => {
-    const { exportActivityText } = await import("./app-notices.js");
-    return { text: await exportActivityText() };
-  },
+  activityLog: async ({ kind } = {}) => ({ rows: await listActivity({ kind }) }),
+  exportActivity: async () => ({ text: await exportActivityText() }),
   clearActivity: async () => {
-    const { clearActivityLog } = await import("./app-notices.js");
     await clearActivityLog();
     return {};
   },
   openFeedback: async ({ userAgent }) => {
     const { text: diag } = await buildDiagnostics({ userAgent });
-    const { exportActivityText } = await import("./app-notices.js");
     const activity = await exportActivityText();
     const text = `${diag}\n\n${activity}\n`;
     const title = encodeURIComponent("Kivori SekAI feedback");
@@ -488,16 +669,59 @@ const contentHandlers = {
     }
     return {};
   },
-  netflixWatched: async (_message, sender) => {
-    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0 && (await loadImportSettings()).trackNetflix) await trackHistory("netflix");
+  netflixStarted: async (message, sender) => {
+    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0 && (await loadImportSettings()).trackNetflix) {
+      if (sender.tab?.id != null) await chrome.storage.session.set({ [KEYS.netflixTab]: sender.tab.id });
+      const bumped = await bumpContinueFromNetflix({
+        provisional: true,
+        videoId: message?.videoId || "",
+        labels: Array.isArray(message?.labels) ? message.labels : [],
+        tabId: sender.tab?.id ?? null,
+      }).catch(() => null);
+      noteActivity({
+        kind: "tracking",
+        title: bumped ? `Netflix: watching ${bumped.title || "a show"}` : "Netflix: playback noticed (naming Continue Watching…)",
+        ok: Boolean(bumped),
+      }).catch(() => {});
+    }
+    return {};
+  },
+  netflixWatched: async (message, sender) => {
+    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0 && (await loadImportSettings()).trackNetflix) {
+      if (sender.tab?.id != null) await chrome.storage.session.set({ [KEYS.netflixTab]: sender.tab.id });
+      const bumped = await bumpContinueFromNetflix({
+        provisional: false,
+        videoId: message?.videoId || "",
+        labels: Array.isArray(message?.labels) ? message.labels : [],
+        tabId: sender.tab?.id ?? null,
+      }).catch(() => null);
+      noteActivity({
+        kind: "tracking",
+        title: bumped ? `Netflix: finished ${bumped.title || "an episode"} — catching up AniList` : "Netflix: episode finished — catching up AniList",
+        ok: true,
+      }).catch(() => {});
+      await trackHistory("netflix");
+    }
     return {};
   },
   hidiveHello: async (_message, sender) => { await rememberTab("hidive", KEYS.hidiveTab, sender); await syncSoon(); await catalogSoon(); return {}; },
   tubiHello: async (_message, sender) => { await rememberTab("tubi", KEYS.tubiTab, sender); await catalogSoon(); return {}; },
-  hidiveWatched: async (_message, sender) => {
-    if (onSite(sender, "https://www.hidive.com/") && sender.frameId === 0 && (await loadImportSettings()).trackHidive) await trackHistory("hidive");
+  hidiveStarted: async (message, sender) => {
+    if (onSite(sender, "https://www.hidive.com/") && sender.frameId === 0 && (await loadImportSettings()).trackHidive) {
+      const hint = message?.entry && typeof message.entry === "object" ? message.entry : null;
+      await bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: true }).catch(() => {});
+    }
     return {};
   },
+  hidiveWatched: async (message, sender) => {
+    if (onSite(sender, "https://www.hidive.com/") && sender.frameId === 0 && (await loadImportSettings()).trackHidive) {
+      const hint = message?.entry && typeof message.entry === "object" ? message.entry : null;
+      bumpContinueFromHidive({ hint, videoId: message?.videoId || "", provisional: false }).catch(() => {});
+      await trackHistory("hidive");
+    }
+    return {};
+  },
+  watchedStart: noteWatchedStart,
   watched: noteWatched,
   primeHello: async (_message, sender) => { await rememberTab("prime", KEYS.primeTab, sender); await syncSoon(); return {}; },
   returnCheck: async (_message, sender) => {
@@ -543,6 +767,7 @@ export async function handleImportMessage(message, sender) {
 export function setupImportAlarms() {
   chrome.alarms.create(SYNC_ALARM, { delayInMinutes: 5, periodInMinutes: 60 });
   chrome.alarms.create(TRACKER_ALARM, { delayInMinutes: 10, periodInMinutes: 24 * 60 });
+  chrome.alarms.create(CW_EXPIRE_ALARM, { delayInMinutes: 15, periodInMinutes: 24 * 60 });
 }
 
 export function onImportAlarm(alarm) {
@@ -552,6 +777,7 @@ export function onImportAlarm(alarm) {
   if (alarm.name === WATCH_ALARM) runWatchTracking().catch(() => {});
   if (alarm.name === CATALOG_ALARM) runCatalogs().catch(() => {});
   if (alarm.name === TRACKER_ALARM) runTrackerPull().catch(() => {});
+  if (alarm.name === CW_EXPIRE_ALARM) expireProvisionalContinueActivity().catch(() => {});
   watchActivity();
 }
 

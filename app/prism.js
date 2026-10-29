@@ -1,7 +1,10 @@
 // Prism: the Crunchilist page. Pages, cards, theme, trailers and the library, drawn from the extension's own data.
 // The data layer (prism-data.js) is the only part that talks to the background.
 import { applySeasonChanges, playRequest } from "../lib/app-shows.js";
-import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, galleryBanner, orderForYou, pickExclusiveBanner } from "../lib/banner.js";
+import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, FOR_YOU_MIDWEEK_MS, FOR_YOU_PICKS_TTL_MS, galleryBanner, orderForYou, pickExclusiveBanner } from "../lib/banner.js";
+import { themesOverlapHigh } from "../lib/home-rows.js";
+import { filterRecommended, unrecommendedIds } from "../lib/unrecommended.js";
+import { updatesInLabel } from "../lib/update-eta.js";
 import { closeBadgeMenu, openBadgeMenu } from "../ui/badge-menu.js";
 import { BADGE_CSS, BADGE_MENU_CSS, badgeHtml, badgeOptions } from "../ui/badge-style.js";
 import { SEARCH_CSS, createSearchView } from "../ui/search-view.js";
@@ -43,6 +46,7 @@ const icons = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.8-1.5 2-1.5H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>',
   play: '<path d="M7 4v16l13-8z" fill="currentColor"/>',
+  pause: '<path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="currentColor"/>',
@@ -94,7 +98,7 @@ let tastePop = null;
 let shortcut = null;
 let update = null;
 let theme = {};
-let prefs = { previews: true, sound: false, volume: 60, subs: true };
+let prefs = { previews: true, sound: false, volume: 60, subs: true, banner: true };
 let loaded = false;
 let writes = 0;
 
@@ -115,18 +119,77 @@ function entry(show) {
   return { ...state, index: record.at, season, episodes: season.episodes, multi: seasonsOf(show).length > 1 };
 }
 const inStatus = (status) => SHOWS.filter((show) => entry(show)?.status === status);
+const lastWatchedOf = (show) => Number(library[show?.id]?.lastWatchedAt) || 0;
+const sortByLastWatched = (shows) => [...shows].sort((a, b) => lastWatchedOf(b) - lastWatchedOf(a) || a.title.localeCompare(b.title));
+const watchedLabel = (show) => {
+  const at = lastWatchedOf(show);
+  return at ? `Watched ${ago(at)}` : "";
+};
 let continueActivity = [];
+// Activity-only stub when Netflix/HIDIVE name a title that isn't in the Crunchyroll catalog yet.
+function showFromActivity(row) {
+  if (!row?.id || !row?.title) return null;
+  const cover = row.cover || "";
+  const service = String(row.service || "");
+  const site = service === "netflix" ? "Netflix"
+    : service === "hidive" ? "HIDIVE"
+    : service === "tubi" ? "Tubi"
+    : service === "prime" ? "Prime Video"
+    : service;
+  return {
+    id: row.id,
+    title: row.title,
+    cover,
+    poster: cover,
+    color: "#5c6bc0",
+    anilistId: row.anilistId || null,
+    episodes: row.episodes || null,
+    seasons: [{ label: "Season 1", title: row.title, format: "TV", episodes: row.episodes || null, anilistId: row.anilistId || null, cover }],
+    genres: [],
+    tags: [],
+    studios: [],
+    streaming: row.playUrl && site ? [{ site, url: row.playUrl }] : [],
+    onCrunchyroll: false,
+    onServices: service ? [service] : [],
+    score: null,
+    format: "TV",
+    type: "tv",
+    status: "RELEASING",
+    year: null,
+    trailer: "",
+    about: "",
+    url: row.playUrl || "",
+  };
+}
+function showForActivity(row) {
+  return byId.get(row?.id)
+    || (row?.anilistId ? SHOWS.find((item) => item.anilistId === row.anilistId) : null)
+    || showFromActivity(row);
+}
 // Soft-merge live activity into the Prism library so episode labels match what was just watched.
 function applyContinueActivity(list) {
   continueActivity = Array.isArray(list) ? list : [];
   for (const row of continueActivity) {
-    if (!byId.has(row.id)) continue;
-    const rec = library[row.id];
+    const show = showForActivity(row);
+    if (!show) continue;
+    if (row.episodes && row.progress >= row.episodes) continue;
+    const rec = library[show.id];
     const at = rec?.at ?? 0;
     const cur = rec?.s?.[at]?.progress || 0;
     if (row.progress < cur) continue;
-    if (row.episodes && row.progress >= row.episodes) continue;
-    library = applySeasonChanges(library, row.id, [{ index: at, status: "watching", progress: row.progress }]);
+    if (byId.has(show.id) || (show.anilistId && SHOWS.some((item) => item.anilistId === show.anilistId))) {
+      library = applySeasonChanges(library, show.id, [{ index: at, status: "watching", progress: row.progress }]);
+      continue;
+    }
+    // Off-catalog / pending activity: stub just enough library for episode labels on the rail.
+    library = {
+      ...library,
+      [show.id]: {
+        at: 0,
+        lastWatchedAt: Number(row.at) || Date.now(),
+        s: { 0: { status: "watching", progress: Math.max(0, Number(row.progress) || 0) } },
+      },
+    };
   }
 }
 // Continue watching: live activity first, then list watching with episodes left.
@@ -140,9 +203,15 @@ const continueWatching = () => {
   const seen = new Set();
   const out = [];
   for (const row of continueActivity) {
-    const show = byId.get(row.id);
+    const show = showForActivity(row);
     if (!show || seen.has(show.id)) continue;
     if (row.episodes && row.progress >= row.episodes) continue;
+    // Same title under pending: + catalog id — keep the first (activity is newest-first).
+    const titleKey = String(show.title || "").trim().toLowerCase();
+    if (titleKey && [...seen].some((id) => {
+      const other = byId.get(id) || out.find((item) => item.id === id);
+      return other && String(other.title || "").trim().toLowerCase() === titleKey;
+    })) continue;
     seen.add(show.id);
     out.push(show);
   }
@@ -234,7 +303,11 @@ function applyTheme() {
   document.querySelectorAll("[data-set-palette]").forEach((el) => el.classList.toggle("on", el.dataset.setPalette === theme.palette));
   document.querySelectorAll("[data-set-mode]").forEach((el) => el.classList.toggle("on", el.dataset.setMode === theme.mode));
   document.querySelectorAll("[data-set-size]").forEach((el) => el.classList.toggle("on", el.dataset.setSize === theme.size));
-  document.querySelectorAll("[data-pref]").forEach((el) => el.classList.toggle("on", prefOn(el.dataset.pref)));
+  document.querySelectorAll("[data-pref]").forEach((el) => {
+    const on = prefOn(el.dataset.pref);
+    el.classList.toggle("on", on);
+    if (el.getAttribute("role") === "switch") el.setAttribute("aria-checked", on ? "true" : "false");
+  });
   paintSettingControls();
   document.querySelectorAll(".theme-tile").forEach((el) => { el.dataset.mode = root.dataset.mode; });
 }
@@ -309,15 +382,16 @@ const CR_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy=
 const OFF_MARK = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 19 19 5" stroke="currentColor" stroke-width="2"/></svg>`;
 const onCrunchyroll = (show) => show.onCrunchyroll !== false;
 
-// Visible streaming rows for a show: AniList / catalog links, plus Crunchyroll when the catalog carries it.
+// Visible streaming rows for a show: known app services only (never YouTube / other AniList-only hosts).
 function streamLinks(show) {
   const hidden = settings().hiddenSites || [];
   const seen = new Set();
   const out = [];
   const add = (site, { url = "", color = "", checked = false, seen: watched = false } = {}) => {
     if (!site || !visibleLink(site, hidden)) return;
-    const id = serviceForSite(site)?.id || String(site).toLowerCase();
-    const known = serviceById(id);
+    const known = serviceForSite(site);
+    if (!known) return;
+    const id = known.id;
     if (seen.has(id)) {
       const row = out.find((item) => item.id === id);
       if (!row) return;
@@ -330,9 +404,9 @@ function streamLinks(show) {
     seen.add(id);
     out.push({
       id,
-      site: known?.name || site,
-      name: known?.name || site,
-      short: SERVICE_SHORT[id] || String(known?.name || site).slice(0, 4),
+      site: known.name,
+      name: known.name,
+      short: SERVICE_SHORT[id] || known.name.slice(0, 4),
       url,
       color: color || SERVICE_BRAND[id] || "#8a7b71",
       checked: Boolean(checked),
@@ -356,6 +430,7 @@ function svcMark(link) {
 }
 
 // Availability pills: every known service when we have them; otherwise the old on/off Crunchyroll mark.
+// Crunchyroll-only titles still get a CR badge (including mini on cards).
 function crBadge(show, cls = "") {
   const links = streamLinks(show);
   const mini = /\bmini\b/.test(cls);
@@ -364,8 +439,6 @@ function crBadge(show, cls = "") {
       ? `<span class="avail on ${cls}">${CR_MARK}${mini ? "CR" : "On Crunchyroll"}</span>`
       : `<span class="avail off ${cls}">${OFF_MARK}${mini ? "Off CR" : "Not on Crunchyroll"}</span>`;
   }
-  // Poster stays clean when Crunchyroll is the only place.
-  if (mini && links.length === 1 && links[0].id === "crunchyroll") return "";
   const cap = mini ? 3 : 6;
   const shown = links.slice(0, cap);
   const pills = shown.map((link) => {
@@ -451,7 +524,7 @@ function card(show, opts = {}) {
     ${peek}
     <div class="cap"><div class="title">${esc(show.title)}</div>${opts.why
       ? `<div class="why" title="${esc(opts.why)}">${esc(opts.why)}</div>`
-      : `<div class="sub">${esc(show.genres[0] || (show.type === "movie" ? "Movie" : "Series"))} · ${seasonCount(show)}</div>`}</div>
+      : `<div class="sub">${esc(watchedLabel(show) || `${show.genres[0] || (show.type === "movie" ? "Movie" : "Series")} · ${seasonCount(show)}`)}</div>`}</div>
   </div>`;
 }
 function whereWatchHtml(show, links = streamLinks(show)) {
@@ -546,10 +619,13 @@ function similar(show, count = 12) {
 // `prev` is the roll before the current one; Last roll swaps them.
 const FOR_YOU_HISTORY_KEY = "cl-foryou-history";
 const FOR_YOU_HISTORY_MAX = 48;
-const forYou = { loaded: false, loading: false, ids: [], matches: new Map(), picks: null, ranked: null, by: "", prev: null, seen: new Set(), busy: false, tried: false, cacheFresh: false, remembered: "" };
+const forYou = { loaded: false, loading: false, ids: [], matches: new Map(), picks: null, ranked: null, by: "", prev: null, seen: new Set(), busy: false, tried: false, cacheFresh: false, remembered: "", expiresAt: 0, cacheAge: 0 };
 const aiOn = () => settings().useAi !== false;
 // Performance mode keeps the AI toggle, but skips model work (ranking, banner extras, inspired).
 const aiLive = () => aiOn() && !lite();
+let unrecommended = [];
+const mutedIds = () => unrecommendedIds(unrecommended);
+const notMuted = (show) => show && !mutedIds().has(String(show.id));
 
 function loadForYouHistory() {
   try {
@@ -600,16 +676,29 @@ async function hydrateForYouFromCache() {
   if (!reply?.ok || !reply.picks?.length) return;
   applyForYouPicks(reply.picks, reply.by);
   forYou.cacheFresh = Boolean(reply.fresh);
+  forYou.expiresAt = Number(reply.expiresAt) || (Number(reply.savedAt) || 0) + FOR_YOU_PICKS_TTL_MS;
+  forYou.cacheAge = Number(reply.age) || 0;
 }
 
-function forYouOrder() {
+function featuredHomeIds() {
+  const ids = new Set();
+  for (const row of banner.rows || []) {
+    if (row?.id) ids.add(String(row.id));
+    if (ids.size >= 6) break;
+  }
+  return ids;
+}
+
+function forYouOrder({ excludeBanner = true } = {}) {
   const recentShown = loadForYouHistory();
+  const midweek = forYou.cacheFresh && forYou.cacheAge >= FOR_YOU_MIDWEEK_MS;
+  const exclude = new Set([...mutedIds(), ...(excludeBanner ? featuredHomeIds() : [])]);
   if (!forYou.ids.length) {
     const popularIds = popular().filter((show) => !entry(show)).slice(0, 14).map((show) => show.id);
-    return orderForYou({ tasteIds: popularIds, picks: aiOn() ? forYou.picks : null, recentShown }).filter((row) => byId.has(row.id));
+    return orderForYou({ tasteIds: popularIds, picks: aiOn() ? forYou.picks : null, recentShown, midweek, exclude }).filter((row) => byId.has(row.id));
   }
   const tasteIds = forYou.ids.filter((id) => entry(byId.get(id))?.status !== "finished");
-  return orderForYou({ tasteIds, picks: aiOn() ? forYou.picks : null, tasteMatch: forYou.matches, recentShown }).filter((row) => byId.has(row.id));
+  return orderForYou({ tasteIds, picks: aiOn() ? forYou.picks : null, tasteMatch: forYou.matches, recentShown, midweek, exclude }).filter((row) => byId.has(row.id));
 }
 function forYouRail() {
   // Hold the row until taste or watch history exists so Home doesn't look like generic Top picks.
@@ -631,11 +720,23 @@ function forYouRail() {
     : `<button class="btn sm ai-btn" data-act="ai-pick" title="Let AI rank this row and say why">${icon("sparkle")} AI picks</button>`;
   const why = new Map(rows.filter((row) => row.reason).map((row) => [row.id, row.reason]));
   const match = new Map(rows.filter((row) => row.match != null).map((row) => [row.id, row.match]));
-  const sub = ai && forYou.picks ? `Ranked by ${esc(forYou.by || "AI")}${forYou.cacheFresh ? " · refreshes weekly" : ""}`
+  const eta = updatesInLabel(forYou.expiresAt);
+  const sub = ai && forYou.picks
+    ? `Ranked by ${esc(forYou.by || "AI")}${eta ? ` · ${eta}` : forYou.cacheFresh ? " · refreshes weekly" : ""}`
     : ai && forYou.busy ? "Ranked by your taste while AI looks it over"
     : "Ranked by your taste and what you've watched";
   return rail("Picked for you", rows.map((row) => byId.get(row.id)).filter(Boolean), {
     id: "for-you", cls: ai && forYou.picks ? "ai-row" : "", sub, extra: action, why, match, ranked: forYou.ids.length > 0 || Boolean(forYou.picks?.length), href: "#search",
+  });
+}
+
+function newForYouRail() {
+  const shows = SHOWS.filter((show) => notMuted(show) && nextSeason(show)).slice(0, 14);
+  if (!shows.length) return "";
+  return rail("New for you", shows, {
+    id: "new-for-you",
+    sub: "A new season of something you finished",
+    href: "#list/watching",
   });
 }
 function paintForYou() {
@@ -699,24 +800,35 @@ const bannerBase = (picks) => {
   const recentShown = loadBannerHistory();
   const statusOf = (show) => entry(show)?.status || "";
   const hasArt = (show) => Boolean(show.banner || show.cover);
+  const exclude = mutedIds();
   return {
-    shows: SHOWS,
-    trending: popular().map((show) => show.id),
-    tasteIds: forYou.ids,
-    picks,
-    extraPicks: picks ? [...banner.extra, ...homeRowPicks()] : [],
-    exclusivePicks: pickExclusiveBanner(SHOWS, { recentShown, hasArt, statusOf }),
+    shows: SHOWS.filter(notMuted),
+    trending: popular().filter(notMuted).map((show) => show.id),
+    tasteIds: forYou.ids.filter((id) => !exclude.has(String(id))),
+    picks: (picks || []).filter((pick) => !exclude.has(String(pick.id))),
+    extraPicks: picks ? [...banner.extra, ...homeRowPicks()].filter((pick) => !exclude.has(String(pick.id))) : [],
+    exclusivePicks: pickExclusiveBanner(SHOWS.filter(notMuted), { recentShown, hasArt, statusOf, exclude }),
     tasteMatch: forYou.matches,
     statusOf,
     hasArt,
     recentShown,
+    exclude,
   };
 };
 function bannerRows(count = BANNER_COUNT) {
-  if (banner.rows) return banner.rows.filter((row) => byId.has(row.id) && !["finished", "dropped"].includes(entry(byId.get(row.id))?.status));
+  if (banner.rows) {
+    return banner.rows.filter((row) => byId.has(row.id) && notMuted(byId.get(row.id)) && !["finished", "dropped"].includes(entry(byId.get(row.id))?.status));
+  }
   const rows = galleryBanner({ ...bannerBase(aiOn() ? forYou.ranked : null), count });
   rememberBanner(rows.map((row) => row.id));
   return rows;
+}
+function bannerExpiresAt() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BANNER_EXTRA_KEY) || "null");
+    if (saved?.at) return Number(saved.at) + BANNER_EXTRA_MS;
+  } catch {}
+  return 0;
 }
 function rerankPicks(answer) {
   return (answer?.ok ? answer.results || [] : []).map((row) => ({
@@ -992,7 +1104,13 @@ function paintSide() {
 // The background keeps them 12 hours, or remakes them sooner (at most hourly) after new watching, taste or searches.
 // Text typed in the bar above them nudges the themes for 12 hours; it steers the mix rather than filtering it.
 const GEN_CHECK_MS = 10 * 60_000;
-const homeGen = { rows: null, by: "", ai: false, busy: false, checkedAt: 0, createdAt: 0, nudge: "" };
+const homeGen = { rows: null, by: "", ai: false, busy: false, checkedAt: 0, createdAt: 0, expiresAt: 0, nudge: "" };
+function crossSectionExclude() {
+  const ids = new Set(mutedIds());
+  for (const row of forYouOrder({ excludeBanner: false }).slice(0, 8)) ids.add(String(row.id));
+  if (banner.rows) for (const row of banner.rows.slice(0, 6)) if (row?.id) ids.add(String(row.id));
+  return [...ids];
+}
 async function loadHomeRows({ fresh = false, nudge } = {}) {
   if (!SHOWS.length || homeGen.busy) return;
   if (!fresh && nudge === undefined && homeGen.rows && Date.now() - homeGen.checkedAt < GEN_CHECK_MS) return;
@@ -1004,40 +1122,56 @@ async function loadHomeRows({ fresh = false, nudge } = {}) {
     searches: recent.slice(0, INSPIRED_SEARCHES),
     ai: Boolean(model) && !model.status?.needsDownload,
     fresh,
+    excludeIds: crossSectionExclude(),
     ...(nudge === undefined ? {} : { nudge }),
   });
   homeGen.busy = false;
   homeGen.checkedAt = Date.now();
   if (reply?.ok) {
     homeGen.rows = (reply.rows || []).map((row) => ({ ...row, ids: (row.ids || []).map((id) => String(id).replace(/^sight:/, "")) }));
-    Object.assign(homeGen, { by: reply.by || "", ai: Boolean(reply.ai), createdAt: reply.createdAt || 0, nudge: reply.nudge || "" });
+    Object.assign(homeGen, {
+      by: reply.by || "",
+      ai: Boolean(reply.ai),
+      createdAt: reply.createdAt || 0,
+      expiresAt: reply.expiresAt || 0,
+      nudge: reply.nudge || "",
+    });
   } else if (fresh || nudge !== undefined) {
     toast(reply?.error || "Couldn't make new rows right now");
   }
   paintHomeRows();
   if (homeGen.ai && aiOn() && forYou.ranked) home?.refreshBanner?.(api);
 }
+function themeRowsStale() {
+  if (!homeGen.expiresAt) return false;
+  if (Date.now() >= homeGen.expiresAt) return true;
+  return themesOverlapHigh(homeGen.rows || [], []);
+}
 function genNote() {
   if (homeGen.busy) return `${icon("sparkle")} Making rows…`;
   if (!homeGen.rows) return "";
-  const made = homeGen.createdAt ? new Date(homeGen.createdAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
   const who = homeGen.ai ? `Named by ${esc(homeGen.by || "AI")}` : "Made from your taste and history";
-  return `${homeGen.nudge ? `Leaning toward “${esc(homeGen.nudge)}”. ` : ""}${who}${made ? ` · ${made}` : ""}`;
+  const eta = updatesInLabel(homeGen.expiresAt);
+  const timer = themeRowsStale() ? "" : (eta ? ` · ${eta}` : "");
+  return `${homeGen.nudge ? `Leaning toward “${esc(homeGen.nudge)}”. ` : ""}${who}${timer}`;
 }
 function genRailsHtml() {
+  const skip = mutedIds();
   return (homeGen.rows || []).map((row) => ({
     ...row,
-    shows: row.ids.map((id) => byId.get(id)).filter((show) => show && !["finished", "dropped"].includes(entry(show)?.status)),
+    shows: row.ids.map((id) => byId.get(id)).filter((show) => show && notMuted(show) && !["finished", "dropped"].includes(entry(show)?.status) && !skip.has(String(show.id))),
   })).filter((row) => row.shows.length >= 4).map((row) => rail(`${homeGen.ai ? icon("sparkle") : ""}${esc(row.title)}`, row.shows, {
     cls: "gen-row", label: row.title, sub: esc(row.why), href: `#search?q=${encodeURIComponent(row.query)}`,
   })).join("");
 }
 function homeRowsHtml() {
+  const stale = !homeGen.busy && homeGen.rows && themeRowsStale();
   return `<section class="gen-wrap${homeGen.ai ? " ai" : ""}">
     <form class="gen-ask" data-gen-ask role="search" aria-label="Inspire your own feed">
       <span class="gen-ask-ico" aria-hidden="true">${icon("sparkle")}</span>
       <input name="nudge" type="text" maxlength="80" autocomplete="off" spellcheck="false" aria-label="Inspire your own feed" placeholder="Inspire your own feed: “rainy day”, “set in space”, “found family”…" value="${esc(homeGen.nudge)}">
       <button class="btn sm accent" type="submit"${homeGen.busy ? " disabled" : ""}>Remix</button>
+      ${stale ? `<button class="btn sm accent" type="button" data-act="gen-fresh"${homeGen.busy ? " disabled" : ""}>Fresh mix ready</button>` : ""}
       <button class="btn sm ghost" type="button" data-act="gen-clear"${homeGen.nudge ? "" : " hidden"}>Clear</button>
     </form>
     <p class="gen-note muted" aria-live="polite">${genNote()}</p>
@@ -1047,11 +1181,17 @@ function homeRowsHtml() {
 function paintHomeRows() {
   const wrap = document.querySelector(".gen-wrap");
   if (!wrap) return;
+  const stale = !homeGen.busy && homeGen.rows && themeRowsStale();
   wrap.classList.toggle("ai", homeGen.ai);
   wrap.querySelector("#gen-rows").innerHTML = genRailsHtml();
   wrap.querySelector(".gen-note").innerHTML = genNote();
   wrap.querySelector('.gen-ask [type="submit"]').disabled = homeGen.busy;
   wrap.querySelector('[data-act="gen-clear"]').hidden = !homeGen.nudge;
+  let freshBtn = wrap.querySelector('[data-act="gen-fresh"]');
+  if (stale && !freshBtn) {
+    wrap.querySelector('[type="submit"]')?.insertAdjacentHTML("afterend", ` <button class="btn sm accent" type="button" data-act="gen-fresh">Fresh mix ready</button>`);
+  } else if (!stale && freshBtn) freshBtn.remove();
+  else if (freshBtn) freshBtn.disabled = homeGen.busy;
   const input = wrap.querySelector(".gen-ask input");
   if (document.activeElement !== input) input.value = homeGen.nudge;
 }
@@ -1108,17 +1248,18 @@ function syncLine() {
 }
 function pageList(tab) {
   if (tab && STATUS[tab]) listTab = tab;
-  const items = inStatus(listTab);
+  const items = sortByLastWatched(inStatus(listTab));
   const rows = () => `<div class="lib-rows">${items.slice(0, 400).map((show) => {
     const item = entry(show);
     const pct = item.status === "finished" ? 100 : item.episodes ? Math.round((item.progress / item.episodes) * 100) : 0;
-    return `<div class="lib-row" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}</span><span class="lib-badge">${statusBadge(show, { inline: true, focusable: true })}${crBadge(show, "small")}</span></div>
+    const when = watchedLabel(show);
+    return `<div class="lib-row" data-show="${esc(show.id)}" data-crl-card>${posterImg(show)}<div><b>${esc(show.title)}</b><span class="muted">${item.multi ? `${esc(item.season.label)} · ` : ""}${esc(show.genres.slice(0, 2).join(" · "))}${show.genres.length ? " · " : ""}★ ${score(show)}${when ? ` · ${esc(when)}` : ""}</span><span class="lib-badge">${statusBadge(show, { inline: true, focusable: true })}${crBadge(show, "small")}</span></div>
       <div class="lib-prog">${item.progress} of ${item.episodes || "?"} episodes<div class="meter"><i style="width:${pct}%"></i></div></div>
       <div class="lib-acts">${listTab === "watching" ? `<button class="btn sm" data-act="plus-one">+1 ep</button>` : ""}${onCrunchyroll(show) ? `<button class="btn sm accent" data-act="watch" aria-label="Play">${icon("play")}</button>` : ""}</div></div>`;
   }).join("")}</div>`;
   const body = !items.length ? `<div class="empty"><p class="muted">${listTab === "watching" ? "Nothing in progress. Press Play on any show and it lands here." : "Nothing here yet."}</p><a class="btn" href="#browse">Browse shows</a></div>`
     : listView === "grid" ? '<div id="list-grid"></div>' : rows();
-  return `<h1 class="page-title">My list</h1><p class="page-sub">Saved here first, then synced to AniList in the background.</p>
+  return `<h1 class="page-title">My list</h1><p class="page-sub">Sorted by last watched. Saved here first, then synced to AniList in the background.</p>
     ${syncLine()}
     <div class="tabs">${Object.entries(STATUS).map(([key, label]) => `<a class="chip ${key === listTab ? "on" : ""}" href="#list/${key}">${label} <b>${inStatus(key).length}</b></a>`).join("")}</div>
     ${body}`;
@@ -1462,6 +1603,7 @@ function settingsPaneAppearance() {
       <div class="seg"><button data-set-mode="light">Light</button><button data-set-mode="dark">Dark</button><button data-set-mode="system">System</button></div></div>
     <div class="set-row"><div class="grow"><b>Card size</b><small>How big title cards are on every page</small></div>
       <div class="seg"><button data-set-size="s">Small</button><button data-set-size="m">Medium</button><button data-set-size="l">Large</button></div></div>
+    <div class="set-row"><div class="grow"><b>Home banner</b><small>Big slideshow at the top of Home. Turn it off to jump straight to Continue watching</small></div><button class="switch" data-pref="banner" aria-label="Home banner"></button></div>
     <div class="set-row"><div class="grow"><b>Trailer previews</b><small>Play a muted trailer when you rest on a card</small></div><button class="switch" data-pref="previews" aria-label="Trailer previews"></button></div>
     <div class="set-row"><div class="grow"><b>English subtitles</b><small>Show English captions on trailers that have them, in card previews and the trailer window</small></div><button class="switch" data-pref="subs" aria-label="English subtitles on trailers"></button></div>
     <div class="set-row"><div class="grow"><b>Preview sound</b><small>One setting for every preview. The volume slider lives in the header</small></div><button class="switch" data-pref="sound" aria-label="Preview sound"></button></div>
@@ -1580,9 +1722,23 @@ function settingsPaneNotifications() {
   return settingsPaneEmbed("Notifications", "How episode updates and toasts behave on Crunchyroll.", "notifications");
 }
 
+function unrecommendedSettingsHtml() {
+  const list = unrecommended || [];
+  if (!list.length) {
+    return `<p class="muted">None yet. On the Home banner, use Don’t recommend to hide a title from Home rows. Search still finds it.</p>`;
+  }
+  return `<div class="unrec-list">${list.map((row) => `<div class="set-row unrec-row" data-unrec="${esc(row.id)}">
+      ${row.cover ? `<img class="unrec-cover" src="${esc(row.cover)}" alt="" referrerpolicy="no-referrer">` : `<span class="unrec-cover ph"></span>`}
+      <div class="grow"><b>${esc(row.title)}</b><small>Hidden on Home · still searchable</small></div>
+      <button class="btn sm ghost" type="button" data-act="unmute-title" data-id="${esc(row.id)}">Restore</button>
+    </div>`).join("")}</div>`;
+}
+
 function settingsPaneData() {
   return `<div class="set-card"><h3>Data &amp; privacy</h3><p>Backups and diagnostics for this browser. Sign-ins stay on this device. List sync and optional AI keys only leave when you connect AniList or save a remote model key.</p>
     <div class="stack">
+      <div class="set-row"><div class="grow"><b>My unrecommended titles</b><small>Hidden from every Home row. Still searchable and openable from Search.</small></div></div>
+      <div id="unrecommended-list">${unrecommendedSettingsHtml()}</div>
       <div class="set-row"><div class="grow"><b>Backup</b><small>Saves your matches, picks, import history and settings to a file.</small></div>
         <button class="btn ghost" type="button" data-act="backup-save">Download backup</button>
         <label class="btn ghost">Restore…<input type="file" accept=".json,application/json" data-act="backup-restore" hidden></label></div>
@@ -2157,7 +2313,10 @@ function startTips() {
 // Trailer previews
 let hoverTimer = 0;
 let playing = null;
-const ytUrl = (id, muted, subs = prefs.subs) => `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&mute=${muted ? 1 : 0}&controls=0&loop=1&playlist=${encodeURIComponent(id)}&modestbranding=1&rel=0&playsinline=1&iv_load_policy=3&${subs ? "cc_load_policy=1&cc_lang_pref=en&hl=en" : "cc_load_policy=0"}&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+const ytUrl = (id, muted, subs = prefs.subs, { start = 0, controls = false } = {}) => {
+  const at = Math.max(0, Math.floor(Number(start) || 0));
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&mute=${muted ? 1 : 0}&controls=${controls ? 1 : 0}&loop=1&playlist=${encodeURIComponent(id)}&modestbranding=1&rel=0&playsinline=1&iv_load_policy=3&${subs ? "cc_load_policy=1&cc_lang_pref=en&hl=en" : "cc_load_policy=0"}&disablekb=${controls ? 0 : 1}&fs=${controls ? 1 : 0}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}${at ? `&start=${at}` : ""}`;
+};
 
 // One global sound setting for every preview: muted or not, plus a volume.
 const soundOn = () => prefs.sound && prefs.volume > 0;
@@ -2191,9 +2350,9 @@ function toggleSound() {
   applySound();
 }
 
-// Muted YouTube embed that stays invisible until frames are actually playing, and hides
-// again just before the end, so YouTube's title bar, spinner and end screen never show.
-// YouTube's overlays are fixed pixel sizes, so small previews render the frame oversized and scale it down.
+// Muted trailer embed that stays invisible until frames are actually playing, and hides
+// again just before the end, so the embed title bar, spinner and end screen never show.
+// Embed overlays are fixed pixel sizes, so small previews render the frame oversized and scale it down.
 const players = new Set();
 function onPlayerMessage(event) {
   if (!/^https:\/\/www\.youtube(-nocookie)?\.com$/.test(event.origin)) return;
@@ -2234,7 +2393,7 @@ function player(box, id) {
     post({ event: "command", func: "setVolume", args: [prefs.volume] });
     post({ event: "command", func: loud ? "unMute" : "mute", args: [] });
   };
-  // Trailers without an English track stay plain: YouTube only shows a track the video has.
+  // Trailers without an English track stay plain: the embed only shows a track the video has.
   const applySubs = () => {
     if (!wantSubs()) return post({ event: "command", func: "unloadModule", args: ["captions"] });
     post({ event: "command", func: "loadModule", args: ["captions"] });
@@ -2252,6 +2411,8 @@ function player(box, id) {
   frame.addEventListener("load", () => {
     post({ event: "listening" });
     post({ event: "command", func: "addEventListener", args: ["onStateChange"] });
+    // Keep record.time fresh so “play full trailer” can resume from the preview.
+    post({ event: "command", func: "addEventListener", args: ["onVideoProgress"] });
   });
   players.add(record);
   box.classList.remove("live");
@@ -2259,6 +2420,7 @@ function player(box, id) {
   return {
     pause: () => { record.paused = true; post({ event: "command", func: "pauseVideo", args: [] }); },
     play: () => { record.paused = false; post({ event: "command", func: "playVideo", args: [] }); },
+    time: () => Number(record.time) || 0,
     // fade: ms to keep the muted frame while the box fades out, so a slide change dissolves instead of cutting.
     destroy: ({ fade = 0 } = {}) => {
       players.delete(record);
@@ -2290,17 +2452,55 @@ function startPreview(cardEl) {
     announcePreview();
   }, 900);
 }
-function openTrailer(id) {
+function openTrailer(id, { start = 0 } = {}) {
   stopPreview();
   const show = byId.get(id);
   if (!show?.trailer) return;
+  const at = Math.max(0, Math.floor(Number(start) || 0));
   const modal = document.createElement("div");
   modal.className = "trailer-modal";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-label", `${show.title} trailer`);
-  modal.innerHTML = `<div class="trailer-box"><iframe src="${esc(ytUrl(show.trailer, false).replace("controls=0", "controls=1"))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe><button class="nav-btn" data-act="close-trailer" aria-label="Close trailer">${icon("close")}</button></div>`;
+  modal.innerHTML = `<div class="trailer-box"><iframe src="${esc(ytUrl(show.trailer, false, prefs.subs, { start: at, controls: true }))}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe><button class="nav-btn" data-act="close-trailer" aria-label="Close trailer">${icon("close")}</button></div>`;
   document.body.append(modal);
   announcePreview();
+}
+
+const WELCOME_BY_PERIOD = {
+  morning: [
+    "Good morning. Ready to find something soft to wake up with?",
+    "Morning. I’ve been keeping your map warm.",
+    "Good morning — what are we watching before the day gets loud?",
+  ],
+  afternoon: [
+    "Good afternoon. Got a little window for the next episode?",
+    "Afternoon. Want something light, or something that pulls?",
+    "Good afternoon — your list missed you a bit.",
+  ],
+  evening: [
+    "Good evening. Perfect hour to settle in.",
+    "Evening. I’ve got the door open if you want to wander.",
+    "Good evening — what are we finishing tonight?",
+  ],
+};
+
+function welcomePeriod(date = new Date()) {
+  const hour = date.getHours();
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  return "evening";
+}
+
+function welcomeLine() {
+  const period = welcomePeriod();
+  const bank = WELCOME_BY_PERIOD[period];
+  const day = new Date().toISOString().slice(0, 10);
+  const seed = `home-banner-off:${period}:${day}`;
+  let h = 0;
+  for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const text = bank[h % bank.length];
+  const character = characterById(DEFAULT_CHARACTER_ID);
+  return { text, character, line: text, kind: "welcome", source: "local", period };
 }
 
 // Which season and episode Play should open: the next unwatched episode of the season in view, or of the show.
@@ -2469,7 +2669,7 @@ function route() {
   if (page === "browse") paintBrowse();
   if (page === "list" && listView === "grid") {
     const target = main.querySelector("#list-grid");
-    if (target) mountGrid(target, inStatus(listTab));
+    if (target) mountGrid(target, sortByLastWatched(inStatus(listTab)));
   }
   const strip = main.querySelector(".seasons");
   const on = strip?.querySelector(".season.on");
@@ -2533,9 +2733,12 @@ let wasAnilistConnected = null;
 function applyView(next) {
   if (!next) return;
   view = next;
+  if (Array.isArray(next.unrecommended)) unrecommended = next.unrecommended;
   searchView?.setView(view);
   settingsView?.setView(view);
   tastePop?.sync();
+  const unrec = document.querySelector("#unrecommended-list");
+  if (unrec) unrec.innerHTML = unrecommendedSettingsHtml();
   paintChrome();
   syncAi();
   const look = JSON.stringify(badgeOptions(settings()));
@@ -2569,9 +2772,11 @@ async function reload({ first = false } = {}) {
   }
   const hadShows = SHOWS.length > 0;
   const before = JSON.stringify(library);
+  const beforeCw = JSON.stringify(continueActivity);
   setShows(reply.shows);
   if (!writes) library = reply.library || {};
   applyContinueActivity(reply.continueActivity);
+  if (Array.isArray(reply.unrecommended)) unrecommended = reply.unrecommended;
   loaded = true;
   applyView(reply.view);
   if (first || (!hadShows && SHOWS.length)) {
@@ -2582,7 +2787,8 @@ async function reload({ first = false } = {}) {
     return;
   }
   if (!forYou.loaded) loadForYou();
-  if (JSON.stringify(library) !== before) rerender();
+  // Continue-watching activity can change without the AniList library mirror changing.
+  if (JSON.stringify(library) !== before || JSON.stringify(continueActivity) !== beforeCw) rerender();
 }
 
 function bind() {
@@ -2617,7 +2823,9 @@ function bind() {
       prefs[target.dataset.pref] = !prefs[target.dataset.pref];
       stopPreview();
       if (target.dataset.pref === "subs") for (const p of players) p.applySubs();
-      return applyTheme();
+      applyTheme();
+      if (target.dataset.pref === "banner" && document.body.dataset.page === "home") rerender(true);
+      return;
     }
     if (target.dataset.listing) {
       return setSettings({ listingSite: target.dataset.listing, listingOn: !target.classList.contains("on") });
@@ -2747,6 +2955,32 @@ function bind() {
     if (act === "ai-pick") return pickForYou(false);
     if (act === "ai-reroll") return pickForYou(true);
     if (act === "gen-clear") return loadHomeRows({ nudge: "" });
+    if (act === "gen-fresh") return loadHomeRows({ fresh: true });
+    if (act === "mute-title") {
+      const show = byId.get(target.dataset.show || target.closest("[data-show]")?.dataset.show);
+      if (!show) return;
+      return send("muteTitle", { show: { id: show.id, title: show.title, cover: show.cover || show.banner || "" } }).then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't hide that title");
+        unrecommended = reply.unrecommended || [];
+        if (reply.view) applyView(reply.view);
+        // banner.rows is usually null until a reroll; never cache [] or the hero vanishes.
+        Object.assign(banner, { rows: null, prev: null, seen: new Set(), remembered: "" });
+        toast(`Won’t recommend ${show.title} on Home`);
+        return rerender();
+      });
+    }
+    if (act === "unmute-title") {
+      return send("unmuteTitle", { id: target.dataset.id }).then((reply) => {
+        if (!reply?.ok) return toast(reply?.error || "Couldn't restore that title");
+        unrecommended = reply.unrecommended || [];
+        if (reply.view) applyView(reply.view);
+        Object.assign(banner, { rows: null, prev: null, seen: new Set(), remembered: "" });
+        const list = document.querySelector("#unrecommended-list");
+        if (list) list.innerHTML = unrecommendedSettingsHtml();
+        toast("Restored to Home recommendations");
+        return rerender();
+      });
+    }
     if (act === "ai-last") return lastForYouRoll();
     if (act === "hero-reroll") return rerollBanner();
     if (act === "hero-last") return lastBannerRoll();
@@ -3007,7 +3241,8 @@ function closeMenu(popSel, openerSel) {
 }
 
 function homePool(list) {
-  return mineHome && mineServices().length ? list.filter(onMyServices) : list;
+  const base = filterRecommended(list || [], unrecommended);
+  return mineHome && mineServices().length ? base.filter(onMyServices) : base;
 }
 function setMineHome(on) {
   mineHome = Boolean(on) && mineServices().length > 0;
@@ -3019,8 +3254,9 @@ export const api = {
   get byId() { return byId; },
   send: (...args) => send(...args),
   icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, continueWatching, seasonsOf, epLabel, seasonCount, nextSeason,
-  popular, rated, fresh, similar, forYouRail, homeRowsHtml, bannerRows, bannerRoll, aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
-  prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, onCrunchyroll, playLabel, crBadge,
+  popular, rated, fresh, similar, forYouRail, newForYouRail, homeRowsHtml, bannerRows, bannerRoll, bannerExpiresAt, updatesInLabel,
+  aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
+  prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, openTrailer, welcomeLine, onCrunchyroll, playLabel, crBadge,
   onMyServices, mineServices, homePool, mineHome: () => mineHome, setMineHome,
 };
 

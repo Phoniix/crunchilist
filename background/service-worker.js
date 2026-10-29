@@ -36,6 +36,7 @@ import {
   connectSite, disconnectSite, panelHello, siteConnections, syncSiteScripts,
 } from "./site-scripts.js";
 import { continueWatching, titleSearch } from "./title-search.js";
+import { muteTitle, setUnrecommended, unmuteTitle } from "./unrecommended.js";
 import { refreshWhereMap, whereMapStatus } from "./where-map-store.js";
 
 function seriesIdFrom(id) {
@@ -181,9 +182,10 @@ async function handle(message, sender) {
         offset: message.offset,
         limit: message.limit,
         browse: message.browse === true,
+        siteOnly: message.siteOnly === true,
       });
     case "catalogSuggest":
-      return catalogSuggest(message.query, message.chip, message.site);
+      return catalogSuggest(message.query, message.chip, message.site, { siteOnly: message.siteOnly === true });
     case "catalogRerank":
       return catalogRerank(message.query, message.chip, message.site, message.ids, { reroll: message.reroll, seen: message.seen, last: message.last, save: message.save });
     case "forYouPicksCache":
@@ -191,7 +193,12 @@ async function handle(message, sender) {
     case "searchInspired":
       return searchInspired(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh) });
     case "homeRows":
-      return homeRows(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh), nudge: typeof message.nudge === "string" ? message.nudge : undefined });
+      return homeRows(message.searches, {
+        ai: message.ai !== false,
+        fresh: Boolean(message.fresh),
+        nudge: typeof message.nudge === "string" ? message.nudge : undefined,
+        excludeIds: Array.isArray(message.excludeIds) ? message.excludeIds : [],
+      });
     case "catalogProgress":
       return catalogProgress();
     case "refreshCatalogCovers":
@@ -226,6 +233,18 @@ async function handle(message, sender) {
       return resolveAllNotices(message.action);
     case "setTaste":
       return updateTaste(message.taste);
+    case "muteTitle": {
+      const unrecommended = await muteTitle(message.show);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
+    case "unmuteTitle": {
+      const unrecommended = await unmuteTitle(message.id);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
+    case "setUnrecommended": {
+      const unrecommended = await setUnrecommended(message.list);
+      return { ok: true, unrecommended, view: await currentView() };
+    }
     case "setSettings":
       return updateSettings(message.patch || {});
     case "clearKey":
@@ -423,7 +442,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "activity") return false;
   handle(message, sender)
     .then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed" }))
+    .catch((error) => sendResponse({ ok: false, error: error?.message || "Request failed", ...(error?.code ? { code: error.code } : {}) }))
     .finally(() => watchActivity());
   return true;
 });

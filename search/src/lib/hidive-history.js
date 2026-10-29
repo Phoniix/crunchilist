@@ -39,13 +39,20 @@ export function hidiveEntries(body) {
   });
 }
 
+// True once HIDIVE treats the entry as done: watchProgress gone (finished) or at least FINISHED of the runtime.
+export function hidiveEntryFinished(entry) {
+  if (!entry?.id || !entry.at) return false;
+  if (entry.position == null) return true;
+  return entry.duration > 0 && entry.position / entry.duration >= FINISHED;
+}
+
 // Entries -> rows like Crunchyroll's, newest first. HIDIVE drops watchProgress once an episode is finished and keeps
 // it while one is part-watched, so an entry without it counts, and one with it counts from 85% on.
 export function hidiveRows(entries) {
   const rows = [];
   for (const entry of entries || []) {
     if (!entry?.id || !entry.at) continue;
-    const watched = entry.duration > 0 && entry.position != null ? entry.position / entry.duration >= FINISHED : true;
+    const watched = hidiveEntryFinished(entry);
     const key = `${entry.id}:${entry.at}`;
     if (!entry.episodic) {
       const series = cleanSeries(entry.title);

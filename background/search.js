@@ -5,7 +5,7 @@ import {
   displayPoster,
   promptFallbackBrief,
 } from "../lib/catalog.js";
-import { availability } from "../lib/catalogs.js";
+import { availability, matchesWhereSite } from "../lib/catalogs.js";
 import { catalogOnlyShows } from "../lib/catalog-shows.js";
 import { pickPlayLink } from "../lib/play-url.js";
 import { serviceById } from "../lib/services.js";
@@ -22,9 +22,15 @@ import {
   HOME_ROWS_TTL_MS,
   needsRefresh,
   parseHomeRows,
-  recentThemeTokens,
+  recentAnchors,
+  recentFeaturedIds,
+  recentHardTokens,
+  recentSoftTokens,
   recordCycle,
+  rotateWatched,
+  sessionMood,
 } from "../lib/home-rows.js";
+import { unrecommendedIds } from "../lib/unrecommended.js";
 import { cleanSearches, inspiredRequest, interleave, recentlyWatched } from "../lib/inspired.js";
 import { activeEntries, statusForSeries } from "../lib/library.js";
 import { hasIntent, parseQuery, placeVariants } from "../lib/query.js";
@@ -37,6 +43,7 @@ import { loadServiceCatalogs } from "./catalog-store.js";
 import { loadDead } from "./dead-links.js";
 import { askJson, pickWithModel } from "./model.js";
 import { loadCatalog, loadMedia, loadState } from "./store.js";
+import { loadUnrecommended } from "./unrecommended.js";
 import { loadGaps } from "./where-map-store.js";
 
 const CATALOG_CHIPS = new Set(["unwatched", "one-cour", "long", "movie", "in-progress", "plan", "new"]);
@@ -188,26 +195,26 @@ function indexFor(state, catalog, pool, sourceMap = sourcesCache.map) {
   return buildIndex([...cached.docs, ...extras.map((item) => docFor(state, item, sourceMap))]);
 }
 
-function siteAllowed(doc, site) {
-  return !site || site === "all" || (doc.sources || []).includes(site);
+function siteAllowed(doc, site, { only = false } = {}) {
+  return matchesWhereSite(doc.sources || [], site, { only });
 }
 
-function rankPool(state, catalog, pool, text, { scoreFor, mode = "full", limit = 24, site = "", sourceMap } = {}) {
+function rankPool(state, catalog, pool, text, { scoreFor, mode = "full", limit = 24, site = "", siteOnly = false, sourceMap } = {}) {
   const index = indexFor(state, catalog, pool, sourceMap);
   const allowedIds = new Set(pool.map((item) => item.id));
   return searchIndex(index, parseQuery(text), {
     scoreFor: (doc) => scoreFor(doc.item),
     statusFor: (doc) => statusFor(state, doc.item),
-    allowed: (doc) => allowedIds.has(doc.id) && siteAllowed(doc, site),
+    allowed: (doc) => allowedIds.has(doc.id) && siteAllowed(doc, site, { only: siteOnly }),
     favorNamed: state.settings.favorNamed !== false,
     mode,
     limit,
   }).results;
 }
 
-function filterPoolBySite(state, pool, site, sourceMap) {
+function filterPoolBySite(state, pool, site, sourceMap, { only = false } = {}) {
   if (!site || site === "all") return pool;
-  return pool.filter((item) => sourcesFor(state, item, sourceMap).includes(site));
+  return pool.filter((item) => matchesWhereSite(sourcesFor(state, item, sourceMap), site, { only }));
 }
 
 function withoutAvoids(state, items) {
@@ -430,8 +437,8 @@ function sortItems(state, items, sort) {
 let lastList = { key: "", at: 0, items: [], rerank: false };
 const LIST_TTL_MS = 120_000;
 
-async function orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor, sourceMap) {
-  const key = JSON.stringify([text, chip, site, sort, tags, without, catalog.updatedAt, state.settings.hideWatched, state.settings.favorNamed, sourcesCache.key]);
+async function orderedItems(state, catalog, { text, chip, site, siteOnly = false, sort, tags, without, offset }, scoreFor, sourceMap) {
+  const key = JSON.stringify([text, chip, site, Boolean(siteOnly), sort, tags, without, catalog.updatedAt, state.settings.hideWatched, state.settings.favorNamed, sourcesCache.key]);
   if (offset > 0 && lastList.key === key && Date.now() - lastList.at < LIST_TTL_MS) return lastList;
   const forYou = forYouIdsFor(state, catalog, scoreFor);
   const skip = text ? [...new Set([...without, ...parseQuery(text).without])] : without;
@@ -440,11 +447,12 @@ async function orderedItems(state, catalog, { text, chip, site, sort, tags, with
     (await collectSearchItems(state, catalog, text, chip, offset === 0)).filter((item) => hasTags(state, item, tags, skip)),
     site,
     sourceMap,
+    { only: siteOnly },
   );
   let items;
   let rerank = false;
   if (text) {
-    const ranked = rankPool(state, catalog, pool, text, { scoreFor, limit: 2000, site, sourceMap });
+    const ranked = rankPool(state, catalog, pool, text, { scoreFor, limit: 2000, site, siteOnly, sourceMap });
     items = ranked.map((entry) => entry.doc.item);
     const parsed = parseQuery(text);
     const words = text.split(/\s+/).filter(Boolean).length;
@@ -462,6 +470,7 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
   const catalog = await searchCatalog(state, site);
   const text = String(query || "").trim();
   const sort = ["popular", "score", "newest", "title", "shortest", "longest"].includes(options.sort) ? options.sort : "relevance";
+  const siteOnly = Boolean(options.siteOnly) && Boolean(site) && site !== "all";
   const tags = cleanTags(options.tags);
   const without = cleanTags(options.without);
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
@@ -495,7 +504,7 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
     };
   }
   const forYou = forYouIdsFor(state, catalog, scoreFor);
-  const list = await orderedItems(state, catalog, { text, chip, site, sort, tags, without, offset }, scoreFor, sourceMap);
+  const list = await orderedItems(state, catalog, { text, chip, site, siteOnly, sort, tags, without, offset }, scoreFor, sourceMap);
   const chosen = list.items.slice(offset, offset + limit);
   const total = list.items.length;
   let note = "";
@@ -517,16 +526,17 @@ export async function catalogSearch(query, chip, site = "", options = {}) {
   };
 }
 
-export async function catalogSuggest(query, chip, site = "") {
+export async function catalogSuggest(query, chip, site = "", options = {}) {
   const text = String(query || "").trim();
   if (!text) return { suggestions: [] };
   const state = await loadState();
   const sourceMap = await loadSourceMap();
   const catalog = await searchCatalog(state, site);
+  const siteOnly = Boolean(options.siteOnly) && Boolean(site) && site !== "all";
   const { weights, scoreFor } = tasteRank(state);
   const forYou = forYouIdsFor(state, catalog, scoreFor);
-  const pool = filterPoolBySite(state, await collectSearchItems(state, catalog, text, chip, false), site, sourceMap);
-  const chosen = rankPool(state, catalog, pool, text, { scoreFor, mode: "title", limit: 6, site, sourceMap }).map((entry) => entry.doc.item);
+  const pool = filterPoolBySite(state, await collectSearchItems(state, catalog, text, chip, false), site, sourceMap, { only: siteOnly });
+  const chosen = rankPool(state, catalog, pool, text, { scoreFor, mode: "title", limit: 6, site, siteOnly, sourceMap }).map((entry) => entry.doc.item);
   return { suggestions: chosen.map((item) => presentSuggestion(state, item, forYou, weights)) };
 }
 
@@ -712,25 +722,44 @@ function likedTags(state, weights, limit = 8) {
     .map(([label]) => label);
 }
 
-async function homeThemes(state, inputs, wantAi, { recentTokens = [], recentThemes = [], cycle = 0 } = {}) {
+async function homeThemes(state, inputs, wantAi, {
+  recentTokens = [],
+  hardTokens = [],
+  recentThemes = [],
+  cycle = 0,
+  mood = "",
+  anchors = [],
+} = {}) {
+  const watched = rotateWatched(inputs.watched, cycle, anchors);
+  const body = { ...inputs, watched, sessionMood: mood };
   if (wantAi) {
     const prompt = buildHomeRowsPrompt({
       profile: compactProfile(state.taste),
-      ...inputs,
+      ...body,
       recentThemes,
     });
     const answer = await askJson(state, {
       ...prompt,
       schema: HOME_ROWS_SCHEMA,
-      parse: (text) => parseHomeRows(text, state.taste?.hardAvoids, { recentTokens }),
+      parse: (text) => parseHomeRows(text, state.taste?.hardAvoids, { recentTokens, hardTokens }),
     });
     if (answer.ok) return { themes: answer.parsed.rows, by: answer.by || "", ai: true };
   }
-  return { themes: fallbackThemes({ ...inputs, recentTokens, cycle }), by: "", ai: false };
+  return {
+    themes: fallbackThemes({
+      ...body,
+      recentTokens,
+      hardTokens,
+      cycle,
+      recentAnchors: anchors,
+    }),
+    by: "",
+    ai: false,
+  };
 }
 
 // nudge: text the viewer typed to steer the rows. undefined keeps the current one; "" clears it.
-export async function homeRows(searches, { ai = true, fresh = false, nudge } = {}) {
+export async function homeRows(searches, { ai = true, fresh = false, nudge, excludeIds = [] } = {}) {
   const state = await loadState();
   const catalog = await searchCatalog(state);
   const { weights, scoreFor } = tasteRank(state);
@@ -758,17 +787,37 @@ export async function homeRows(searches, { ai = true, fresh = false, nudge } = {
   const kept = saved?.nudge && now < (saved.nudgeUntil || 0) ? saved.nudge : "";
   inputs.nudge = typed ? cleanNudge(nudge) : kept;
   const nudgeUntil = !inputs.nudge ? 0 : typed ? now + HOME_ROWS_TTL_MS : saved.nudgeUntil;
+  const muted = unrecommendedIds(await loadUnrecommended());
   if (fresh || inputs.nudge !== (saved?.nudge || "") || needsRefresh(saved, signature, now)) {
     if (typed) await homeRowsInFlight?.catch(() => {});
     homeRowsInFlight ||= (async () => {
       const history = cycleHistory(saved);
-      const recentTokens = recentThemeTokens(history);
+      const softTokens = recentSoftTokens(history);
+      const hardTokens = recentHardTokens(history);
       const recentThemes = history.flatMap((entry) => entry.queries || []).slice(-36);
       const cycle = history.length;
-      const made = await homeThemes(state, inputs, wantAi, { recentTokens, recentThemes, cycle });
-      const nextHistory = recordCycle(made.themes, history, now);
+      const mood = sessionMood(now);
+      const anchors = recentAnchors(history);
+      const made = await homeThemes(state, inputs, wantAi, {
+        recentTokens: softTokens,
+        hardTokens,
+        recentThemes,
+        cycle,
+        mood,
+        anchors,
+      });
+      const demoteIds = recentFeaturedIds(history);
+      const pool = withoutAvoids(state, catalog.items || []).filter((item) => ["unwatched", "plan"].includes(statusFor(state, item)));
+      const filled = fillThemes(
+        made.themes,
+        (query) => rankPool(state, catalog, pool, query, { scoreFor, limit: 40 }).map((entry) => entry.doc.item.id),
+        { demoteIds, excludeIds: [...muted, ...(excludeIds || [])] },
+      );
+      const nextHistory = recordCycle(made.themes, history, now, filled.flatMap((row) => row.ids || []));
       const record = {
-        ...made,
+        themes: made.themes,
+        by: made.by,
+        ai: made.ai,
         signature,
         nudge: inputs.nudge,
         nudgeUntil,
@@ -777,12 +826,28 @@ export async function homeRows(searches, { ai = true, fresh = false, nudge } = {
         expiresAt: expiryFor({ wantedAi: wantAi, gotAi: made.ai, now }),
       };
       await chrome.storage.local.set({ [HOME_ROWS_KEY]: record }).catch(() => {});
-      return record;
+      return { ...record, rows: filled };
     })().finally(() => { homeRowsInFlight = null; });
     saved = await homeRowsInFlight;
+    if (saved.rows) {
+      return {
+        rows: saved.rows,
+        by: saved.by || "",
+        ai: Boolean(saved.ai),
+        nudge: saved.nudge || "",
+        createdAt: saved.createdAt,
+        expiresAt: saved.expiresAt,
+      };
+    }
   }
+  const history = cycleHistory(saved);
+  const demoteIds = recentFeaturedIds(history);
   const pool = withoutAvoids(state, catalog.items || []).filter((item) => ["unwatched", "plan"].includes(statusFor(state, item)));
-  const rows = fillThemes(saved.themes, (query) => rankPool(state, catalog, pool, query, { scoreFor, limit: 40 }).map((entry) => entry.doc.item.id));
+  const rows = fillThemes(
+    saved.themes,
+    (query) => rankPool(state, catalog, pool, query, { scoreFor, limit: 40 }).map((entry) => entry.doc.item.id),
+    { demoteIds, excludeIds: [...muted, ...(excludeIds || [])] },
+  );
   return { rows, by: saved.by || "", ai: Boolean(saved.ai), nudge: saved.nudge || "", createdAt: saved.createdAt, expiresAt: saved.expiresAt };
 }
 
@@ -806,11 +871,14 @@ export async function forYouPicksCache() {
     const saved = (await chrome.storage.local.get(FOR_YOU_PICKS_KEY))[FOR_YOU_PICKS_KEY];
     if (!saved || !Array.isArray(saved.results) || !saved.results.length) return { ok: true, picks: null };
     const age = Date.now() - Number(saved.savedAt || 0);
+    const expiresAt = Number(saved.savedAt || 0) + FOR_YOU_PICKS_TTL_MS;
     return {
       ok: true,
       picks: saved.results,
       by: saved.by || "",
       savedAt: saved.savedAt || 0,
+      expiresAt,
+      age,
       fresh: age >= 0 && age <= FOR_YOU_PICKS_TTL_MS,
       expired: age > FOR_YOU_PICKS_TTL_MS,
     };

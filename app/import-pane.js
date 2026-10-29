@@ -391,7 +391,11 @@ export async function handleImportAct(act, target, { send, toast, refresh, confi
   const call = async (type, extra) => {
     const reply = await send(type, extra);
     if (reply?.ok) await refresh();
-    else if (reply?.code !== "tab") toast(reply?.error || "That didn't work");
+    else {
+      // Always refresh so a failed job's error/message replaces the loading bar.
+      await refresh();
+      if (reply?.code !== "tab") toast(reply?.error || "That didn't work");
+    }
     return reply;
   };
   if (act === "import-all") {

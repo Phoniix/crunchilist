@@ -15,6 +15,7 @@ import { collectTagSuggestions } from "../lib/taste.js";
 import { retryPendingSync, syncStatus } from "./anilist-sync.js";
 import { noteContinueFromCrObservation } from "./continue-activity.js";
 import { anilist, delay, loadCatalog, loadState, saveState } from "./store.js";
+import { loadUnrecommended } from "./unrecommended.js";
 
 let enrichToken = 0;
 
@@ -90,7 +91,9 @@ export function makeView(state, catalog, observation = state.lastObservation) {
 
 export async function currentView(state = null) {
   const loaded = state || await loadState();
-  return makeView(loaded, await loadCatalog());
+  const view = makeView(loaded, await loadCatalog());
+  view.unrecommended = await loadUnrecommended();
+  return view;
 }
 
 export async function pageUpdate(observation, sender) {

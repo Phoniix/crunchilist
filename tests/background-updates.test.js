@@ -29,6 +29,7 @@ globalThis.chrome = {
   },
   tabs: {
     get: async (id) => ({ id }),
+    query: async () => [],
     sendMessage: async (_tab, message) => replies.find((reply) => reply.type === message.type)?.reply ?? null,
   },
   action: { setBadgeText: async () => {} },

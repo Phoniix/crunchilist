@@ -332,6 +332,15 @@ export const catalogStamp = (catalogs = {}, connected = [], { matches = {}, hidd
   ...hidden.map((site) => site.toLowerCase()).sort(),
 ].join("-");
 
+/** Where chips: titles on `site`, or (when only) titles whose known sources are that site alone. */
+export function matchesWhereSite(sources, site, { only = false } = {}) {
+  if (!site || site === "all") return true;
+  const list = [...new Set((Array.isArray(sources) ? sources : []).map((id) => String(id || "").toLowerCase()).filter(Boolean))];
+  const want = String(site).toLowerCase();
+  if (!list.includes(want)) return false;
+  return only ? list.length === 1 : true;
+}
+
 // True when every place a show is known to stream (AniList's links, catalogs, watch history) is switched off.
 // A show with no known place stays: there's nothing to say it's only on those sites.
 // everywhere: availability() without hidden, so a switched-off service's catalog still counts here.
@@ -350,7 +359,7 @@ export function onlyOnHidden(show, everywhere, hidden = []) {
 export function withCatalogLinks(show, found, { dead = {} } = {}) {
   const here = found?.[show?.anilistId];
   const streaming = (show.streaming || [])
-    .filter((link) => link?.url && !dead[link.url])
+    .filter((link) => link?.url && !dead[link.url] && serviceForSite(link.site))
     .map((link) => ({ ...link }));
   if (!here?.length) return streaming.length === (show.streaming || []).length ? show : { ...show, streaming };
   for (const { service, url, checked, seen } of here) {
