@@ -1,15 +1,15 @@
 {
  "source": "api",
  "shows": 283,
- "links": 1507,
+ "links": 1517,
  "reasons": {
   "incomplete: uploads run N min against N min episodes": 78,
-  "channel page, no episode list": 193,
-  "playlist empty or gone": 90,
-  "no usable uploads": 274,
+  "channel page, no episode list": 200,
+  "playlist empty or gone": 91,
+  "no usable uploads": 275,
   "incomplete: N of N episodes": 14,
   "N uploads for N episodes": 103,
-  "upload titles aren't in English": 388,
+  "upload titles aren't in English": 389,
   "incomplete: N uploads for N episodes": 14,
   "incomplete: missing episodes N of N": 30,
   "incomplete: missing episode N of N": 11,
@@ -310,8 +310,8 @@
    "title": "Detective Conan",
    "url": "https://www.youtube.com/@conan_anime",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-19",
-   "sig": "RELEASING|TV||25|1218|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||25|1219|"
   },
   {
    "anilistId": 238,
@@ -2024,6 +2024,14 @@
    "sig": "FINISHED|ONA|5|5||"
   },
   {
+   "anilistId": 6609,
+   "title": "Pucca",
+   "url": "https://youtube.com/playlist?list=PLq9qq7ASaOalLWd9GgIgfAC-QTk_J5Q6G&si=zQdC4kzkNYyZkTU5",
+   "reason": "playlist empty or gone",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|26|23||"
+  },
+  {
    "anilistId": 6675,
    "title": "Redline",
    "url": "https://www.youtube.com/watch?v=9NIor7m_tnI",
@@ -2092,8 +2100,8 @@
    "title": "Doraemon (2005)",
    "url": "https://youtube.com/@Doraemon_F_Channel",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||25|939|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||25|940|"
   },
   {
    "anilistId": 8937,
@@ -2670,6 +2678,14 @@
    "sig": "FINISHED|TV|22|23||"
   },
   {
+   "anilistId": 20757,
+   "title": "Girl Friend BETA",
+   "url": "https://youtube.com/@GFkariOfficial",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|12|24||"
+  },
+  {
    "anilistId": 20789,
    "title": "The Seven Deadly Sins",
    "url": "https://youtube.com/playlist?list=PLwLSw1_eDZl3572W1HJjIkZyW-0GGVUVq&si=mP5IwBPobYKC27_K",
@@ -3209,6 +3225,22 @@
    "reason": "no usable uploads (3 too short)",
    "checkedAt": "2026-10-13",
    "sig": "FINISHED|TV|13|24||3"
+  },
+  {
+   "anilistId": 21648,
+   "title": "Aikatsu Stars!",
+   "url": "https://youtube.com/@aikatsu_channel",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|50|24||"
+  },
+  {
+   "anilistId": 21648,
+   "title": "Aikatsu Stars!",
+   "url": "https://youtube.com/playlist?list=PLyqyx_I-liu1sMghe6i_pwY47pRtMIw_r",
+   "reason": "no usable uploads (85 too short)",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|50|24||"
   },
   {
    "anilistId": 21673,
@@ -4408,6 +4440,14 @@
    "sig": "FINISHED|TV_SHORT|12|13||"
   },
   {
+   "anilistId": 105310,
+   "title": "Fire Force",
+   "url": "https://youtube.com/playlist?list=PLIGSjnmKivFcknx6K0AId_w6C9umJwy95",
+   "reason": "upload titles aren't in English",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|24|24||"
+  },
+  {
    "anilistId": 105333,
    "title": "Dr. STONE",
    "url": "https://youtube.com/playlist?list=PLxSscENEp7JiMf-7_IKknXJngJrCesKj2",
@@ -4439,8 +4479,8 @@
    "missing": [
     52
    ],
-   "checkedAt": "2026-10-26",
-   "sig": "FINISHED|TV|52|24||68"
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|52|24||69"
   },
   {
    "anilistId": 105932,
@@ -5361,8 +5401,8 @@
    "title": "Holo no Graffiti",
    "url": "https://www.youtube.com/playlist?list=PL1NeGg1woXqngQytLzL8lJJLYwmzk1Wuq",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|ONA||2|390|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|ONA||2|391|"
   },
   {
    "anilistId": 118399,
@@ -5851,6 +5891,14 @@
    "reason": "no usable uploads (1 too short)",
    "checkedAt": "2026-10-13",
    "sig": "RELEASING|ONA||2||"
+  },
+  {
+   "anilistId": 130003,
+   "title": "BOCCHI THE ROCK!",
+   "url": "https://www.youtube.com/@btr_anime_official",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|12|24||"
   },
   {
    "anilistId": 130305,
@@ -7616,15 +7664,15 @@
    "anilistId": 158871,
    "title": "Pokémon Horizons: The Series",
    "url": "https://www.youtube.com/playlist?list=PLQWzKIaERirxCR8iFD5pA2MapjJOUIwre",
-   "reason": "incomplete: uploads run 11 min against 24 min episodes (clips or digests?) (dropped 142 too short, 1 private or deleted)",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|155|208"
+   "reason": "incomplete: uploads run 11 min against 24 min episodes (clips or digests?) (dropped 143 too short)",
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|156|209"
   },
   {
    "anilistId": 158871,
    "title": "Pokémon Horizons: The Series",
    "url": "https://www.youtube.com/playlist?list=PLQWzKIaERirzpNjE9bXHgOOdujzmebHGV",
-   "reason": "incomplete: missing episodes 3-154 of 154",
+   "reason": "incomplete: missing episodes 3-155 of 155",
    "missing": [
     3,
     4,
@@ -7657,8 +7705,8 @@
     31,
     32
    ],
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|155|4"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|156|4"
   },
   {
    "anilistId": 158926,
@@ -7681,8 +7729,8 @@
    "title": "Reincarnated as a Sword Season 2",
    "url": "https://www.youtube.com/playlist?list=PLcSpWjb7H0lk",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|ONA|12|23|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|ONA|12|23|6|"
   },
   {
    "anilistId": 159322,
@@ -7796,16 +7844,16 @@
    "title": "MAGICAL GIRL RAISING PROJECT restart",
    "url": "https://www.youtube.com/@mahoiku2official",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|6|"
   },
   {
    "anilistId": 160803,
    "title": "MAGICAL GIRL RAISING PROJECT restart",
    "url": "https://www.youtube.com/playlist?list=PLTPDFXU5mBC8",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|6|"
   },
   {
    "anilistId": 160900,
@@ -8046,6 +8094,14 @@
    "reason": "no usable uploads (1 too short)",
    "checkedAt": "2026-10-13",
    "sig": "FINISHED|ONA|1|2||"
+  },
+  {
+   "anilistId": 165253,
+   "title": "BOCCHI THE ROCK! Recap Part 1",
+   "url": "https://www.youtube.com/@btr_anime_official",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|MOVIE|1|92||"
   },
   {
    "anilistId": 165314,
@@ -8419,6 +8475,14 @@
    "sig": "FINISHED|TV|12|24||"
   },
   {
+   "anilistId": 171099,
+   "title": "BOCCHI THE ROCK! Recap Part 2",
+   "url": "https://www.youtube.com/@btr_anime_official",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|MOVIE|1|77||"
+  },
+  {
    "anilistId": 171400,
    "title": "Puniru is a Kawaii Slime",
    "url": "https://www.youtube.com/playlist?list=PLxSscENEp7JhstXla-FpyHRj3shzQqLio",
@@ -8478,9 +8542,9 @@
    "anilistId": 172192,
    "title": "A Returner's Magic Should be Special Season 2",
    "url": "https://www.youtube.com/playlist?list=PLA83ev7IM4T4",
-   "reason": "no usable uploads (14 too short, 1 private or deleted)",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|||4|15"
+   "reason": "no usable uploads (15 too short)",
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|||5|15"
   },
   {
    "anilistId": 172258,
@@ -8760,9 +8824,9 @@
    "anilistId": 177634,
    "title": "Ace of the Diamond act II -Second Season-",
    "url": "https://www.youtube.com/playlist?list=PLwLSw1_eDZl3eQLL5RrE-_B7D_vmJs1NH",
-   "reason": "incomplete: 16 uploads for 13 episodes (mixed seasons or extras?)",
-   "checkedAt": "2026-10-26",
-   "sig": "FINISHED|TV|13|24||16"
+   "reason": "incomplete: 17 uploads for 13 episodes (mixed seasons or extras?)",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|13|24||17"
   },
   {
    "anilistId": 177689,
@@ -8825,8 +8889,8 @@
    "title": "Tokyo Revengers: War of the Three Titans Arc",
    "url": "https://www.youtube.com/@animetoman",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|13||5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|13||6|"
   },
   {
    "anilistId": 178312,
@@ -8900,8 +8964,8 @@
    "title": "Magic Knight Rayearth (2026)",
    "url": "https://www.youtube.com/playlist?list=PLVs8KIyueUjWQEJ83sa8kpo4jIjWh_aWT",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|||4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|||5|"
   },
   {
    "anilistId": 178869,
@@ -8987,8 +9051,8 @@
    "title": "DARK MACHINE THE ANIMATION",
    "url": "https://www.youtube.com/playlist?list=PLfJRa647ejKU",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|11||3|3"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|11||4|3"
   },
   {
    "anilistId": 179885,
@@ -9112,8 +9176,8 @@
    "title": "Romelia War Chronicle",
    "url": "https://www.youtube.com/@anime.romeliasenki",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|ONA|24|24|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|ONA|12|24|6|"
   },
   {
    "anilistId": 181182,
@@ -9427,8 +9491,8 @@
    "title": "As a Reincarnated Aristocrat, I'll Use My Appraisal Skill to Rise in the World Season 3",
    "url": "https://www.youtube.com/playlist?list=PLfEwGegYhFGY",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|6|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|7|"
   },
   {
    "anilistId": 185801,
@@ -9443,8 +9507,8 @@
    "title": "BLEACH: Thousand-Year Blood War - The Calamity",
    "url": "https://youtube.com/@official_bleach",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-19",
-   "sig": "RELEASING|TV|10||10|"
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|10|24||"
   },
   {
    "anilistId": 185965,
@@ -9471,6 +9535,14 @@
    "sig": "FINISHED|ONA|12|24||"
   },
   {
+   "anilistId": 186712,
+   "title": "Bocchi the Rock! 2nd Season",
+   "url": "https://www.youtube.com/@btr_anime_official",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "NOT_YET_RELEASED|TV||||"
+  },
+  {
    "anilistId": 186863,
    "title": "The Cat and the Dragon",
    "url": "https://www.youtube.com/playlist?list=PLW7w7NrGJ9As",
@@ -9483,16 +9555,16 @@
    "title": "Gensou Suikoden",
    "url": "https://www.youtube.com/@SuikodenTheAnime-EN/videos",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|23||4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|23||5|"
   },
   {
    "anilistId": 187316,
    "title": "Gensou Suikoden",
    "url": "https://www.youtube.com/playlist?list=PLVEC_1AvVqqE",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|23||4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|23||5|"
   },
   {
    "anilistId": 187387,
@@ -9538,9 +9610,9 @@
    "anilistId": 188388,
    "title": "DIGIMON BEATBREAK",
    "url": "https://www.youtube.com/playlist?list=PLrx8BnXgzlahCbGXUV665zqJZNkuG-W5c",
-   "reason": "no usable uploads (142 too short, 3 private or deleted)",
-   "checkedAt": "2026-10-26",
-   "sig": "FINISHED|TV|49|24||145"
+   "reason": "no usable uploads (143 too short, 3 private or deleted)",
+   "checkedAt": "2026-11-02",
+   "sig": "FINISHED|TV|49|24||146"
   },
   {
    "anilistId": 188394,
@@ -9635,8 +9707,8 @@
    "title": "Aoashi Season 2",
    "url": "https://www.youtube.com/playlist?list=PLYavYYpKm3cc",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|24|24|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|24|24|6|"
   },
   {
    "anilistId": 191832,
@@ -9921,8 +9993,8 @@
    "title": "Uncle's Obsession with Cute Things",
    "url": "https://www.youtube.com/playlist?list=PLTx6Ft3jb3mg",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|12|24|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|12|24|6|"
   },
   {
    "anilistId": 202269,
@@ -9979,9 +10051,9 @@
    "anilistId": 204389,
    "title": "A Wild Last Boss Appeared! Season 2",
    "url": "https://www.youtube.com/playlist?list=PLbuF5Onrcu9fs9Jo_IR9nZ7WrulQuDup-",
-   "reason": "incomplete: 17 uploads for 5 episodes (mixed seasons or extras?)",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|ONA||24|6|"
+   "reason": "incomplete: 18 uploads for 6 episodes (mixed seasons or extras?)",
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|ONA||24|7|"
   },
   {
    "anilistId": 204431,
@@ -10004,36 +10076,36 @@
    "title": "TOUGEN ANKI: Nikko Kegon Falls Arc",
    "url": "https://www.youtube.com/@tougen_anki",
    "reason": "channel page, no episode list",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|12|24|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|12|24|6|"
   },
   {
    "anilistId": 205909,
    "title": "Firefly Wedding",
    "url": "https://www.youtube.com/playlist?list=PLFWKcE-zQuBY",
-   "reason": "incomplete: missing episodes 2-3 of 3 (dropped 7 too short, 2 private or deleted)",
+   "reason": "incomplete: missing episodes 3-4 of 4 (dropped 7 too short, 2 private or deleted)",
    "missing": [
-    2,
-    3
+    3,
+    4
    ],
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|12|23|4|10"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|12|23|5|11"
   },
   {
    "anilistId": 206401,
    "title": "FX Fighter Kurumi-chan",
    "url": "https://www.youtube.com/playlist?list=PLTQxh5nM9A2w",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV|12|24|5|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV|12|24|6|"
   },
   {
    "anilistId": 206814,
    "title": "Dragon Ball Super: Beerus",
    "url": "https://www.youtube.com/playlist?list=PLfYn0mCB-Fx0",
-   "reason": "no usable uploads (8 too short)",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||23|4|8"
+   "reason": "no usable uploads (12 too short)",
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||23|5|12"
   },
   {
    "anilistId": 206951,
@@ -10056,8 +10128,8 @@
    "title": "The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life",
    "url": "https://www.youtube.com/playlist?list=PLcCDyXGi-y_w",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|TV||24|4|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|TV||24|5|"
   },
   {
    "anilistId": 207385,
@@ -10072,8 +10144,8 @@
    "title": "So What's Wrong with Getting Reborn as a Goblin?",
    "url": "https://www.youtube.com/playlist?list=PLYld27spJ0aA",
    "reason": "upload titles aren't in English",
-   "checkedAt": "2026-10-26",
-   "sig": "RELEASING|ONA||24|6|"
+   "checkedAt": "2026-11-02",
+   "sig": "RELEASING|ONA||24|7|"
   },
   {
    "anilistId": 209504,
@@ -10130,6 +10202,14 @@
    "reason": "channel page, no episode list",
    "checkedAt": "2026-10-26",
    "sig": "NOT_YET_RELEASED|||||"
+  },
+  {
+   "anilistId": 219282,
+   "title": "Bocchi the Rock!: Hoshi no Ashiato",
+   "url": "https://www.youtube.com/@btr_anime_official",
+   "reason": "channel page, no episode list",
+   "checkedAt": "2026-11-02",
+   "sig": "NOT_YET_RELEASED|MOVIE|1|||"
   }
  ],
  "unmatched": [
@@ -10150,6 +10230,13 @@
    "playlist": "PLXd8wH_6WFwI",
    "title": "【OSHI NO KO】| 【我推的孩子】【Limited-Time Free to Watch】【Ani-One Asia】",
    "reason": "no show name in the playlist title"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLdtfQTGSD1Uw",
+   "title": "Explore the Universal Century for 60 seconds",
+   "reason": "no sure AniList match for \"Explore the Universal Century for 60 seconds\"",
+   "checkedAt": "2026-10-26"
   },
   {
    "channel": "GUNDAM CHANNEL INTL",
@@ -11931,6 +12018,62 @@
    "title": "线上游戏的老婆不可能是女生? [中字]",
    "reason": "no sure AniList match for \"线上游戏的老婆不可能是女生?\"",
    "checkedAt": "2026-10-19"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLPWOfWsVnDz8",
+   "title": "Tales of Wedding Rings｜婚戒物語【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Tales of Wedding Rings｜婚戒物語\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLK4ZfagmZTjQ",
+   "title": "Super Lovers｜超級戀人【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Super Lovers｜超級戀人\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLBRNdiO3lfZ4",
+   "title": "Megaton Musashi｜百萬噸級武藏【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Megaton Musashi｜百萬噸級武藏\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLWhSdLR6m0WA",
+   "title": "Sengoku Youko｜戰國妖狐【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Sengoku Youko｜戰國妖狐\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLBlsgmewNdD8",
+   "title": "Mobile Suit Gundam The Witch From Mercury｜機動戰士鋼彈 水星的魔女【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Mobile Suit Gundam The Witch From Mercury｜機動戰士鋼彈 水星的魔女\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLZ8zpbdLyGpU",
+   "title": "Metallic Rouge｜金屬口紅【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Metallic Rouge｜金屬口紅\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLYmDIFdECuis",
+   "title": "Megalobox｜機甲拳擊【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Megalobox｜機甲拳擊\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLPiZwymWQeZw",
+   "title": "Yuru Camp｜搖曳露營【Ani-One Asia】",
+   "reason": "no sure AniList match for \"Yuru Camp｜搖曳露營\"",
+   "checkedAt": "2026-10-26"
   },
   {
    "channel": "Ani-One Asia",
@@ -14055,6 +14198,13 @@
   },
   {
    "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7JiAoaxImun4H_FRDkFI9k3Q",
+   "title": "《關於我在無意間被隔壁的天使變成廢柴這件事》|《The Angel Next Door Spoils Me Rotten》",
+   "reason": "no sure AniList match for \"《關於我在無意間被隔壁的天使變成廢柴這件事》|《The Angel Next Door Spoils Me Rotten》\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
    "playlist": "PLxSscENEp7JhcDltax70U8SLMixaRLsCE",
    "title": "《排球少年!!》第四季 |《Haikyu!!》S4【Ani-One Asia ULTRA】",
    "reason": "no sure AniList match for \"《排球少年!!》第四季 |《Haikyu!!》S4\"",
@@ -14223,6 +14373,13 @@
   },
   {
    "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7Jhkr9k44Isa7FVdZ0UTZOL-",
+   "title": "《不要欺負我，長瀞同學 2nd Attack》|《Don’t Toy with me, Miss Nagatoro 2nd Attack》",
+   "reason": "no sure AniList match for \"《不要欺負我，長瀞同學 2nd Attack》|《Don’t Toy with me, Miss Nagatoro 2nd Attack》\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
    "playlist": "PLxSscENEp7JibnhDWLCxfNSDVMhqVpRv4",
    "title": "《不當哥哥了！》|《ONIMAI: I’m Now Your Sister!》【Ani-One Asia ULTRA】",
    "reason": "no sure AniList match for \"《不當哥哥了！》|《ONIMAI: I’m Now Your Sister!》\"",
@@ -14262,6 +14419,13 @@
    "title": "《冰屬性男子與無表情女子》|《The Ice Guy and His Cool Female Colleague》",
    "reason": "no sure AniList match for \"《冰屬性男子與無表情女子》|《The Ice Guy and His Cool Female Colleague》\"",
    "checkedAt": "2026-10-19"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7JiS5_iewJyAhFz7_L_f1Z6X",
+   "title": "《真・進化果實～不知不覺踏上勝利的人生～》|《The Fruit of Evolution 2 : Before I Knew It, My Life Had It Made》",
+   "reason": "no sure AniList match for \"《真・進化果實～不知不覺踏上勝利的人生～》|《The Fruit of Evolution 2 : Before I Knew It, My Life Had It Made》\"",
+   "checkedAt": "2026-10-26"
   },
   {
    "channel": "Ani-One Asia",
@@ -14381,6 +14545,13 @@
    "title": "《BLEACH Thousand-Year Blood War》|《BLEACH 死神 千年血戰篇》【Ani-One Asia ULTRA】",
    "reason": "no sure AniList match for \"《BLEACH Thousand-Year Blood War》|《BLEACH 死神 千年血戰篇》\"",
    "checkedAt": "2026-10-19"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7Jj17JiCvrOBjnjPjb930O2g",
+   "title": "《BLUE LOCK》|《藍色監獄》【Ani-One Asia ULTRA】",
+   "reason": "no sure AniList match for \"《BLUE LOCK》|《藍色監獄》\"",
+   "checkedAt": "2026-10-26"
   },
   {
    "channel": "Ani-One Asia",
@@ -14629,6 +14800,13 @@
   },
   {
    "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7JhfAGqyUhmkjOlfb6caTuF2",
+   "title": "《不要欺負我，長瀞同學》|《Don’t Toy with me, Miss Nagatoro》",
+   "reason": "no sure AniList match for \"《不要欺負我，長瀞同學》|《Don’t Toy with me, Miss Nagatoro》\"",
+   "checkedAt": "2026-10-26"
+  },
+  {
+   "channel": "Ani-One Asia",
    "playlist": "PLxSscENEp7JjFxFLaUqw0RCMc4sbSgi69",
    "title": "♬【Ani-Music-One】咒術迴戰線上音樂會 | JUJUTSU KAISEN Digital Live ♬",
    "reason": "no sure AniList match for \"♬ 咒術迴戰線上音樂會\"",
@@ -14864,6 +15042,13 @@
    "title": "《宿命迴響：命運節拍》|《takt op. Destiny》",
    "reason": "no sure AniList match for \"《宿命迴響：命運節拍》|《takt op. Destiny》\"",
    "checkedAt": "2026-10-19"
+  },
+  {
+   "channel": "Ani-One Asia",
+   "playlist": "PLxSscENEp7JjJbln83lUKLrhXMvu57JXk",
+   "title": "《進化果實~不知不覺踏上勝利的人生~》|《The Fruit of Evolution: Before I Knew It, My Life Had It Made》",
+   "reason": "no sure AniList match for \"《進化果實~不知不覺踏上勝利的人生~》|《The Fruit of Evolution: Before I Knew It, My Life Had It Made》\"",
+   "checkedAt": "2026-10-26"
   },
   {
    "channel": "Ani-One Asia",
@@ -17209,108 +17394,143 @@
   },
   {
    "channel": "GUNDAM CHANNEL INTL",
-   "playlist": "PLdtfQTGSD1Uw",
-   "title": "Explore the Universal Century for 60 seconds",
-   "reason": "no sure AniList match for \"Explore the Universal Century for 60 seconds\"",
-   "checkedAt": "2026-10-26"
+   "playlist": "PLZGiz6awkBtg",
+   "title": "【Yzak Jule】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLC5RuDAYb2ds",
+   "title": "【Neo Lorrnoke】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLVoGFZaIZETo",
+   "title": "【Todaka】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLfzF2sZ8h45s",
+   "title": "【Stellar Loussier】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLGeNAXj_Zpok",
+   "title": "【Gilbert Dullindal】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLaA5pEE5BeNQ",
+   "title": "【Rey Za Burrel】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLNHUfc8TDv14",
+   "title": "【Meyrin Hawke】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLYM3ogxsARJs",
+   "title": "【Murrue Ramius】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLeI1c3b3_vdk",
+   "title": "【Mu La Flaga】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLVSV2wtY1TnQ",
+   "title": "【Agnes Giebenrath】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLYuPUG7dt_gc",
+   "title": "【Cagalli Yula Athha】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLP3sgwtTunE8",
+   "title": "【Lacus Clyne】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLJ9S4v_8t1gU",
+   "title": "【Lunamaria Hawke】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLAJBiwADVYdY",
+   "title": "【Athrun Zala】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLArKsD1JqtVg",
+   "title": "【Shinn Asuka】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
+  },
+  {
+   "channel": "GUNDAM CHANNEL INTL",
+   "playlist": "PLInSXuyfSv8E",
+   "title": "【Kira Yamato】SEEDGP2026",
+   "reason": "no sure AniList match for \"SEEDGP2026\"",
+   "checkedAt": "2026-11-02"
   },
   {
    "channel": "Ani-One Asia",
-   "playlist": "PLPWOfWsVnDz8",
-   "title": "Tales of Wedding Rings｜婚戒物語【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Tales of Wedding Rings｜婚戒物語\"",
-   "checkedAt": "2026-10-26"
+   "playlist": "PLZt5PRchTShk",
+   "title": "《Strike World: Deadverse Reloaded the Anime》| 動畫《怪物彈珠 終焉世界 重裝上陣》",
+   "reason": "no sure AniList match for \"《Strike World: Deadverse Reloaded the 》| 動畫《怪物彈珠 終焉世界 重裝上陣》\"",
+   "checkedAt": "2026-11-02"
   },
   {
    "channel": "Ani-One Asia",
-   "playlist": "PLK4ZfagmZTjQ",
-   "title": "Super Lovers｜超級戀人【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Super Lovers｜超級戀人\"",
-   "checkedAt": "2026-10-26"
+   "playlist": "PLT9npxNeUrjI",
+   "title": "BLEACH: Thousand-Year Blood War ｜BLEACH 死神 千年血戰篇【Ani-One Asia HUB】",
+   "reason": "no sure AniList match for \"BLEACH: Thousand-Year Blood War ｜BLEACH 死神 千年血戰篇\"",
+   "checkedAt": "2026-11-02"
   },
   {
    "channel": "Ani-One Asia",
-   "playlist": "PLBRNdiO3lfZ4",
-   "title": "Megaton Musashi｜百萬噸級武藏【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Megaton Musashi｜百萬噸級武藏\"",
-   "checkedAt": "2026-10-26"
+   "playlist": "PLbtsMntmNR4c",
+   "title": "《BLEACH: Thousand-Year Blood War 》|《BLEACH 死神 千年血戰篇》【Ani-One Asia 】",
+   "reason": "no sure AniList match for \"《BLEACH: Thousand-Year Blood War 》|《BLEACH 死神 千年血戰篇》\"",
+   "checkedAt": "2026-11-02"
   },
   {
-   "channel": "Ani-One Asia",
-   "playlist": "PLWhSdLR6m0WA",
-   "title": "Sengoku Youko｜戰國妖狐【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Sengoku Youko｜戰國妖狐\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLBlsgmewNdD8",
-   "title": "Mobile Suit Gundam The Witch From Mercury｜機動戰士鋼彈 水星的魔女【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Mobile Suit Gundam The Witch From Mercury｜機動戰士鋼彈 水星的魔女\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLZ8zpbdLyGpU",
-   "title": "Metallic Rouge｜金屬口紅【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Metallic Rouge｜金屬口紅\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLYmDIFdECuis",
-   "title": "Megalobox｜機甲拳擊【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Megalobox｜機甲拳擊\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLPiZwymWQeZw",
-   "title": "Yuru Camp｜搖曳露營【Ani-One Asia】",
-   "reason": "no sure AniList match for \"Yuru Camp｜搖曳露營\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7JiAoaxImun4H_FRDkFI9k3Q",
-   "title": "《關於我在無意間被隔壁的天使變成廢柴這件事》|《The Angel Next Door Spoils Me Rotten》",
-   "reason": "no sure AniList match for \"《關於我在無意間被隔壁的天使變成廢柴這件事》|《The Angel Next Door Spoils Me Rotten》\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7Jhkr9k44Isa7FVdZ0UTZOL-",
-   "title": "《不要欺負我，長瀞同學 2nd Attack》|《Don’t Toy with me, Miss Nagatoro 2nd Attack》",
-   "reason": "no sure AniList match for \"《不要欺負我，長瀞同學 2nd Attack》|《Don’t Toy with me, Miss Nagatoro 2nd Attack》\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7JiS5_iewJyAhFz7_L_f1Z6X",
-   "title": "《真・進化果實～不知不覺踏上勝利的人生～》|《The Fruit of Evolution 2 : Before I Knew It, My Life Had It Made》",
-   "reason": "no sure AniList match for \"《真・進化果實～不知不覺踏上勝利的人生～》|《The Fruit of Evolution 2 : Before I Knew It, My Life Had It Made》\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7Jj17JiCvrOBjnjPjb930O2g",
-   "title": "《BLUE LOCK》|《藍色監獄》【Ani-One Asia ULTRA】",
-   "reason": "no sure AniList match for \"《BLUE LOCK》|《藍色監獄》\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7JhfAGqyUhmkjOlfb6caTuF2",
-   "title": "《不要欺負我，長瀞同學》|《Don’t Toy with me, Miss Nagatoro》",
-   "reason": "no sure AniList match for \"《不要欺負我，長瀞同學》|《Don’t Toy with me, Miss Nagatoro》\"",
-   "checkedAt": "2026-10-26"
-  },
-  {
-   "channel": "Ani-One Asia",
-   "playlist": "PLxSscENEp7JjJbln83lUKLrhXMvu57JXk",
-   "title": "《進化果實~不知不覺踏上勝利的人生~》|《The Fruit of Evolution: Before I Knew It, My Life Had It Made》",
-   "reason": "no sure AniList match for \"《進化果實~不知不覺踏上勝利的人生~》|《The Fruit of Evolution: Before I Knew It, My Life Had It Made》\"",
-   "checkedAt": "2026-10-26"
+   "channel": "Toei Animation",
+   "playlist": "PLE_AoVlzT3LM",
+   "title": "Collaborations",
+   "reason": "no sure AniList match for \"Collaborations\"",
+   "checkedAt": "2026-11-02"
   }
  ]
 }
