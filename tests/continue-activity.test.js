@@ -5,16 +5,23 @@ import {
   activityFromFinishedEpisode,
   activityFromWatchEpisode,
   activityFromWatchStart,
+  addContinueDismissed,
   cleanContinueRow,
+  clearContinueDismissed,
+  continueDisplayProgress,
   expireProvisionalContinue,
+  isContinueDismissed,
   mergeContinueRows,
   normalizeContinueActivity,
   resolveContinueTarget,
   shouldBumpContinueFromImport,
+  trackedProgress,
+  watchingEpisode,
+  removeContinueForShow,
   upsertContinueActivity,
 } from "../lib/continue-activity.js";
 import { setEntryProgress, setEntryStatus, touchLastWatched } from "../lib/library.js";
-import { matchKey } from "../lib/remembered.js";
+import { matchKey, resolveMatchKey } from "../lib/remembered.js";
 
 test("cleanContinueRow drops finished seasons and normalizes progress", () => {
   assert.equal(cleanContinueRow(null), null);
@@ -74,6 +81,23 @@ test("junk titles and older pending stubs are scrubbed from Continue Watching", 
   assert.equal(cleanContinueRow({ id: "x", title: "Netflix", progress: 0 }), null);
 });
 
+test("a progress-0 pending stub does not hide or outrank a real count", () => {
+  const now = Date.now();
+  const merged = normalizeContinueActivity([
+    { id: "pending:netflix:love through a prism", title: "Love Through a Prism", progress: 13, next: 14, at: now, service: "netflix", provisional: true },
+    { id: "al-999", title: "Love Through a Prism", progress: 0, next: 1, at: now - 10, service: "netflix", anilistId: 999 },
+  ], { now });
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, "al-999");
+  assert.equal(merged[0].progress, 13);
+  assert.equal(merged[0].next, 14);
+  const ordered = normalizeContinueActivity([
+    { id: "pending:netflix:feeling blue", title: "Feeling Blue", progress: 0, next: 1, at: now, service: "netflix", provisional: true },
+    { id: "al-1", title: "Real Show", progress: 4, next: 5, at: now - 1000, service: "netflix", anilistId: 1 },
+  ], { now });
+  assert.deepEqual(ordered.map((row) => row.id), ["al-1", "pending:netflix:feeling blue"]);
+});
+
 test("finished episode builds progress = episode, and completing a season drops the row", () => {
   const row = activityFromFinishedEpisode({
     id: "GFRIEREN",
@@ -87,6 +111,37 @@ test("finished episode builds progress = episode, and completing a season drops 
   let list = upsertContinueActivity([], row);
   list = upsertContinueActivity(list, { id: "GFRIEREN", title: "Frieren", progress: 28, episodes: 28, service: "hidive" });
   assert.deepEqual(list, []);
+});
+
+test("removeContinueForShow drops catalog, anilist, and pending rows for a finished mark", () => {
+  const list = [
+    { id: "GFRIEREN", title: "Frieren", progress: 5, next: 6, episodes: 28, anilistId: 154587, at: 3 },
+    { id: "al-154587", title: "Frieren", progress: 4, next: 5, episodes: 28, anilistId: 154587, at: 2 },
+    { id: "pending:netflix:frieren", title: "Frieren", progress: 3, next: 4, service: "netflix", at: 1, provisional: true },
+    { id: "GOTHER", title: "Other", progress: 1, next: 2, anilistId: 1, at: 4 },
+  ];
+  const next = removeContinueForShow(list, { id: "GFRIEREN", anilistIds: [154587], title: "Frieren" });
+  assert.deepEqual(next.map((row) => row.id), ["GOTHER"]);
+});
+
+test("continue dismiss stores a local hide and matches catalog or title", () => {
+  const target = { id: "GFRIEREN", anilistId: 154587, title: "Frieren" };
+  const dismissed = addContinueDismissed([], target, { now: 100 });
+  assert.equal(dismissed.length, 1);
+  assert.equal(dismissed[0].id, "GFRIEREN");
+  assert.equal(isContinueDismissed(dismissed, { id: "GFRIEREN" }), true);
+  assert.equal(isContinueDismissed(dismissed, { anilistId: 154587 }), true);
+  assert.equal(isContinueDismissed(dismissed, { title: "Frieren" }), true);
+  assert.equal(isContinueDismissed(dismissed, { id: "GOTHER", title: "Other" }), false);
+  const cleared = clearContinueDismissed(dismissed, { id: "GFRIEREN", anilistId: 154587, title: "Frieren" });
+  assert.deepEqual(cleared, []);
+});
+
+test("continue dismiss replaces an older entry for the same show", () => {
+  const first = addContinueDismissed([], { id: "G1", title: "One" }, { now: 1 });
+  const next = addContinueDismissed(first, { id: "G1", title: "One" }, { now: 2 });
+  assert.equal(next.length, 1);
+  assert.equal(next[0].at, 2);
 });
 
 test("resolveContinueTarget uses remembered matches and catalog ids", () => {
@@ -129,6 +184,30 @@ test("resolveContinueTarget finds HIDIVE matches stored with API season ids", ()
   assert.equal(found?.anilistId, 97938);
   assert.equal(found?.id, "al-97938");
   assert.equal(found?.playUrl, "https://www.hidive.com/series/1271");
+});
+
+test("resolveContinueTarget finds Netflix matches stored under legacy season 1 keys", () => {
+  const matches = {
+    [matchKey("netflix", "death note", "season 1")]: {
+      anilistId: 1535,
+      how: "user",
+      names: ["Death Note — Season 1"],
+    },
+  };
+  const found = resolveContinueTarget({
+    service: "netflix",
+    series: "Death Note",
+    season: "Season 1",
+    seasonNumber: 1,
+    matches,
+    library: {},
+    catalog: {},
+  });
+  assert.equal(found?.anilistId, 1535);
+  assert.equal(found?.id, "al-1535");
+  const canonical = matchKey("netflix", "death note", "s1");
+  assert.equal(resolveMatchKey(matches, "netflix", "death note", { seasonId: "s1", season: "Season 1", seasonNumber: 1 }), matchKey("netflix", "death note", "season 1"));
+  assert.notEqual(canonical, matchKey("netflix", "death note", "season 1"));
 });
 
 test("resolveContinueTarget uses library title and CR catalog title when matches are empty", () => {
@@ -190,7 +269,7 @@ test("mergeContinueRows respects the continue rail limit", () => {
   assert.deepEqual(mergeContinueRows(activity, library, { limit: 3 }).map((r) => r.id), ["a0", "a1", "a2"]);
 });
 
-test("provisional watch-start rows keep prior progress and expire after 7 days", () => {
+test("provisional watch-start shows the episode on screen and fills the gap before it", () => {
   const start = activityFromWatchStart({
     id: "G1",
     title: "Frieren",
@@ -202,8 +281,24 @@ test("provisional watch-start rows keep prior progress and expire after 7 days",
     at: 1_000,
   });
   assert.equal(start.provisional, true);
-  assert.equal(start.progress, 2);
+  assert.equal(start.progress, 3);
   assert.equal(start.next, 4);
+  const pending = activityFromWatchStart({ id: "pending:netflix:show", title: "Show", episode: 5, progress: 0, service: "netflix" });
+  assert.equal(pending.progress, 4);
+  assert.equal(pending.next, 5);
+  const behind = activityFromWatchStart({ id: "G1", title: "Frieren", episode: 2, progress: 10, episodes: 28, service: "netflix" });
+  assert.equal(behind.progress, 10);
+  assert.equal(behind.next, 11);
+  assert.equal(continueDisplayProgress({ progress: 2, next: 4 }), 3);
+  assert.equal(continueDisplayProgress({ progress: 4, next: 5 }), 4);
+  assert.equal(trackedProgress({ episode: 1, prior: 11, absolute: false, catchUpLift: 1 }), 12);
+  assert.equal(trackedProgress({ episode: 3, prior: 12, absolute: false, catchUpLift: 3 }), 15);
+  // Phone plays + tracked finish: lift wins over a long unnumbered 1..n scan episode.
+  assert.equal(trackedProgress({ episode: 50, prior: 10, absolute: false, catchUpLift: 3 }), 13);
+  assert.equal(watchingEpisode({ episode: 1, prior: 10, absolute: false, catchUpLift: 3 }), 13);
+  assert.equal(watchingEpisode({ episode: 14, prior: 10, absolute: true, catchUpLift: 0 }), 14);
+  assert.equal(trackedProgress({ episode: 4, prior: 11, absolute: true }), 11);
+  assert.equal(trackedProgress({ episode: 14, prior: 11, absolute: true }), 14);
   const confirmed = activityFromFinishedEpisode({
     id: "G1",
     title: "Frieren",

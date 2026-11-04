@@ -2,13 +2,20 @@
 import { mapListStatus } from "../lib/anilist.js";
 import {
   CONTINUE_ACTIVITY_KEY,
+  CONTINUE_DISMISSED_KEY,
   PROVISIONAL_MAX_AGE_MS,
   activityFromFinishedEpisode,
   activityFromWatchEpisode,
   activityFromWatchStart,
+  addContinueDismissed,
+  clearContinueDismissed,
   expireProvisionalContinue,
+  trackedProgress,
+  watchingEpisode,
   normalizeContinueActivity,
+  removeContinueForShow,
   resolveContinueTarget,
+  sanitizeContinueDismissed,
   shouldBumpContinueFromImport,
   upsertContinueActivity,
 } from "../lib/continue-activity.js";
@@ -22,6 +29,7 @@ import { noteActivity } from "./app-notices.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
 
 const STORAGE_KEY = KEYS.continueActivity || CONTINUE_ACTIVITY_KEY;
+const DISMISSED_KEY = KEYS.continueDismissed || CONTINUE_DISMISSED_KEY;
 
 export async function loadContinueActivity() {
   try {
@@ -41,12 +49,45 @@ export function notifyContinueUpdated() {
   chrome.runtime.sendMessage({ type: "continueActivityUpdated" }).catch(() => {});
 }
 
+export async function loadContinueDismissed() {
+  try {
+    return sanitizeContinueDismissed((await chrome.storage.local.get(DISMISSED_KEY))[DISMISSED_KEY]);
+  } catch {
+    return [];
+  }
+}
+
+async function saveContinueDismissed(rows) {
+  const next = sanitizeContinueDismissed(rows);
+  await chrome.storage.local.set({ [DISMISSED_KEY]: next }).catch(() => {});
+  return next;
+}
+
 export async function upsertContinueRow(row) {
   const list = await loadContinueActivity();
   const next = upsertContinueActivity(list, row);
   await saveContinueActivity(next);
+  // Watching again brings a manually hidden title back onto the rail.
+  if (row) {
+    const dismissed = await loadContinueDismissed();
+    const cleared = clearContinueDismissed(dismissed, {
+      id: row.id,
+      anilistId: row.anilistId,
+      title: row.title,
+    });
+    if (cleared.length !== dismissed.length) await saveContinueDismissed(cleared);
+  }
   notifyContinueUpdated();
   return next;
+}
+
+/** Hide from Continue watching only (local). List status is unchanged. */
+export async function dismissContinueShow(target = {}) {
+  const continueActivity = await clearContinueForShow(target);
+  const dismissed = addContinueDismissed(await loadContinueDismissed(), target);
+  await saveContinueDismissed(dismissed);
+  notifyContinueUpdated();
+  return { continueActivity, continueDismissed: dismissed };
 }
 
 /** Quietly drop provisional CW rows older than 7 days. */
@@ -56,6 +97,16 @@ export async function expireProvisionalContinueActivity({ now = Date.now(), maxA
   if (next.length === list.length && next.every((row, i) => row.id === list[i]?.id && row.provisional === list[i]?.provisional)) {
     return next;
   }
+  await saveContinueActivity(next);
+  notifyContinueUpdated();
+  return next;
+}
+
+/** Clear CW rail rows after the user marks a show finished / dropped / removed from the library. */
+export async function clearContinueForShow({ id = "", anilistId = null, anilistIds = [], title = "" } = {}) {
+  const list = await loadContinueActivity();
+  const next = removeContinueForShow(list, { id, anilistId, anilistIds, title });
+  if (next.length === list.length) return next;
   await saveContinueActivity(next);
   notifyContinueUpdated();
   return next;
@@ -178,6 +229,9 @@ export async function noteContinueFromTrackedPlay({
   playUrl = "",
   anilistId = null,
   provisional = false,
+  absolute = true,
+  catchUpLift = 0,
+  syncAnilist = true,
 } = {}) {
   const ep = Math.max(1, Math.round(Number(episode) || 0));
   if (!service || !series || !ep) return null;
@@ -201,21 +255,37 @@ export async function noteContinueFromTrackedPlay({
     catalogLinks: catalogs?.[service]?.links || {},
   });
   const now = Date.now();
-  // No AniList id yet: still put a provisional name on the rail so tracking feels alive.
+  // No AniList id yet: still keep a local row so a finish can raise the count.
+  // Starts used to be the only pending write, so a later finish with no match left progress stuck.
   if (!target) {
-    if (!provisional) return null;
     const pendingId = `pending:${service}:${looseKey(series)}`;
-    const row = activityFromWatchStart({
-      id: pendingId,
-      title: String(series).slice(0, 180),
-      cover: "",
-      episodes: null,
-      playUrl: playUrl || "",
-      anilistId: null,
-      episode: ep,
-      progress: 0,
-      service,
-    });
+    const prior = Math.max(0, Number(
+      (await loadContinueActivity()).find((row) => row.id === pendingId)?.progress || 0,
+    ));
+    const title = String(series).slice(0, 180);
+    const row = provisional
+      ? activityFromWatchStart({
+        id: pendingId,
+        title,
+        cover: "",
+        episodes: null,
+        playUrl: playUrl || "",
+        anilistId: null,
+        episode: watchingEpisode({ episode: ep, prior, absolute, catchUpLift }),
+        progress: prior,
+        service,
+      })
+      : activityFromFinishedEpisode({
+        id: pendingId,
+        title,
+        cover: "",
+        episodes: null,
+        playUrl: playUrl || "",
+        anilistId: null,
+        episode: trackedProgress({ episode: ep, prior, absolute, catchUpLift }),
+        service,
+        provisional: false,
+      });
     if (row) await upsertContinueRow(row);
     return row;
   }
@@ -234,13 +304,20 @@ export async function noteContinueFromTrackedPlay({
     cover: target.cover,
     crSeriesId: target.crSeriesId,
   };
+  const baseline = Math.max(priorLibrary, priorRail);
+  const wasDirty = Boolean(
+    state.library?.[`anilist:${target.anilistId}`]?.dirty
+    || Object.values(state.library || {}).find((row) => row?.anilistId === target.anilistId && !row.removed)?.dirty,
+  );
+  // Early watches and unnumbered +1 lifts stay local. Tracking catch-up is what writes AniList,
+  // so a dirty sync of the same episode is not added again on top.
+  const holdForCatchUp = (library) => {
+    if (syncAnilist || wasDirty || !target.anilistId) return library;
+    const key = `anilist:${target.anilistId}`;
+    if (!library?.[key]) return library;
+    return { ...library, [key]: { ...library[key], dirty: false } };
+  };
   if (provisional) {
-    try {
-      state.library = touchLastWatched(state.library || {}, show, now);
-      await saveState(state);
-    } catch {
-      // Best-effort.
-    }
     const row = activityFromWatchStart({
       id: target.id,
       title: target.title,
@@ -248,17 +325,27 @@ export async function noteContinueFromTrackedPlay({
       episodes: target.episodes,
       playUrl: playUrl || target.playUrl,
       anilistId: target.anilistId,
-      episode: ep,
-      progress: Math.max(priorLibrary, priorRail),
+      episode: watchingEpisode({ episode: ep, prior: baseline, absolute, catchUpLift }),
+      progress: baseline,
       service,
     });
+    try {
+      if (row && row.progress > baseline) {
+        state.library = holdForCatchUp(setEntryProgress(state.library || {}, show, row.progress, now));
+      } else {
+        state.library = touchLastWatched(state.library || {}, show, now);
+      }
+      await saveState(state);
+    } catch {
+      // Best-effort.
+    }
     if (row) await upsertContinueRow(row);
     return row;
   }
-  // Partial activity pages (Netflix page 0) can undercount episodes — never move progress backwards.
-  const progress = Math.max(ep, priorLibrary, priorRail);
+  // Absolute episode numbers (gaps already filled) win. Unnumbered 1..k must not lose to an import.
+  const progress = trackedProgress({ episode: ep, prior: baseline, absolute, catchUpLift });
   try {
-    state.library = setEntryProgress(state.library || {}, show, progress, now);
+    state.library = holdForCatchUp(setEntryProgress(state.library || {}, show, progress, now));
     await saveState(state);
   } catch {
     // Progress write is best-effort for the rail.

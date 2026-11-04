@@ -2,7 +2,7 @@
 // and the Anime Series / Anime Movies genre catalogs, then reads them on request with the user's own Netflix
 // sign-in (the same calls Netflix's pages make). Nothing is changed on Netflix; tokens never leave this tab.
 import { CATALOG_MAX_ITEMS, NETFLIX_ANIME_MOVIES, NETFLIX_CATALOG_PAGE, NETFLIX_GENRES, NETFLIX_MAX_PAGES, parseNetflixGenrePage } from "../../lib/catalogs.js";
-import { netflixHistoryStalled, netflixInfo, seasonNumberOf, splitPlayerTitle } from "../../lib/netflix-history.js";
+import { episodeNumberOf, netflixHistoryStalled, netflixInfo, seasonNumberOf, splitPlayerTitle } from "../../lib/netflix-history.js";
 import { FINISHED } from "../../lib/watch-tracking.js";
 import { START_SECONDS } from "../../lib/watch-loop.js";
 
@@ -27,20 +27,50 @@ function netflixPlayer() {
   return videos.sort((a, b) => (b.currentTime || 0) - (a.currentTime || 0) || b.duration - a.duration)[0] || null;
 }
 
+function cleanPageLabel(value) {
+  const junk = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3})$/i;
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text && !junk.test(text) ? text : "";
+}
+
+/** Player chrome often shows "S1:E14 Title" while mediaSession only has the episode name. */
+function pageEpisodeHints() {
+  const bits = [];
+  const push = (value) => {
+    const text = cleanPageLabel(value);
+    if (text) bits.push(text);
+  };
+  for (const sel of ['[data-uia="video-title"]', '[data-uia="episode-title"]', '[data-uia="video-title"] *', ".watch-video--player-view-evidence", ".watch-video--title-text"]) {
+    for (const node of document.querySelectorAll(sel)) {
+      push(node.getAttribute?.("aria-label"));
+      push(node.textContent);
+    }
+  }
+  // Fallback: short visible strings near the player that already look numbered.
+  for (const node of document.querySelectorAll("h4, h3, [class*='title'], [class*='episode']")) {
+    const text = cleanPageLabel(node.textContent);
+    if (text && text.length < 120 && episodeNumberOf(text) != null) push(text);
+  }
+  return [...new Set(bits)];
+}
+
 function pageLabels() {
   const meta = navigator.mediaSession?.metadata;
   const labels = [];
-  const junk = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3})$/i;
-  const clean = (value) => {
-    const text = String(value || "").replace(/\s+/g, " ").trim();
-    return text && !junk.test(text) ? text : "";
-  };
-  const show = clean(meta?.album || meta?.artist);
-  const ep = clean(meta?.title);
+  const show = cleanPageLabel(meta?.album || meta?.artist);
+  const ep = cleanPageLabel(meta?.title);
+  const hints = pageEpisodeHints();
+  const hintEp = hints.map((text) => episodeNumberOf(text)).find((n) => n != null) || null;
+  // Prefer an explicit Episode N so the ~5s CW bump can show the episode on the rail.
+  if (show && hintEp != null) labels.push(`${show}: Episode ${hintEp}`);
   // Never push a bare episode title — mediaSession.title is usually the episode, not the show.
   if (show && ep) labels.push(`${show}: ${ep}`);
   if (show) labels.push(show);
-  const doc = clean(String(document.title || "").replace(/\s*[-–|]\s*Netflix\s*$/i, "").replace(/^\s*Watch\s+/i, ""));
+  for (const hint of hints) {
+    if (show) labels.push(`${show}: ${hint}`);
+    else labels.push(hint);
+  }
+  const doc = cleanPageLabel(String(document.title || "").replace(/\s*[-–|]\s*Netflix\s*$/i, "").replace(/^\s*Watch\s+/i, ""));
   // Tab title is often the series name; skip if it only repeats the episode title.
   if (doc && doc !== ep) labels.push(doc);
   return [...new Set(labels)];
@@ -229,12 +259,13 @@ async function activity(page) {
 function metaFromLabel(label, anime) {
   const split = splitPlayerTitle(label);
   if (!split?.series) return null;
+  const episode = episodeNumberOf(split.episode);
   return {
     series: split.series,
     season: split.season || "",
     seasonNumber: split.seasonNumber ?? seasonNumberOf(split.season || ""),
-    // Netflix doesn't expose a reliable episode number on the player — season progress is filled from activity later.
-    episode: 1,
+    episode: episode || 1,
+    episodeKnown: episode != null,
     anime,
     title: label,
   };
@@ -266,7 +297,7 @@ function parentVideoId(node, graph) {
   return null;
 }
 
-async function namedPlay(me, { series, season = "", episodeTitle = "", seriesId = null, anime = null }) {
+async function namedPlay(me, { series, season = "", episodeTitle = "", seriesId = null, anime = null, episodeHint = null }) {
   const name = String(series || "").trim();
   if (!name) return null;
   let resolvedAnime = anime;
@@ -274,24 +305,45 @@ async function namedPlay(me, { series, season = "", episodeTitle = "", seriesId 
     const info = await showInfo(me, [seriesId]);
     resolvedAnime = netflixInfo({ genres: info[seriesId]?.genres ?? null }).anime;
   }
+  const title = String(episodeTitle || name).trim();
+  const fromTitle = episodeNumberOf(title);
+  const fromHint = Number.isInteger(episodeHint) && episodeHint > 0 ? episodeHint : null;
+  const episode = fromTitle || fromHint;
   return {
     series: name,
     season: String(season || "").trim(),
     seasonNumber: seasonNumberOf(season || ""),
-    episode: 1,
+    episode: episode || 1,
+    episodeKnown: episode != null,
     anime: resolvedAnime,
-    title: String(episodeTitle || name).trim(),
+    title,
+  };
+}
+
+function mergeEpisodeFromLabels(meta, labelList) {
+  if (!meta || meta.episodeKnown) return meta;
+  const labeled = metaFromLabelList(labelList, meta.anime);
+  if (!labeled?.episodeKnown) return meta;
+  return {
+    ...meta,
+    episode: labeled.episode,
+    episodeKnown: true,
+    season: meta.season || labeled.season || "",
+    seasonNumber: meta.seasonNumber ?? labeled.seasonNumber,
   };
 }
 
 // Name the title currently on /watch/{id}. Prefer Netflix seriesTitle; never treat episode title as the series.
+// Episode number often comes from player labels (S1:E14) when the API only has a named title.
 async function watchNow(videoId, labels = []) {
   const id = Number(videoId);
   if (!Number.isInteger(id)) return null;
   const labelList = (Array.isArray(labels) ? labels : []).map((label) => String(label || "")).filter(Boolean);
+  const labelMeta = metaFromLabelList(labelList);
+  const episodeHint = labelMeta?.episodeKnown ? labelMeta.episode : null;
 
   const me = cached || (await profile().catch(() => null));
-  if (!me) return metaFromLabelList(labelList);
+  if (!me) return labelMeta;
 
   let item = null;
   try {
@@ -301,12 +353,13 @@ async function watchNow(videoId, labels = []) {
     item = null;
   }
   if (item?.seriesTitle) {
-    return namedPlay(me, {
+    return mergeEpisodeFromLabels(await namedPlay(me, {
       series: item.seriesTitle,
       season: item.seasonDescriptor || "",
       episodeTitle: item.title || item.episodeTitle || "",
       seriesId: Number.isInteger(item.series) ? item.series : null,
-    });
+      episodeHint,
+    }), labelList);
   }
 
   const graph = await videoData(me, ["videos", id, ["title", "summary", "parent"]]);
@@ -319,23 +372,24 @@ async function watchNow(videoId, labels = []) {
     seriesId = parentVideoId(withParent?.videos?.[id], withParent) || seriesId;
     const parentTitle = value(withParent?.videos?.[id]?.parent?.title);
     if (typeof parentTitle === "string" && parentTitle.trim()) {
-      return namedPlay(me, { series: parentTitle, episodeTitle, seriesId });
+      return mergeEpisodeFromLabels(await namedPlay(me, { series: parentTitle, episodeTitle, seriesId, episodeHint }), labelList);
     }
   }
   if (Number.isInteger(seriesId) && seriesId !== id) {
     const parent = await videoData(me, ["videos", seriesId, "title"]);
     const parentTitle = value(parent?.videos?.[seriesId]?.title);
     if (typeof parentTitle === "string" && parentTitle.trim()) {
-      return namedPlay(me, {
+      return mergeEpisodeFromLabels(await namedPlay(me, {
         series: parentTitle,
         season: item?.seasonDescriptor || "",
         episodeTitle,
         seriesId,
-      });
+        episodeHint,
+      }), labelList);
     }
   }
 
-  return metaFromLabelList(labelList);
+  return labelMeta;
 }
 
 // Anime Series (6721) and Anime Movies (3063) A–Z lists — the same lists as browse/genre/6721 and /3063.

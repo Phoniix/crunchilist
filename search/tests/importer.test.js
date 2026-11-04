@@ -144,7 +144,7 @@ test("sub and dub seasons on one entry merge to the furthest progress and widest
     { anilistId: 1, progress: 5, firstPlayed: 30, lastPlayed: 50, source: { key: "sub" } },
     { anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 40, source: { key: "dub" } },
   ]);
-  assert.deepEqual(merged, [{ anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 50, sources: [{ key: "sub" }, { key: "dub" }] }]);
+  assert.deepEqual(merged, [{ anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 50, catchUpLift: 0, sources: [{ key: "sub" }, { key: "dub" }] }]);
 });
 
 test("the plan lists only real changes, newest first, and counts what's already up to date", () => {

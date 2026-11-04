@@ -1,3 +1,4 @@
+import { PREVIEW_NOTICE_KINDS } from "../lib/notices.js";
 import { ROUNDED, el } from "./dom.js";
 
 export const NOTICES_CSS = `
@@ -76,17 +77,47 @@ export function createNoticesView({ send, onView = () => {} } = {}) {
   }
 
   function item(row) {
-    const update = row.action ? el("button", { class: "btn primary", type: "button", text: row.action }) : null;
+    const preview = PREVIEW_NOTICE_KINDS.has(row.kind);
     const ignore = el("button", { class: "btn", type: "button", text: row.kind === "ask" ? "Ignore" : "Dismiss" });
-    update?.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "update" }, [update, ignore]));
-    ignore.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "ignore" }, [ignore]));
+    const buttons = [];
+    if (preview) {
+      const apply = el("button", { class: "btn primary", type: "button", text: row.action || "Apply" });
+      const view = el("button", { class: "btn", type: "button", text: row.viewAction || "View changes" });
+      apply.addEventListener("click", async () => {
+        for (const button of [apply, view, ignore]) button.disabled = true;
+        const response = await send("applyImport", { skip: [] });
+        if (!response?.ok) {
+          for (const button of [apply, view, ignore]) button.disabled = false;
+          status.textContent = response?.error || "Couldn't apply those changes.";
+          return;
+        }
+        await act("resolveNotice", { id: row.id, action: "ignore" }, [apply, view, ignore]);
+        const result = response.result || {};
+        status.textContent = result.error ? `Stopped: ${result.error}` : `Updated ${result.applied || 0} on AniList.`;
+      });
+      view.addEventListener("click", () => send("openApp", { hash: row.href || "#settings/import" }));
+      buttons.push(apply, view);
+    } else if (row.action) {
+      const update = el("button", { class: "btn primary", type: "button", text: row.action });
+      update.addEventListener("click", () => {
+        if (row.href && row.kind !== "ask") {
+          act("resolveNotice", { id: row.id, action: "ignore" }, [update, ignore]);
+          send("openApp", { hash: row.href });
+          return;
+        }
+        act("resolveNotice", { id: row.id, action: "update" }, [update, ignore]);
+      });
+      buttons.push(update);
+    }
+    ignore.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "ignore" }, [ignore, ...buttons]));
+    buttons.push(ignore);
     return el("article", { class: `nt-item is-${row.kind}` }, [
       row.cover ? el("img", { class: "nt-art", src: row.cover, alt: "", referrerpolicy: "no-referrer" }) : el("span", { class: "nt-art" }),
       el("div", { class: "nt-copy" }, [
         el("p", { class: "nt-title", text: row.title }),
         el("p", { class: "nt-message", text: row.message }),
         el("span", { class: "nt-time", text: ago(row.createdAt) }),
-        el("div", { class: "nt-actions" }, [update, ignore]),
+        el("div", { class: "nt-actions" }, buttons),
       ]),
     ]);
   }

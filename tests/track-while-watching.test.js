@@ -187,6 +187,84 @@ test("Netflix started bumps provisional Continue Watching without scheduling Ani
   assert.ok(stored[STORAGE_KEY].library["anilist:1535"].lastWatchedAt > 0);
 });
 
+test("Netflix start prefers an Episode N label over watchNow's default of 1", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: { anilistId: 1535, how: "auto", names: ["Death Note — Season 1"] },
+  };
+  stored.crCatalog = {
+    items: [{ id: "GY35BM4", title: "Death Note", anilistId: 1535, url: "https://www.crunchyroll.com/series/GY35BM4", episodes: 37 }],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixWatchNow") {
+      return { ok: true, payload: { series: "Death Note", season: "Season 1", seasonNumber: 1, episode: 1, anime: true, title: "Rebirth" } };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixStarted", videoId: "14", labels: ["Death Note: Season 1: Episode 14"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/14", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity];
+  assert.equal(activity[0].next, 14);
+  assert.equal(activity[0].progress, 13);
+  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].progress, 13);
+});
+
+test("Netflix start uses S1:E14 player hint when watchNow only has a named episode", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: { anilistId: 1535, how: "auto", names: ["Death Note — Season 1"] },
+  };
+  stored.crCatalog = {
+    items: [{ id: "GY35BM4", title: "Death Note", anilistId: 1535, url: "https://www.crunchyroll.com/series/GY35BM4", episodes: 37 }],
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixWatchNow") {
+      // Same merge the content script does: labels carry S1:E14 from the player chrome.
+      const labels = Array.isArray(message.labels) ? message.labels : [];
+      const fromLabel = labels.map((label) => {
+        const match = /\bEpisode\s+(\d+)\b/i.exec(label) || /\bS\d+\s*[:.\-–]?\s*E(\d+)\b/i.exec(label);
+        return match ? Number(match[1]) : null;
+      }).find((n) => n > 0);
+      return {
+        ok: true,
+        payload: {
+          series: "Death Note",
+          season: "Season 1",
+          seasonNumber: 1,
+          episode: fromLabel || 1,
+          episodeKnown: Boolean(fromLabel),
+          anime: true,
+          title: "Rebirth",
+        },
+      };
+    }
+    return null;
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixStarted", videoId: "14", labels: ["Death Note: Episode 14", "Death Note: S1:E14 Rebirth", "Death Note: Rebirth"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/14", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  const activity = stored[KEYS.continueActivity];
+  assert.equal(activity[0].next, 14);
+  assert.equal(activity[0].progress, 13);
+});
+
 test("Tubi watched notes the episode and schedules the watch-track alarm", async () => {
   reset();
   withTracking();
@@ -236,14 +314,55 @@ test("Netflix and HIDIVE watched signals schedule a history catch-up when tracki
   assert.ok(alarms.some((alarm) => alarm.name === "ks-track-hidive" && alarm.delayInMinutes === 2));
 });
 
-test("Netflix watched does nothing when tracking is off", async () => {
+test("Netflix watched does nothing when the user turned tracking off", async () => {
   reset();
-  withTracking({ trackNetflix: false });
+  withTracking({ trackNetflix: false, trackNetflixOptOut: true });
   await handleImportMessage(
-    { type: "netflixWatched" },
+    { type: "netflixWatched", videoId: "123" },
     { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/123", tab: { id: 1 } },
   );
   assert.equal(alarms.length, 0);
+  assert.equal(stored[STORAGE_KEY].settings.trackNetflix, false);
+  assert.equal((stored[KEYS.continueActivity] || []).length, 0);
+});
+
+test("Netflix playback turns tracking on when it was never switched off", async () => {
+  reset();
+  withTracking({ trackNetflix: false });
+  session[KEYS.netflixTab] = 1;
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixWatchNow") {
+      return {
+        ok: true,
+        payload: {
+          series: "Death Note",
+          season: "Season 1",
+          seasonNumber: 1,
+          episode: 4,
+          episodeKnown: true,
+          anime: true,
+          title: "Episode 4",
+        },
+      };
+    }
+    return null;
+  };
+  const wait = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => wait(fn, ms === 2500 || ms === 400 ? 0 : ms, ...args);
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "4", labels: ["Death Note: Season 1: Episode 4"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/4", tab: { id: 1 } },
+    );
+  } finally {
+    globalThis.setTimeout = wait;
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(stored[STORAGE_KEY].settings.trackNetflix, true);
+  assert.equal(stored[STORAGE_KEY].settings.trackNetflixOptOut, false);
+  assert.equal(stored[KEYS.continueActivity][0].progress, 4);
+  assert.ok(alarms.some((alarm) => alarm.name === "ks-track-netflix"));
 });
 
 test("Netflix watched bumps Continue Watching from activity then schedules AniList catch-up", async () => {
@@ -671,7 +790,7 @@ test("Netflix Continue Watching counts series episodes across activity pages", a
   assert.equal(stored[KEYS.continueActivity][0].next, 5);
 });
 
-test("Netflix Continue Watching bump never regresses when activity page undercounts", async () => {
+test("Netflix finish of an unnumbered episode lifts past an imported baseline instead of resetting to 1", async () => {
   reset();
   withTracking();
   session[KEYS.netflixTab] = 1;
@@ -724,14 +843,175 @@ test("Netflix Continue Watching bump never regresses when activity page undercou
   });
   try {
     await handleImportMessage(
-      { type: "netflixWatched" },
+      { type: "netflixWatched", videoId: "99" },
       { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/99", tab: { id: 1 } },
     );
   } finally {
     chrome.tabs.sendMessage = send;
   }
-  assert.equal(stored[KEYS.continueActivity][0].progress, 11);
-  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].progress, 11);
+  assert.equal(stored[KEYS.continueActivity][0].progress, 12);
+  assert.equal(stored[KEYS.continueActivity][0].next, 13);
+  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].progress, 12);
+});
+
+test("Netflix finish assumes phone plays in the catch-up window before the tracked episode", async () => {
+  // Prior progress 10. Two unnumbered phone finishes + one tracked finish in activity → 13.
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[STORAGE_KEY] = {
+    ...stored[STORAGE_KEY],
+    library: {
+      "anilist:1535": {
+        key: "anilist:1535",
+        anilistId: 1535,
+        title: "Death Note",
+        status: "in_progress",
+        progress: 10,
+        episodes: 37,
+        dirty: false,
+        removed: false,
+      },
+    },
+  };
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: { anilistId: 1535, how: "auto", names: ["Death Note — Season 1"] },
+  };
+  stored[KEYS.continueActivity] = [{
+    id: "G4",
+    title: "Death Note",
+    progress: 10,
+    next: 11,
+    episodes: 37,
+    service: "netflix",
+    at: Date.now() - 1000,
+    anilistId: 1535,
+  }];
+  const series = 70143836;
+  const now = Date.now();
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type !== "netflixActivity") return null;
+    return {
+      ok: true,
+      payload: {
+        vhSize: 3,
+        viewedItems: [
+          {
+            seriesTitle: "Death Note",
+            series,
+            seasonDescriptor: "Season 1",
+            episodeTitle: "Decision",
+            movieID: 103,
+            date: now,
+            duration: 1400,
+            bookmark: 0,
+            genres: ["Anime Series"],
+            title: "Death Note: Season 1: Decision",
+          },
+          {
+            seriesTitle: "Death Note",
+            series,
+            seasonDescriptor: "Season 1",
+            episodeTitle: "Love",
+            movieID: 102,
+            date: now - 3600_000,
+            duration: 1400,
+            bookmark: 0,
+            genres: ["Anime Series"],
+            title: "Death Note: Season 1: Love",
+          },
+          {
+            seriesTitle: "Death Note",
+            series,
+            seasonDescriptor: "Season 1",
+            episodeTitle: "Rebirth",
+            movieID: 101,
+            date: now - 7200_000,
+            duration: 1400,
+            bookmark: 0,
+            genres: ["Anime Series"],
+            title: "Death Note: Season 1: Rebirth",
+          },
+        ],
+      },
+    };
+  };
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "103" },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/103", tab: { id: 1 } },
+    );
+  } finally {
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(stored[KEYS.continueActivity][0].progress, 13);
+  assert.equal(stored[KEYS.continueActivity][0].next, 14);
+  assert.equal(stored[STORAGE_KEY].library["anilist:1535"].progress, 13);
+});
+
+test("Netflix finish uses a numbered label when the activity tab does not answer", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  stored[KEYS.matches] = {
+    [matchKey("netflix", "death note", "s1")]: { anilistId: 1535, how: "auto", names: ["Death Note — Season 1"] },
+  };
+  stored.crCatalog = {
+    items: [{ id: "G4", title: "Death Note", anilistId: 1535, url: "https://www.crunchyroll.com/series/G4", episodes: 37 }],
+  };
+  stored[STORAGE_KEY] = {
+    ...stored[STORAGE_KEY],
+    library: {
+      "anilist:1535": {
+        key: "anilist:1535", anilistId: 1535, title: "Death Note", status: "in_progress", progress: 11, episodes: 37, dirty: false, removed: false,
+      },
+    },
+  };
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message?.type === "netflixActivity") return null;
+    if (message?.type === "netflixWatchNow") {
+      return { ok: true, payload: { series: "Death Note", season: "Season 1", seasonNumber: 1, episode: 1, episodeKnown: false, anime: true, title: "Love" } };
+    }
+    return null;
+  };
+  const wait = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => wait(fn, ms === 2500 || ms === 400 ? 0 : ms, ...args);
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "14", labels: ["Death Note: Season 1: Episode 14"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/14", tab: { id: 1 } },
+    );
+  } finally {
+    globalThis.setTimeout = wait;
+    chrome.tabs.sendMessage = send;
+  }
+  assert.equal(stored[KEYS.continueActivity][0].progress, 14);
+  assert.equal(stored[KEYS.continueActivity][0].next, 15);
+});
+
+test("Netflix finish still counts a pending row when the show is not matched yet", async () => {
+  reset();
+  withTracking();
+  session[KEYS.netflixTab] = 1;
+  const send = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async () => null;
+  const wait = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => wait(fn, ms === 2500 || ms === 400 ? 0 : ms, ...args);
+  try {
+    await handleImportMessage(
+      { type: "netflixWatched", videoId: "4", labels: ["Love Through a Prism: Season 1: Episode 4"] },
+      { id: "ext-id", frameId: 0, url: "https://www.netflix.com/watch/4", tab: { id: 1 } },
+    );
+  } finally {
+    globalThis.setTimeout = wait;
+    chrome.tabs.sendMessage = send;
+  }
+  const row = stored[KEYS.continueActivity][0];
+  assert.equal(row.id, "pending:netflix:love through a prism");
+  assert.equal(row.progress, 4);
+  assert.equal(row.provisional, false);
 });
 
 test("a finished Tubi episode newer than the checkpoint is due for tracking", async () => {

@@ -1,8 +1,8 @@
 // Registers site content scripts (history/catalog helpers + panels) after optional host permission is granted.
 import { ENABLED_KEY, PANEL_ENABLED_KEY, isPanelEnabled } from "../lib/enabled.js";
-import { whereFilterMode } from "../lib/settings.js";
+import { applySettingsPatch, whereFilterMode } from "../lib/settings.js";
 import { LISTING_SITES, SERVICES, connectedIds, contentScriptsFor, onService, serviceById } from "../lib/services.js";
-import { loadState } from "./store.js";
+import { loadState, saveState } from "./store.js";
 
 export const SITE_BRAND = {
   crunchyroll: "#F47521",
@@ -95,6 +95,20 @@ export async function findOpenServiceTab(serviceId) {
   return match?.id ?? null;
 }
 
+/**
+ * Turn Netflix tracking on unless the user has switched it off.
+ * Default installs leave trackNetflix false, which makes Continue Watching ignore playback.
+ */
+export async function ensureNetflixTracking() {
+  const state = await loadState();
+  const settings = state.settings || {};
+  if (settings.trackNetflixOptOut) return { enabled: false, turnedOn: false };
+  if (settings.trackNetflix) return { enabled: true, turnedOn: false };
+  state.settings = applySettingsPatch(settings, { trackNetflix: true });
+  await saveState(state);
+  return { enabled: true, turnedOn: true };
+}
+
 export async function connectSite(id) {
   const service = serviceById(id);
   if (!service) throw new Error("Unknown site.");
@@ -103,6 +117,7 @@ export async function connectSite(id) {
   const granted = await chrome.permissions.request({ origins: service.origins });
   if (!granted) throw new Error(`${service.name} permission was not granted.`);
   await syncSiteScripts();
+  if (service.id === "netflix") await ensureNetflixTracking();
   return { service: service.id, name: service.name };
 }
 

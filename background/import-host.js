@@ -8,13 +8,13 @@ import { anilistSession } from "../lib/settings.js";
 import { SERVICES, connectedIds, contentScriptsFor, onService, returnNote, serviceById } from "../lib/services.js";
 import { cleanKitsuLink, publicKitsuLink } from "../lib/trackers.js";
 import { hidiveEntries, hidiveEntryFinished } from "../lib/hidive-history.js";
-import { groupNetflix, parseActivity, splitPlayerTitle, usablePlayerSeries } from "../lib/netflix-history.js";
+import { episodeNumberOf, groupNetflix, parseActivity, splitPlayerTitle, unnumberedCatchUpCount, usablePlayerSeries } from "../lib/netflix-history.js";
 import { TRACKED, TRACK_SETTING, addToLog, cleanItem, itemText } from "../lib/watch-tracking.js";
 import { titleReadiness } from "../lib/title-api.js";
 import { watchActivity } from "./activity.js";
 import { clearActivityLog, exportActivityText, listActivity, noteActivity } from "./app-notices.js";
 import { appData } from "./app-data.js";
-import { expireProvisionalContinueActivity, noteContinueFromTrackedPlay } from "./continue-activity.js";
+import { expireProvisionalContinueActivity, noteContinueFromTrackedPlay, upsertContinueRow } from "./continue-activity.js";
 import { sendWatchGuide } from "./watch-guide.js";
 import { checkShowLinks } from "./dead-links.js";
 import { idMapStatus } from "./id-map-store.js";
@@ -24,7 +24,7 @@ import {
   importNetflixCsv, importStatus, resolvePending, saveCrunchyrollToken, startImport, startImportAll, undoImport,
 } from "./importer.js";
 import { connectMal, disconnectMal, malStatus, setMalClientId } from "./mal-store.js";
-import { grantedOrigins, syncSiteScripts } from "./site-scripts.js";
+import { ensureNetflixTracking, grantedOrigins, syncSiteScripts } from "./site-scripts.js";
 import { loadState } from "./store.js";
 import { runTrackerPull } from "./tracker-pull.js";
 import { whereMapStatus } from "./where-map-store.js";
@@ -219,20 +219,42 @@ async function runTracking(id) {
   await chrome.storage.local.set({ [KEYS.syncState]: { ...(await loadSync()), lastTrack: Date.now(), trackResult: result.ran ? result.message : WAITING[result.why] || result.message || "" } });
 }
 
+function sitePayload(reply) {
+  if (!reply || reply.ok === false) return null;
+  if (reply.ok === true && Object.prototype.hasOwnProperty.call(reply, "payload")) return reply.payload || null;
+  return reply.ok ? reply : null;
+}
+
 async function askSiteTab(id, message, preferTabId = null) {
   const key = SITE_TABS[id];
   if (!key) return null;
   const stored = (await chrome.storage.session.get(key))[key];
-  const tabId = preferTabId != null ? preferTabId : stored;
-  if (tabId == null) return null;
-  const reply = await chrome.tabs.sendMessage(tabId, message).catch(() => null);
-  if (reply?.ok) return reply.payload ?? reply;
-  // Watch tab may differ from the last hello tab — fall back to the remembered one.
-  if (preferTabId != null && stored != null && stored !== preferTabId) {
-    const again = await chrome.tabs.sendMessage(stored, message).catch(() => null);
-    return again?.ok ? again.payload ?? again : null;
+  const candidates = [];
+  const push = (tabId) => {
+    if (tabId == null || candidates.includes(tabId)) return;
+    candidates.push(tabId);
+  };
+  push(preferTabId);
+  push(stored);
+  if (!candidates.length) {
+    const service = serviceById(id);
+    const tabs = service ? await chrome.tabs.query({}).catch(() => []) : [];
+    const open = tabs.find((tab) => tab?.id != null && onService(service, tab.url));
+    push(open?.id);
   }
-  return null;
+  const once = async (tabId) => sitePayload(await chrome.tabs.sendMessage(tabId, message).catch(() => null));
+  for (const tabId of candidates) {
+    const payload = await once(tabId);
+    if (payload) {
+      if (tabId !== stored) await chrome.storage.session.set({ [key]: tabId }).catch(() => {});
+      return payload;
+    }
+  }
+  // Content script can miss the first message right after a reload. One short retry, then give up visibly upstream.
+  const retryId = candidates[0];
+  if (retryId == null) return null;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  return once(retryId);
 }
 
 function metaFromLabels(labels = []) {
@@ -247,11 +269,13 @@ function metaFromLabels(labels = []) {
     // Bare single-token labels are last-resort only and still need usablePlayerSeries.
     if (!split?.series) continue;
     if (!label.includes(": ") && ordered.some((row) => row.includes(": "))) continue;
+    const episode = episodeNumberOf(split.episode);
     return {
       series: split.series,
       season: split.season || "",
       seasonNumber: split.seasonNumber,
-      episode: 1,
+      episode: episode || 1,
+      episodeKnown: episode != null,
       anime: null,
       title: label,
     };
@@ -259,17 +283,38 @@ function metaFromLabels(labels = []) {
   return null;
 }
 
-async function bumpFromNetflixMeta(meta, { provisional }) {
+function netflixEpisodeKnown(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  if (meta.episodeKnown === false) return false;
+  if (meta.episodeKnown === true) return true;
+  const episode = Number(meta.episode);
+  if (Number.isInteger(episode) && episode > 1) return true;
+  return episodeNumberOf(meta.title) != null;
+}
+
+function playFromMeta(meta, { provisional }) {
   const series = usablePlayerSeries(meta?.series);
-  if (!series || meta.anime === false) return null;
-  return noteContinueFromTrackedPlay({
+  if (!series || meta?.anime === false) return null;
+  const known = netflixEpisodeKnown(meta);
+  return {
     service: "netflix",
     series,
     season: meta.season || "",
     seasonNumber: meta.seasonNumber,
     episode: Math.max(1, Number(meta.episode) || 1),
     provisional,
-  });
+    absolute: known,
+    // A missing number must not be stored as episode 1. One lift past the baseline is the safe finish.
+    catchUpLift: !known && !provisional ? 1 : 0,
+    episodeKnown: known,
+    syncAnilist: known,
+  };
+}
+
+async function bumpFromNetflixMeta(meta, { provisional }) {
+  const play = playFromMeta(meta, { provisional });
+  if (!play) return null;
+  return noteContinueFromTrackedPlay(play);
 }
 
 // Activity page 0 is only ~50 rows. Phone watches of the same show often sit on later pages;
@@ -283,7 +328,7 @@ function netflixVideoId(videoId) {
   return /^\d+$/.test(raw) ? Number(raw) : NaN;
 }
 
-async function bumpFromNetflixActivity({ provisional, videoId, tabId }) {
+async function bumpFromNetflixActivity({ provisional, videoId, tabId, allowLift = true }) {
   const wanted = netflixVideoId(videoId);
   // No /watch/{id}: do not promote whatever is still at the top of activity.
   if (!Number.isInteger(wanted)) return null;
@@ -339,60 +384,95 @@ async function bumpFromNetflixActivity({ provisional, videoId, tabId }) {
   const groups = all.filter((group) => group.anime !== false && group.episodes?.length);
   const newest = groups.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))[0];
   if (!newest) return null;
+  // A later read may raise an absolute episode number. Don't apply the unnumbered lift twice.
+  if (!provisional && !allowLift && newest.absolute === false) return null;
+  // Phone finishes share the series history but often have no episode number. Count the ones
+  // first played in the catch-up window (plus this finish). The scan's 1..n is not that delta.
+  const recentLift = newest.absolute === false ? Math.max(unnumberedCatchUpCount(newest.played), 1) : 0;
+  const absolute = newest.absolute !== false;
+  // Unnumbered: pass the recent lift as the episode count, not 1..n of the whole series scan.
+  const episode = absolute ? Math.max(...newest.episodes) : recentLift;
   return noteContinueFromTrackedPlay({
     service: "netflix",
     series: newest.series,
     season: newest.season || "",
     seasonNumber: newest.seasonNumber,
-    episode: Math.max(...newest.episodes),
+    episode,
     provisional,
+    absolute,
+    // Starts also carry the lift so phone plays before this watch are assumed on the rail.
+    catchUpLift: newest.absolute === false && (provisional || allowLift) ? recentLift : 0,
+    // Unnumbered lift stays local; history catch-up is what writes AniList once.
+    syncAnilist: absolute,
   });
 }
 
 // Speeds Continue Watching from Netflix; provisional start names the /watch/{id} title (activity often lags).
 async function bumpContinueFromNetflix({ provisional = false, videoId = "", labels = [], tabId = null } = {}) {
-  const tryBump = async () => {
-    const fromLabels = () => bumpFromNetflixMeta(metaFromLabels(labels), { provisional });
-    const fromWatchNow = async () => {
-      if (!videoId) return null;
+  const fromLabels = () => bumpFromNetflixMeta(metaFromLabels(labels), { provisional });
+  const fromWatchNow = async () => {
+    if (!videoId) return null;
+    const meta = await askSiteTab("netflix", { type: "netflixWatchNow", videoId, labels }, tabId);
+    return bumpFromNetflixMeta(meta, { provisional });
+  };
+  const namedPlay = async () => {
+    const plays = [];
+    if (videoId) {
       const meta = await askSiteTab("netflix", { type: "netflixWatchNow", videoId, labels }, tabId);
-      return bumpFromNetflixMeta(meta, { provisional });
-    };
-    const fromActivity = () => bumpFromNetflixActivity({ provisional, videoId, tabId });
-    // Prefer Netflix APIs (seriesTitle) over page labels — mediaSession.title is often only the episode name.
-    // Finishes: activity only (watchNow/labels hardcode episode:1 and would fake a successful undercount).
-    // Starts: watchNow, then activity, labels last.
-    const order = provisional
-      ? [fromWatchNow, fromActivity, fromLabels]
-      : [fromActivity];
-    for (const step of order) {
-      const row = await step().catch(() => null);
-      if (row) return row;
+      const fromWatch = playFromMeta(meta, { provisional: false });
+      if (fromWatch) plays.push(fromWatch);
     }
-    return null;
+    const labeled = playFromMeta(metaFromLabels(labels), { provisional: false });
+    if (labeled) plays.push(labeled);
+    const known = plays.filter((play) => play.episodeKnown).sort((a, b) => b.episode - a.episode);
+    return known[0] || plays[0] || null;
+  };
+  const tryStart = async () => {
+    // Activity first (absolute numbers and gap fill). If that only knows episode 1, keep the
+    // highest next from watchNow/labels ("Episode 14" must beat a hardcoded 1).
+    const rank = (row) => Math.max(Number(row?.next) || 0, (Number(row?.progress) || 0) + 1);
+    let best = null;
+    for (const step of [() => bumpFromNetflixActivity({ provisional: true, videoId, tabId }), fromWatchNow, fromLabels]) {
+      const row = await step().catch(() => null);
+      if (row && (!best || rank(row) > rank(best))) best = row;
+    }
+    if (best) await upsertContinueRow(best);
+    return best;
+  };
+  // One known episode write. Two unknown lifts would add 2 for the same finish.
+  const tryFinish = async ({ allowLift = true } = {}) => {
+    const history = await bumpFromNetflixActivity({ provisional: false, videoId, tabId, allowLift }).catch(() => null);
+    const named = await namedPlay().catch(() => null);
+    const historyProgress = Math.max(0, Number(history?.progress) || 0);
+    if (named?.episodeKnown && named.episode > historyProgress) {
+      return noteContinueFromTrackedPlay({ ...named, provisional: false, absolute: true, catchUpLift: 0 });
+    }
+    if (history) return history;
+    if (!named) return null;
+    if (!allowLift && !named.episodeKnown) return null;
+    return noteContinueFromTrackedPlay(named);
   };
   const hasTab = tabId != null || (await chrome.storage.session.get(KEYS.netflixTab))[KEYS.netflixTab] != null;
-  const first = await tryBump();
   if (provisional) {
-    if (first) return first;
-    if (!hasTab) return null;
+    const first = await tryStart();
+    if (first || !hasTab) return first;
     await new Promise((resolve) => setTimeout(resolve, 2500));
-    return (await tryBump()) || null;
+    return (await tryStart()) || null;
   }
-  // Finishes: bump now when activity is ready; one delayed retry can raise an undercount (Math.max in noteContinue).
+  const first = await tryFinish();
+  // A later activity read can raise an absolute undercount. Do not apply the +1 lift again.
   if (first) {
     if (hasTab) {
       const retry = setTimeout(() => {
-        tryBump().catch(() => {});
+        tryFinish({ allowLift: false }).catch(() => {});
       }, 2500);
       retry.unref?.();
     }
     return first;
   }
-  // No video id → nothing useful to retry; history catch-up still runs from the handler.
   if (!hasTab || !Number.isInteger(netflixVideoId(videoId))) return null;
   await new Promise((resolve) => setTimeout(resolve, 2500));
-  return (await tryBump()) || null;
+  return (await tryFinish()) || null;
 }
 
 function pickHidiveHistoryEntry(entries, { videoId = "", provisional = false } = {}) {
@@ -751,6 +831,55 @@ const pageHandlers = {
   },
 };
 
+const NETFLIX_TRACK_WARN = "ksNetflixTrackWarned";
+
+async function noteNetflixTrackingOn(tabId) {
+  noteActivity({
+    id: "tracking:netflix-on",
+    kind: "tracking",
+    service: "netflix",
+    title: "Netflix tracking turned on",
+    detail: "Continue Watching can count Netflix episodes. Turn it off in Settings if you don't want that.",
+    ok: true,
+  }).catch(() => {});
+  sendWatchGuide(tabId, {
+    kind: "tracked",
+    service: "netflix",
+    force: true,
+    hint: "Netflix tracking is on, so Continue Watching can count episodes. Turn it off in Settings if you don't want that.",
+  }).catch(() => {});
+}
+
+async function warnNetflixTrackingOff(tabId) {
+  noteActivity({
+    id: "tracking:netflix-off",
+    kind: "tracking",
+    service: "netflix",
+    title: "Netflix tracking is off",
+    detail: "Continue Watching did not count this playback. Turn on Track Netflix under Settings → Import.",
+    ok: false,
+  }).catch(() => {});
+  const already = (await chrome.storage.session.get(NETFLIX_TRACK_WARN))[NETFLIX_TRACK_WARN];
+  if (already) return;
+  await chrome.storage.session.set({ [NETFLIX_TRACK_WARN]: Date.now() }).catch(() => {});
+  sendWatchGuide(tabId, {
+    kind: "tracked",
+    service: "netflix",
+    force: true,
+    hint: "Netflix tracking is off, so Continue Watching isn't counting this. Turn on Track Netflix under Settings → Import.",
+  }).catch(() => {});
+}
+
+async function gateNetflixTracking(tabId) {
+  const gate = await ensureNetflixTracking();
+  if (!gate.enabled) {
+    await warnNetflixTrackingOff(tabId);
+    return false;
+  }
+  if (gate.turnedOn) noteNetflixTrackingOn(tabId);
+  return true;
+}
+
 const contentHandlers = {
   crunchyrollAuth: async ({ token }, sender) => {
     if (onSite(sender, "https://www.crunchyroll.com/")) {
@@ -763,14 +892,17 @@ const contentHandlers = {
   netflixHello: async (_message, sender) => {
     if (onSite(sender, "https://www.netflix.com/") && sender.tab?.id != null && sender.frameId === 0) {
       await chrome.storage.session.set({ [KEYS.netflixTab]: sender.tab.id });
+      const gate = await ensureNetflixTracking();
+      if (gate.turnedOn) noteNetflixTrackingOn(sender.tab.id);
       await syncSoon();
       await catalogSoon();
     }
     return {};
   },
   netflixStarted: async (message, sender) => {
-    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0 && (await loadImportSettings()).trackNetflix) {
+    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0) {
       if (sender.tab?.id != null) await chrome.storage.session.set({ [KEYS.netflixTab]: sender.tab.id });
+      if (!(await gateNetflixTracking(sender.tab?.id))) return {};
       const bumped = await bumpContinueFromNetflix({
         provisional: true,
         videoId: message?.videoId || "",
@@ -779,23 +911,32 @@ const contentHandlers = {
       }).catch(() => null);
       noteActivity({
         kind: "tracking",
+        service: "netflix",
         title: bumped ? `Netflix: watching ${bumped.title || "a show"}` : "Netflix: playback noticed (naming Continue Watching…)",
+        detail: bumped ? "" : "The Netflix tab didn't return a show name, so Continue Watching was not updated.",
         ok: Boolean(bumped),
       }).catch(() => {});
       if (bumped) {
         sendWatchGuide(sender.tab?.id, {
           kind: "tracked",
           title: bumped.title,
-          episode: bumped.progress != null ? bumped.progress + 1 : null,
+          episode: bumped.next || (bumped.progress != null ? bumped.progress + 1 : null),
           service: "netflix",
+        }).catch(() => {});
+      } else {
+        sendWatchGuide(sender.tab?.id, {
+          kind: "tracked",
+          service: "netflix",
+          hint: "Netflix playback was seen, but this episode couldn't be named yet. Keep the Netflix tab open — Continue Watching will catch up.",
         }).catch(() => {});
       }
     }
     return {};
   },
   netflixWatched: async (message, sender) => {
-    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0 && (await loadImportSettings()).trackNetflix) {
+    if (onSite(sender, "https://www.netflix.com/") && sender.frameId === 0) {
       if (sender.tab?.id != null) await chrome.storage.session.set({ [KEYS.netflixTab]: sender.tab.id });
+      if (!(await gateNetflixTracking(sender.tab?.id))) return {};
       const bumped = await bumpContinueFromNetflix({
         provisional: false,
         videoId: message?.videoId || "",
@@ -804,8 +945,10 @@ const contentHandlers = {
       }).catch(() => null);
       noteActivity({
         kind: "tracking",
+        service: "netflix",
         title: bumped ? `Netflix: finished ${bumped.title || "an episode"} — catching up AniList` : "Netflix: episode finished — catching up AniList",
-        ok: true,
+        detail: bumped ? "" : "Continue Watching could not read this finish from the Netflix tab. History catch-up is scheduled.",
+        ok: Boolean(bumped),
       }).catch(() => {});
       if (bumped) {
         sendWatchGuide(sender.tab?.id, {

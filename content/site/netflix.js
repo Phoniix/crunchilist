@@ -190,6 +190,19 @@
     const match = /\bseason\s+(\d{1,3})\b/i.exec(season || "");
     return match ? Number(match[1]) : null;
   }
+  function episodeNumberOf(episode) {
+    const text2 = String(episode || "").trim();
+    if (!text2) return null;
+    const seasonEp = /\bS\d{1,2}\s*[:.\-–]?\s*E(\d{1,4})\b/i.exec(text2) || /\b(\d{1,2})\s*[x×]\s*(\d{1,4})\b/i.exec(text2);
+    if (seasonEp) {
+      const n2 = Number(seasonEp[2] != null ? seasonEp[2] : seasonEp[1]);
+      if (Number.isInteger(n2) && n2 > 0 && n2 < 1e4) return n2;
+    }
+    const match = /(?:^|[^\p{L}\p{N}])(?:episode|ep\.?|e|#)\s*(\d{1,4})\b/iu.exec(` ${text2}`) || /^(\d{1,4})\s*[-–:.]\s*\S/u.exec(text2);
+    if (!match) return null;
+    const n = Number(match[1]);
+    return Number.isInteger(n) && n > 0 && n < 1e4 ? n : null;
+  }
   function netflixInfo(item) {
     const year2 = Number.isInteger(item?.showYear) && item.showYear > 1900 ? item.showYear : null;
     const genres = Array.isArray(item?.genres) ? item.genres.filter((name) => typeof name === "string") : [];
@@ -233,6 +246,7 @@
     const series = usablePlayerSeries(line);
     return series ? { series, season: "", seasonNumber: null, episode: "" } : null;
   }
+  var NETFLIX_CATCH_UP_MS = 7 * 24 * 60 * 60 * 1e3;
 
   // lib/watch-tracking.js
   var FINISHED = 0.85;
@@ -249,19 +263,42 @@
     let netflixPlayer = function() {
       const videos = [...document.querySelectorAll("video")].filter((video) => Number.isFinite(video.duration) && video.duration > 60);
       return videos.sort((a, b) => (b.currentTime || 0) - (a.currentTime || 0) || b.duration - a.duration)[0] || null;
+    }, cleanPageLabel = function(value2) {
+      const junk = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3})$/i;
+      const text2 = String(value2 || "").replace(/\s+/g, " ").trim();
+      return text2 && !junk.test(text2) ? text2 : "";
+    }, pageEpisodeHints = function() {
+      const bits = [];
+      const push = (value2) => {
+        const text2 = cleanPageLabel(value2);
+        if (text2) bits.push(text2);
+      };
+      for (const sel of ['[data-uia="video-title"]', '[data-uia="episode-title"]', '[data-uia="video-title"] *', ".watch-video--player-view-evidence", ".watch-video--title-text"]) {
+        for (const node of document.querySelectorAll(sel)) {
+          push(node.getAttribute?.("aria-label"));
+          push(node.textContent);
+        }
+      }
+      for (const node of document.querySelectorAll("h4, h3, [class*='title'], [class*='episode']")) {
+        const text2 = cleanPageLabel(node.textContent);
+        if (text2 && text2.length < 120 && episodeNumberOf(text2) != null) push(text2);
+      }
+      return [...new Set(bits)];
     }, pageLabels = function() {
       const meta = navigator.mediaSession?.metadata;
       const labels = [];
-      const junk = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3})$/i;
-      const clean = (value2) => {
-        const text2 = String(value2 || "").replace(/\s+/g, " ").trim();
-        return text2 && !junk.test(text2) ? text2 : "";
-      };
-      const show = clean(meta?.album || meta?.artist);
-      const ep = clean(meta?.title);
+      const show = cleanPageLabel(meta?.album || meta?.artist);
+      const ep = cleanPageLabel(meta?.title);
+      const hints = pageEpisodeHints();
+      const hintEp = hints.map((text2) => episodeNumberOf(text2)).find((n) => n != null) || null;
+      if (show && hintEp != null) labels.push(`${show}: Episode ${hintEp}`);
       if (show && ep) labels.push(`${show}: ${ep}`);
       if (show) labels.push(show);
-      const doc = clean(String(document.title || "").replace(/\s*[-–|]\s*Netflix\s*$/i, "").replace(/^\s*Watch\s+/i, ""));
+      for (const hint of hints) {
+        if (show) labels.push(`${show}: ${hint}`);
+        else labels.push(hint);
+      }
+      const doc = cleanPageLabel(String(document.title || "").replace(/\s*[-–|]\s*Netflix\s*$/i, "").replace(/^\s*Watch\s+/i, ""));
       if (doc && doc !== ep) labels.push(doc);
       return [...new Set(labels)];
     }, askPage = function(kind, extra = {}, timeoutMs = PAGE_TIMEOUT_MS) {
@@ -299,12 +336,13 @@
     }, metaFromLabel = function(label, anime) {
       const split = splitPlayerTitle(label);
       if (!split?.series) return null;
+      const episode = episodeNumberOf(split.episode);
       return {
         series: split.series,
         season: split.season || "",
         seasonNumber: split.seasonNumber ?? seasonNumberOf(split.season || ""),
-        // Netflix doesn't expose a reliable episode number on the player — season progress is filled from activity later.
-        episode: 1,
+        episode: episode || 1,
+        episodeKnown: episode != null,
         anime,
         title: label
       };
@@ -330,6 +368,17 @@
       const summary = value(node?.summary);
       if (Number.isInteger(summary?.id) && /^(show|series)$/i.test(String(summary?.type || ""))) return summary.id;
       return null;
+    }, mergeEpisodeFromLabels = function(meta, labelList) {
+      if (!meta || meta.episodeKnown) return meta;
+      const labeled = metaFromLabelList(labelList, meta.anime);
+      if (!labeled?.episodeKnown) return meta;
+      return {
+        ...meta,
+        episode: labeled.episode,
+        episodeKnown: true,
+        season: meta.season || labeled.season || "",
+        seasonNumber: meta.seasonNumber ?? labeled.seasonNumber
+      };
     };
     window.__ksNetflixContent = true;
     const PAGE_SOURCE = "crunchilist-search-page";
@@ -473,7 +522,7 @@
       });
       return { viewedItems, vhSize: history.vhSize, profileName: history.profileInfo?.profileName || "" };
     }
-    async function namedPlay(me, { series, season = "", episodeTitle = "", seriesId = null, anime = null }) {
+    async function namedPlay(me, { series, season = "", episodeTitle = "", seriesId = null, anime = null, episodeHint = null }) {
       const name = String(series || "").trim();
       if (!name) return null;
       let resolvedAnime = anime;
@@ -481,21 +530,28 @@
         const info = await showInfo(me, [seriesId]);
         resolvedAnime = netflixInfo({ genres: info[seriesId]?.genres ?? null }).anime;
       }
+      const title = String(episodeTitle || name).trim();
+      const fromTitle = episodeNumberOf(title);
+      const fromHint = Number.isInteger(episodeHint) && episodeHint > 0 ? episodeHint : null;
+      const episode = fromTitle || fromHint;
       return {
         series: name,
         season: String(season || "").trim(),
         seasonNumber: seasonNumberOf(season || ""),
-        episode: 1,
+        episode: episode || 1,
+        episodeKnown: episode != null,
         anime: resolvedAnime,
-        title: String(episodeTitle || name).trim()
+        title
       };
     }
     async function watchNow(videoId, labels = []) {
       const id = Number(videoId);
       if (!Number.isInteger(id)) return null;
       const labelList = (Array.isArray(labels) ? labels : []).map((label) => String(label || "")).filter(Boolean);
+      const labelMeta = metaFromLabelList(labelList);
+      const episodeHint = labelMeta?.episodeKnown ? labelMeta.episode : null;
       const me = cached || await profile().catch(() => null);
-      if (!me) return metaFromLabelList(labelList);
+      if (!me) return labelMeta;
       let item = null;
       try {
         const history = await historyPage(me, 0);
@@ -504,12 +560,13 @@
         item = null;
       }
       if (item?.seriesTitle) {
-        return namedPlay(me, {
+        return mergeEpisodeFromLabels(await namedPlay(me, {
           series: item.seriesTitle,
           season: item.seasonDescriptor || "",
           episodeTitle: item.title || item.episodeTitle || "",
-          seriesId: Number.isInteger(item.series) ? item.series : null
-        });
+          seriesId: Number.isInteger(item.series) ? item.series : null,
+          episodeHint
+        }), labelList);
       }
       const graph = await videoData(me, ["videos", id, ["title", "summary", "parent"]]);
       const video = graph?.videos?.[id];
@@ -520,22 +577,23 @@
         seriesId = parentVideoId(withParent?.videos?.[id], withParent) || seriesId;
         const parentTitle = value(withParent?.videos?.[id]?.parent?.title);
         if (typeof parentTitle === "string" && parentTitle.trim()) {
-          return namedPlay(me, { series: parentTitle, episodeTitle, seriesId });
+          return mergeEpisodeFromLabels(await namedPlay(me, { series: parentTitle, episodeTitle, seriesId, episodeHint }), labelList);
         }
       }
       if (Number.isInteger(seriesId) && seriesId !== id) {
         const parent = await videoData(me, ["videos", seriesId, "title"]);
         const parentTitle = value(parent?.videos?.[seriesId]?.title);
         if (typeof parentTitle === "string" && parentTitle.trim()) {
-          return namedPlay(me, {
+          return mergeEpisodeFromLabels(await namedPlay(me, {
             series: parentTitle,
             season: item?.seasonDescriptor || "",
             episodeTitle,
-            seriesId
-          });
+            seriesId,
+            episodeHint
+          }), labelList);
         }
       }
-      return metaFromLabelList(labelList);
+      return labelMeta;
     }
     async function genrePage(me, genreId, from) {
       const to = from + NETFLIX_CATALOG_PAGE - 1;

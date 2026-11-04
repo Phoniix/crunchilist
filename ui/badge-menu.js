@@ -15,7 +15,7 @@ export function closeBadgeMenu({ refocus = false } = {}) {
   opener = null;
 }
 
-export function openBadgeMenu(badge, { mark, title = "", onPick }) {
+export function openBadgeMenu(badge, { mark, title = "", continueRail = false, onPick }) {
   closeBadgeMenu();
   const doc = badge.ownerDocument;
   const view = doc.defaultView;
@@ -29,12 +29,15 @@ export function openBadgeMenu(badge, { mark, title = "", onPick }) {
     heading.textContent = title;
     menu.append(heading);
   }
-  const option = (status, text) => {
+  const option = (status, text, { danger = false, tip = "", className = "" } = {}) => {
     const button = doc.createElement("button");
     button.type = "button";
     button.setAttribute("role", "menuitem");
-    button.append(badgeIcon(doc, status), doc.createTextNode(text));
-    button.classList.add(`crl-t-${status}`);
+    button.append(badgeIcon(doc, status === "hide_continue" ? "unwatched" : status), doc.createTextNode(text));
+    button.classList.add(`crl-t-${status === "hide_continue" ? "unwatched" : status}`);
+    if (danger) button.classList.add("crl-menu-danger");
+    if (className) button.classList.add(className);
+    if (tip) button.title = tip;
     if (status === mark) {
       const check = doc.createElement("span");
       check.className = "crl-menu-check";
@@ -50,10 +53,22 @@ export function openBadgeMenu(badge, { mark, title = "", onPick }) {
     return button;
   };
   for (const status of CHOICES) menu.append(option(status, BADGE_LABELS[status]));
-  if (mark !== "unwatched") {
+  if (mark !== "unwatched" || continueRail) {
     const sep = doc.createElement("span");
     sep.className = "crl-menu-sep";
-    menu.append(sep, option("unwatched", "Remove from list"));
+    menu.append(sep);
+  }
+  if (continueRail) {
+    menu.append(option("hide_continue", "Hide from Continue watching", {
+      tip: "Removes this show from the Continue watching rail on this device only. Your list status stays the same.",
+      className: "crl-menu-hide-cw",
+    }));
+  }
+  if (mark !== "unwatched") {
+    menu.append(option("unwatched", "Remove from list", {
+      danger: true,
+      tip: "Removes this show from your list (and AniList when connected). It stays in the catalog and search.",
+    }));
   }
   doc.documentElement.append(menu);
 

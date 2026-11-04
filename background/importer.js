@@ -6,14 +6,14 @@ import { readEntry, readList, saveEntry, deleteEntry } from "../lib/anilist-list
 import { ACCOUNT_URL, CATCH_UP_DAYS, catchUpCheckpoint, checkpointNewest, groupRows, historyPageUrl, newerThan, parsePage, tipFromWatched } from "../lib/crunchyroll-history.js";
 import { groupEpisodes } from "../lib/episode-groups.js";
 import { readAllShows } from "../lib/idb.js";
-import { LIVE_ACTION_NAMES, groupNetflix, parseActivity, parseNetflixCsv } from "../lib/netflix-history.js";
-import { GENERAL_RULES, checkGeneral, matchGroups, mergeWatched, planChanges, watchedParts } from "../lib/import-plan.js";
+import { LIVE_ACTION_NAMES, groupNetflix, mergeNetflixReplay, parseActivity, parseNetflixCsv } from "../lib/netflix-history.js";
+import { GENERAL_RULES, checkGeneral, matchGroups, mergeWatched, planChanges, watchedParts, withCatchUpLift } from "../lib/import-plan.js";
 import { keepLogs } from "../lib/import-log.js";
 import { KEYS } from "../lib/keys.js";
 import { anyPreview, asPreviewMap, blockingPreview, packPreviewMap } from "../lib/import-previews.js";
 import { LIST_SOURCES, kitsuLibraryUrl, kitsuUserUrl, mergeRows, parseKitsuPage, parseMalXml, resolveIds } from "../lib/list-import.js";
 import { createMatcher } from "../lib/match-engine.js";
-import { matchKey, matchWithMemory, remember } from "../lib/remembered.js";
+import { matchKey, matchWithMemory, remember, resolveMatchKey } from "../lib/remembered.js";
 import { parseHidivePage } from "../lib/hidive-history.js";
 import { parsePrimePage } from "../lib/prime-history.js";
 import { listChange, safeChange, sameDate } from "../lib/safe-change.js";
@@ -500,16 +500,16 @@ async function readHistory(source, { full, catchUp = false }) {
     await save(KEYS.importDraft, draft);
   }
   // Netflix: a prior import may have sealed the checkpoint while titles were still in progress (same date when they finish).
-  // Re-check the first activity page for recent finishes that newerThan would otherwise skip.
-  if (!catchUp && !full && service === "netflix" && !(draft.fresh > 0)) {
+  // Re-check the first activity page even when other rows are new, and upgrade an in-progress copy of the same key.
+  if (!full && service === "netflix") {
     try {
       const parsed = await source.page(source.first, 0);
       const floor = Date.now() - CATCH_UP_DAYS * 24 * 60 * 60 * 1000;
-      const have = new Set(draft.rows.map((row) => row.key));
-      const replay = parsed.rows.filter((row) => row.watched && row.playedAt >= floor && !have.has(row.key));
-      if (replay.length) {
-        draft.rows.push(...replay);
-        draft.fresh = (draft.fresh || 0) + replay.length;
+      const replay = (parsed.rows || []).filter((row) => row.watched && row.playedAt >= floor);
+      const merged = mergeNetflixReplay(draft.rows, replay);
+      if (merged.added) {
+        draft.rows = merged.rows;
+        draft.fresh = (draft.fresh || 0) + merged.added;
         notes.push("Re-checked recent Netflix finishes that may have been skipped while still in progress.");
         await save(KEYS.importDraft, draft);
       }
@@ -565,8 +565,17 @@ async function buildPreview({ service, groups, checkpoints = [], seen, notes, tr
   const engine = await matcher();
   let memory = await load(KEYS.matches, {});
   const matchOne = (group) => {
-    const found = matchWithMemory(engine, memory, group.key, group);
-    if (!isGeneral(group.service) || memory[group.key]?.by === "user") return found;
+    const canonical = group.key;
+    const used = resolveMatchKey(memory, group.service, group.seriesId, {
+      seasonId: group.seasonId,
+      season: group.season,
+      seasonNumber: group.seasonNumber,
+    });
+    // Legacy "season 1" picks should satisfy the s1 key Continue Watching and later imports use.
+    if (used !== canonical && memory[used] && !memory[canonical]) memory = { ...memory, [canonical]: memory[used] };
+    const key = memory[canonical] ? canonical : used;
+    const found = matchWithMemory(engine, memory, key, group);
+    if (!isGeneral(group.service) || memory[key]?.by === "user") return found;
     const name = serviceById(group.service)?.name || group.service;
     return checkGeneral(engine, group, { ...found, remembered: false }, LIVE_ACTION_NAMES, name);
   };
@@ -613,8 +622,9 @@ async function buildPreview({ service, groups, checkpoints = [], seen, notes, tr
     const info = media.get(item.anilistId);
     if (!info) continue;
     const before = entries.get(item.anilistId) || null;
+    const lifted = withCatchUpLift(item, before);
     const beforeProgress = Math.max(0, Number(before?.progress) || 0);
-    const progress = Math.max(beforeProgress, Math.max(0, Number(item.progress) || 0));
+    const progress = Math.max(0, Number(lifted.progress) || 0);
     const episodes = info.episodes || null;
     const complete = Boolean(episodes && progress >= episodes && info.status === "FINISHED");
     if (!shouldBumpContinueFromImport({
@@ -932,7 +942,13 @@ async function readSites(services, { catchUp = false } = {}) {
       if (service === "crunchyroll") await crunchyrollToken();
       const source = await SOURCES[service]();
       const read = await readHistory(source, { full: false, catchUp });
-      const found = source.group(read.rows).map((group) => ({ ...group, service, key: matchKey(service, group.seriesId, group.seasonId) }));
+      const found = source.group(read.rows).map((group) => ({
+        ...group,
+        service,
+        key: matchKey(service, group.seriesId, group.seasonId),
+        // Catch-up windows renumber Netflix 1..k unless absolute; planChanges lifts onto AniList.
+        catchUp: Boolean(catchUp),
+      }));
       out.groups.push(...found);
       out.checkpoints.push({ ckey: read.ckey, checkpoint: read.checkpoint });
       out.seen += read.seen;

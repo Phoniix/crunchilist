@@ -194,20 +194,28 @@ function refreshBanner(api, { restart = false } = {}) {
         bar.querySelector(".hero-tip").innerHTML = `<span style="background-image:url('${m.cssUrl(m.artOf(spots[n]))}')"></span><b>${m.esc(spots[n].title)}</b>`;
       });
     }
-    hero.querySelector(".hero-copy").innerHTML = heroCopy(spots[slide]);
-    fitHeroCopy(hero);
+    paintHeroCopy(hero, spots[slide]);
     return;
   }
   hero.querySelector(".hero-bars").innerHTML = heroBars(spots);
   showSlide(Math.min(slide, spots.length - 1));
 }
+function paintHeroCopy(hero, s) {
+  const copy = hero.querySelector(".hero-copy");
+  if (!copy) return;
+  copy.innerHTML = heroCopy(s);
+  m.markWrappedAudio?.(copy);
+  fitHeroCopy(hero);
+}
 function heroCopy(s) {
   const item = m.entry(s);
   const row = heroRows.get(s.id) || {};
   const size = titleSize(s.title);
+  const audio = m.audioTagHtml?.(s) || "";
   return `<div class="hero-tag"><i></i>${heroTag(s, row)}</div>
     <h1${size ? ` data-size="${size}"` : ""} title="${m.esc(s.title)}">${m.esc(s.title)}</h1>
     <div class="peek-meta"><span class="watched-status-label">Watched Status:</span>${m.statusBadge(s, { inline: true, focusable: true })}${m.matchBadge(row.match, "hero-match")}<span class="star">★ ${m.score(s)}</span>${s.year ? `<span>${s.year}</span>` : ""}<span>${m.seasonCount(s)}</span>${s.genres.length ? `<span>${m.esc(s.genres.slice(0, 3).join(" · "))}</span>` : ""}</div>
+    ${audio ? `<div class="peek-tags hero-audio">${audio}</div>` : ""}
     ${row.reason ? `<p class="hero-why">${m.icon("sparkle")} ${m.esc(row.reason)}</p>` : s.about ? `<p>${m.esc(s.about)}</p>` : ""}
     <div class="peek-actions" data-show="${m.esc(s.id)}"><button class="btn accent" data-act="watch">${m.icon(m.onCrunchyroll(s) ? "play" : "right")} ${m.esc(m.playLabel(s))}</button>
       <button class="btn" data-act="toggle">${m.icon(item ? "check" : "plus")} ${item ? m.STATUS[item.status] : "My list"}</button><a class="btn" href="#show/${m.esc(s.id)}">Details</a>
@@ -255,8 +263,7 @@ function showSlide(i) {
   const copy = hero.querySelector(".hero-copy");
   if (!copy) return;
   if (!prefs.reduce) { copy.style.animation = "none"; void copy.offsetWidth; copy.style.animation = ""; }
-  copy.innerHTML = heroCopy(s);
-  fitHeroCopy(hero);
+  paintHeroCopy(hero, s);
   showPage(hero, pageOf(slide));
   const dur = withVideo ? 30 : 9;
   hero.querySelectorAll(".hero-bar").forEach((bar, n) => {

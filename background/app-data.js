@@ -6,7 +6,13 @@ import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable,
 import { changeLibrary } from "./anilist-sync.js";
 import { readCatalogs } from "./catalog-reader.js";
 import { loadServiceCatalogs } from "./catalog-store.js";
-import { expireProvisionalContinueActivity, loadContinueActivity } from "./continue-activity.js";
+import {
+  clearContinueForShow,
+  dismissContinueShow,
+  expireProvisionalContinueActivity,
+  loadContinueActivity,
+  loadContinueDismissed,
+} from "./continue-activity.js";
 import { refreshIdMap } from "./id-map-store.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
@@ -37,9 +43,42 @@ export async function appData() {
   refreshIdMap().catch(() => {});
   readCatalogs(["crunchyroll"]).catch(() => {});
   const continueActivity = await expireProvisionalContinueActivity().catch(() => loadContinueActivity());
+  const continueDismissed = await loadContinueDismissed().catch(() => []);
   const view = makeView(state, catalog);
   view.unrecommended = await loadUnrecommended();
-  return { shows, library: libraryMirror(shows, state.library), continueActivity, view, unrecommended: view.unrecommended };
+  return {
+    shows,
+    library: libraryMirror(shows, state.library),
+    continueActivity,
+    continueDismissed,
+    view,
+    unrecommended: view.unrecommended,
+  };
+}
+
+export async function hideContinueShow(showId, extras = {}) {
+  const id = String(showId || "").trim();
+  if (!id) throw new Error("Nothing to hide.");
+  const { shows } = await loadShows(await loadState());
+  const show = shows.find((row) => row.id === id);
+  const activity = (await loadContinueActivity()).find((row) => String(row?.id) === id);
+  if (!show && !activity && !extras.title && !extras.anilistId) {
+    throw new Error("That show isn't on Continue watching anymore.");
+  }
+  const result = await dismissContinueShow({
+    id,
+    anilistIds: [
+      show?.anilistId,
+      ...(show?.seasons || []).map((season) => season?.anilistId),
+      activity?.anilistId,
+      extras.anilistId,
+    ],
+    title: show?.title || activity?.title || extras.title || "",
+  });
+  return {
+    continueActivity: result.continueActivity,
+    continueDismissed: result.continueDismissed,
+  };
 }
 
 export async function setSeasonState(showId, changes) {
@@ -58,7 +97,21 @@ export async function setSeasonState(showId, changes) {
     }
     return next;
   }, show.anilistId ? "" : "Saved on this device.");
-  return { library: libraryMirror(shows, result.state.library), view: makeView(result.state, await loadCatalog()), syncNote: result.syncNote };
+  // Finished / dropped / removed from the rail badge must leave Continue Watching too.
+  const leaveRail = changes.some((change) => change?.status === "finished" || change?.status === "dropped" || change?.status == null);
+  const continueActivity = leaveRail
+    ? await clearContinueForShow({
+      id: show.id,
+      anilistIds: [show.anilistId, ...(show.seasons || []).map((season) => season?.anilistId)],
+      title: show.title,
+    })
+    : await loadContinueActivity();
+  return {
+    library: libraryMirror(shows, result.state.library),
+    continueActivity,
+    view: makeView(result.state, await loadCatalog()),
+    syncNote: result.syncNote,
+  };
 }
 
 let extrasJob = null;

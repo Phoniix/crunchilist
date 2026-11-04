@@ -1,8 +1,16 @@
 // Prism: the Crunchilist page. Pages, cards, theme, trailers and the library, drawn from the extension's own data.
 // The data layer (prism-data.js) is the only part that talks to the background.
 import { applySeasonChanges, playRequest } from "../lib/app-shows.js";
+import {
+  addContinueDismissed,
+  continueDisplayProgress,
+  isContinueDismissed,
+  removeContinueForShow,
+} from "../lib/continue-activity.js";
 import { BANNER_HISTORY_MS, FOR_YOU_HISTORY_MS, FOR_YOU_MIDWEEK_MS, FOR_YOU_PICKS_TTL_MS, galleryBanner, orderForYou, pickExclusiveBanner } from "../lib/banner.js";
 import { themesOverlapHigh } from "../lib/home-rows.js";
+import { DEFAULT_MOODS } from "../lib/search-moods.js";
+import { profileStats } from "../lib/profile-stats.js";
 import { filterRecommended, unrecommendedIds } from "../lib/unrecommended.js";
 import { updatesInLabel } from "../lib/update-eta.js";
 import { closeBadgeMenu, openBadgeMenu } from "../ui/badge-menu.js";
@@ -23,7 +31,7 @@ import { serviceById, serviceForSite, visibleLink } from "../lib/services.js";
 import { handleImportAct, noteImportState, onImportPick, onImportToggle, renderImportPane, renderImportsHistory } from "./import-pane.js";
 import { DEFAULT_CHARACTER_ID, characterById } from "../lib/characters.js";
 import { activeCharacterId, guideLine } from "../lib/guide.js";
-import { NOTICE_SECTIONS, noticeSection } from "../lib/notices.js";
+import { NOTICE_SECTIONS, PREVIEW_NOTICE_KINDS, noticeSection } from "../lib/notices.js";
 import { guideBubbleHtml } from "./guide-bubble.js";
 import { createWelcome } from "./prism-welcome.js";
 
@@ -40,7 +48,8 @@ const PALETTES = [
   { id: "mono", name: "Mono", colors: ["#f5f5f5", "#555555"] },
 ];
 const STATUS = { watching: "Watching", plan: "Plan to watch", finished: "Finished", dropped: "Dropped" };
-const MOODS = ["something cozy", "big fights", "make me cry", "smart mystery", "short and sweet", "found family"];
+const MOODS = [...DEFAULT_MOODS];
+let searchMoodsState = { moods: [...DEFAULT_MOODS], by: "", ai: false, busy: false, checkedAt: 0 };
 const GRID_BATCH = 60;
 
 const icons = {
@@ -131,6 +140,7 @@ const watchedLabel = (show) => {
   return at ? `Watched ${ago(at)}` : "";
 };
 let continueActivity = [];
+let continueDismissed = [];
 // Activity-only stub when Netflix/HIDIVE name a title that isn't in the Crunchyroll catalog yet.
 function showFromActivity(row) {
   if (!row?.id || !row?.title) return null;
@@ -171,19 +181,34 @@ function showForActivity(row) {
     || (row?.anilistId ? SHOWS.find((item) => item.anilistId === row.anilistId) : null)
     || showFromActivity(row);
 }
+function applyContinueDismissed(list) {
+  continueDismissed = Array.isArray(list) ? list : [];
+}
+function dismissedFromContinue(show) {
+  return isContinueDismissed(continueDismissed, {
+    id: show?.id,
+    anilistId: show?.anilistId,
+    anilistIds: (show?.seasons || []).map((season) => season?.anilistId),
+    title: show?.title,
+  });
+}
 // Soft-merge live activity into the Prism library so episode labels match what was just watched.
 function applyContinueActivity(list) {
   continueActivity = Array.isArray(list) ? list : [];
   for (const row of continueActivity) {
     const show = showForActivity(row);
     if (!show) continue;
-    if (row.episodes && row.progress >= row.episodes) continue;
+    const shown = continueDisplayProgress(row);
+    if (row.episodes && shown >= row.episodes) continue;
     const rec = library[show.id];
     const at = rec?.at ?? 0;
+    // Never undo a Finished / Dropped mark from the rail badge.
+    const curStatus = rec?.s?.[at]?.status;
+    if (curStatus === "finished" || curStatus === "dropped") continue;
     const cur = rec?.s?.[at]?.progress || 0;
-    if (row.progress < cur) continue;
+    if (shown < cur) continue;
     if (byId.has(show.id) || (show.anilistId && SHOWS.some((item) => item.anilistId === show.anilistId))) {
-      library = applySeasonChanges(library, show.id, [{ index: at, status: "watching", progress: row.progress }]);
+      library = applySeasonChanges(library, show.id, [{ index: at, status: "watching", progress: shown }]);
       continue;
     }
     // Off-catalog / pending activity: stub just enough library for episode labels on the rail.
@@ -192,7 +217,7 @@ function applyContinueActivity(list) {
       [show.id]: {
         at: 0,
         lastWatchedAt: Number(row.at) || Date.now(),
-        s: { 0: { status: "watching", progress: Math.max(0, Number(row.progress) || 0) } },
+        s: { 0: { status: "watching", progress: shown } },
       },
     };
   }
@@ -207,10 +232,19 @@ const continueWatching = () => {
   });
   const seen = new Set();
   const out = [];
-  for (const row of continueActivity) {
+  const ranked = [...continueActivity].sort((a, b) => {
+    const zeroPending = (row) => String(row?.id || "").startsWith("pending:") && continueDisplayProgress(row) === 0;
+    return (zeroPending(a) ? 1 : 0) - (zeroPending(b) ? 1 : 0) || (Number(b?.at) || 0) - (Number(a?.at) || 0);
+  });
+  const hideZeroPending = ranked.some((row) => !String(row?.id || "").startsWith("pending:") || continueDisplayProgress(row) > 0);
+  for (const row of ranked) {
+    if (hideZeroPending && String(row?.id || "").startsWith("pending:") && continueDisplayProgress(row) === 0) continue;
     const show = showForActivity(row);
-    if (!show || seen.has(show.id)) continue;
-    if (row.episodes && row.progress >= row.episodes) continue;
+    if (!show || seen.has(show.id) || dismissedFromContinue(show)) continue;
+    if (row.episodes && continueDisplayProgress(row) >= row.episodes) continue;
+    // Badge Finished / Dropped must leave the rail even if an old activity row is still stored.
+    const live = entry(show);
+    if (live?.status === "finished" || live?.status === "dropped") continue;
     // Same title under pending: + catalog id — keep the first (activity is newest-first).
     const titleKey = String(show.title || "").trim().toLowerCase();
     if (titleKey && [...seen].some((id) => {
@@ -221,7 +255,7 @@ const continueWatching = () => {
     out.push(show);
   }
   for (const show of watching) {
-    if (seen.has(show.id)) continue;
+    if (seen.has(show.id) || dismissedFromContinue(show)) continue;
     out.push(show);
   }
   return out;
@@ -232,11 +266,15 @@ const nextSeason = (show) => {
   return item?.status === "finished" && next && released(next) && !seasonState(show, item.index + 1) ? next : null;
 };
 const seasonTag = (item) => (item.multi ? `${item.season.format === "MOVIE" ? "Movie" : `S${item.index + 1}`} · ` : "");
+const activityForShow = (show) => continueActivity.find((row) => row.id === show?.id || (show?.anilistId && row.anilistId === show.anilistId)) || null;
 const epLabel = (show, long) => {
   const item = entry(show);
   if (!item) return "";
-  const n = Math.min(item.progress + 1, item.episodes || Infinity);
-  return `${seasonTag(item)}${long ? "Episode " : "Ep "}${n}${item.episodes ? ` ${long ? "of" : "/"} ${item.episodes}` : ""}`;
+  const live = activityForShow(show);
+  const progress = Math.max(item.progress || 0, live ? continueDisplayProgress(live) : 0);
+  const episodes = item.episodes || live?.episodes || 0;
+  const n = Math.min(progress + 1, episodes || Infinity);
+  return `${seasonTag(item)}${long ? "Episode " : "Ep "}${n}${episodes ? ` ${long ? "of" : "/"} ${episodes}` : ""}`;
 };
 const seasonCount = (show) => {
   const list = seasonsOf(show).filter((s) => s.format !== "MOVIE");
@@ -487,25 +525,36 @@ function newsBadge(show) {
 const MARK_OF = { watching: "in_progress", plan: "plan", finished: "finished", dropped: "dropped" };
 const STATUS_OF = { in_progress: "watching", plan: "plan", finished: "finished", dropped: "dropped" };
 // look overrides the badge settings for a spot; always shows an Unwatched badge even when the settings hide it.
-function statusBadge(show, { inline = false, focusable = !inline, always = inline, look = {} } = {}) {
+function statusBadge(show, { inline = false, focusable = !inline, always = inline, look = {}, continueRail = false } = {}) {
   const item = entry(show);
   const mark = MARK_OF[item?.status] || "unwatched";
   const options = { ...badgeOptions(settings()), ...look };
   if (mark === "unwatched" && options.unwatched === "never" && !always) return "";
   if (always) options.unwatched = "always";
   const info = { progress: item ? item.progress : null, episodes: item?.episodes || null };
-  return badgeHtml(mark, info, options, { inline, focusable, dataAttrs: `data-status-badge data-show="${esc(show.id)}"` });
+  const railAttr = continueRail ? " data-continue-rail" : "";
+  return badgeHtml(mark, info, options, { inline, focusable, dataAttrs: `data-status-badge data-show="${esc(show.id)}"${railAttr}` });
 }
 // Continue watching keeps its badge top left, clear of the play button, like the Crunchyroll continue row.
 const wideLook = () => ({ corner: "top-left", style: badgeOptions(settings()).style === "footer" ? "tinted" : badgeOptions(settings()).style });
+function showFromBadge(badge) {
+  const id = badge.closest("[data-show]")?.dataset.show;
+  if (!id) return null;
+  return byId.get(id) || showForActivity(continueActivity.find((row) => row.id === id)) || null;
+}
 function toggleStatusMenu(badge) {
   if (badge.getAttribute("aria-expanded") === "true") return closeBadgeMenu();
-  const show = byId.get(badge.closest("[data-show]")?.dataset.show);
+  const show = showFromBadge(badge);
   if (!show) return;
   openBadgeMenu(badge, {
     mark: badge.dataset.crlMark,
     title: show.title,
-    onPick: (mark) => (mark === "unwatched" ? library[show.id] && toggleList(show) : setStatus(show, entry(show)?.index ?? 0, STATUS_OF[mark])),
+    continueRail: badge.hasAttribute("data-continue-rail"),
+    onPick: (mark) => {
+      if (mark === "hide_continue") return hideFromContinue(show);
+      if (mark === "unwatched") return library[show.id] && toggleList(show);
+      return setStatus(show, entry(show)?.index ?? 0, STATUS_OF[mark]);
+    },
   });
 }
 function meter(show) {
@@ -518,8 +567,24 @@ function listButton(show, cls = "btn sm icon") {
   return `<button class="${cls}" data-act="toggle" title="${item ? `${STATUS[item.status]}. Click to remove` : "Add to Plan to watch"}">${icon(item ? "check" : "plus")}</button>`;
 }
 const matchBadge = (match, cls = "") => (Number.isFinite(match) ? `<span class="match-badge ${cls}" title="How well this fits your taste">${Math.round(match)}% match</span>` : "");
+function audioLabelOf(show) {
+  return onCrunchyroll(show) && show?.audioLabel ? String(show.audioLabel) : "";
+}
+function audioTagHtml(show) {
+  const label = audioLabelOf(show);
+  return label ? `<span class="audio-tag" title="${esc(label)}">${esc(label)}</span>` : "";
+}
+function markWrappedAudio(root = document) {
+  for (const chip of root.querySelectorAll?.(".audio-tag") || []) {
+    const style = getComputedStyle(chip);
+    const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.3 || 14;
+    chip.classList.toggle("is-wrap", chip.scrollHeight > line * 1.5);
+  }
+}
 function card(show, opts = {}) {
   const rank = opts.rank ? `<span class="rank-num">${opts.rank}</span>` : "";
+  const audio = audioTagHtml(show);
+  const genreTags = show.genres.slice(0, audio ? 2 : 3).map((g) => `<span>${esc(g)}</span>`).join("");
   // The peek only opens on hover, so its controls stay out of the tab order; Enter on the card opens the show page instead.
   const peek = `<div class="peek">
         <div class="peek-art" style="background-image:url('${cssUrl(artOf(show))}')"><div class="pv"></div>${show.trailer ? soundButton("pv-sound") : ""}</div>
@@ -528,7 +593,7 @@ function card(show, opts = {}) {
           <div class="peek-meta"><span class="star">★ ${score(show)}</span>${show.year ? `<span>${show.year}</span>` : ""}<span>${seasonCount(show)}</span></div>
           <div class="peek-badges">${crBadge(show, "small")}${statusBadge(show, { inline: true })}</div>
           ${opts.why ? `<p class="peek-why">${icon("sparkle")} ${esc(opts.why)}</p>` : show.about ? `<p>${esc(clip(show.about, 220))}</p>` : ""}
-          <div class="peek-tags">${show.genres.slice(0, 3).map((g) => `<span>${esc(g)}</span>`).join("")}</div>
+          <div class="peek-tags">${audio}${genreTags}</div>
           <div class="peek-actions">
             ${!onCrunchyroll(show)
               ? `<a class="btn sm" href="#show/${esc(show.id)}">Where to watch</a>`
@@ -538,6 +603,7 @@ function card(show, opts = {}) {
           </div>
         </div>
       </div>`.replace(/<(button|a) /g, '<$1 tabindex="-1" ');
+  const fallbackSub = [show.genres[0] || (show.type === "movie" ? "Movie" : "Series"), seasonCount(show), audioLabelOf(show)].filter(Boolean).join(" · ");
   return `<div class="card${opts.rank ? " ranked" : ""}${onCrunchyroll(show) ? "" : " off-cr"}" data-show="${esc(show.id)}" data-crl-card style="--c:${esc(show.color)}" tabindex="0" role="link" aria-label="${esc(show.title)}">
     ${rank}
     <div class="poster">
@@ -547,7 +613,7 @@ function card(show, opts = {}) {
     ${peek}
     <div class="cap"><div class="title">${esc(show.title)}</div>${opts.why
       ? `<div class="why" title="${esc(opts.why)}">${esc(opts.why)}</div>`
-      : `<div class="sub">${esc(watchedLabel(show) || `${show.genres[0] || (show.type === "movie" ? "Movie" : "Series")} · ${seasonCount(show)}`)}</div>`}</div>
+      : `<div class="sub">${esc(watchedLabel(show) || fallbackSub)}</div>`}</div>
   </div>`;
 }
 function whereWatchHtml(show, links = streamLinks(show), { episode = badgeEpisode(show) } = {}) {
@@ -582,7 +648,7 @@ function wide(show) {
   const places = streamLinks(show).filter((link) => link.id !== "crunchyroll");
   const placeNote = !onCrunchyroll(show) && places[0] ? ` · ${places.map((link) => link.short).slice(0, 2).join(", ")}` : "";
   return `<div class="wide" data-show="${esc(show.id)}" data-crl-card tabindex="0" role="${onCrunchyroll(show) ? "button" : "link"}" aria-label="${onCrunchyroll(show) ? `Play ${esc(show.title)}, ${esc(playLabel(show).toLowerCase())}` : `${esc(show.title)}, ${esc(epLabel(show, true))}`}">
-    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook() })}${crBadge(show, "mini")}
+    <div class="wide-art">${artOf(show) ? `<img src="${esc(artOf(show))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}<div class="wide-play">${icon("play")}</div>${statusBadge(show, { look: wideLook(), continueRail: true })}${crBadge(show, "mini")}
       <div class="wide-copy"><b>${esc(show.title)}</b><small>${epLabel(show, true)}${esc(placeNote)}</small>${meter(show)}</div>
     </div>
   </div>`;
@@ -614,6 +680,7 @@ function mountGrid(target, items) {
     shown += next.length;
     more.hidden = shown >= items.length;
     if (shown >= items.length) gridObserver?.disconnect();
+    requestAnimationFrame(() => markWrappedAudio(gridEl));
   };
   fill();
   if (shown < items.length) {
@@ -1224,11 +1291,45 @@ function paintHomeRows() {
   if (document.activeElement !== input) input.value = homeGen.nudge;
 }
 
+function moodChipsHtml(moods = searchMoodsState.moods) {
+  const list = (moods?.length ? moods : DEFAULT_MOODS).slice(0, 8);
+  return list.map((m) => `<button class="chip mood" data-mood="${esc(m)}">${esc(m)}</button>`).join("");
+}
+
+function paintSearchMoods(moods) {
+  const tools = document.querySelector(".search-tools");
+  if (!tools) return;
+  tools.innerHTML = moodChipsHtml(moods);
+}
+
+async function loadSearchMoods({ fresh = false } = {}) {
+  if (searchMoodsState.busy) return;
+  if (!fresh && searchMoodsState.checkedAt && Date.now() - searchMoodsState.checkedAt < 60_000) {
+    paintSearchMoods(searchMoodsState.moods);
+    return;
+  }
+  searchMoodsState.busy = true;
+  const reply = await send("searchMoods", { searches: recent, ai: aiOn(), fresh }).catch(() => null);
+  searchMoodsState.busy = false;
+  searchMoodsState.checkedAt = Date.now();
+  if (reply?.moods?.length) {
+    searchMoodsState = {
+      ...searchMoodsState,
+      moods: reply.moods,
+      by: reply.by || "",
+      ai: Boolean(reply.ai),
+      busy: false,
+      checkedAt: Date.now(),
+    };
+  }
+  paintSearchMoods(searchMoodsState.moods);
+}
+
 function pageSearch(query) {
   return `<div class="search-hero">
     <h1 class="page-title">Find your next obsession</h1>
     <p class="page-sub">Search a title, or describe a mood, a vibe, or a show you loved. ${aiOn() ? "AI ranks the best matches and says why." : "Matches are ranked by the search engine and your taste."}</p>
-    <div class="search-tools">${MOODS.map((m) => `<button class="chip mood" data-mood="${esc(m)}">${esc(m)}</button>`).join("")}</div>
+    <div class="search-tools">${moodChipsHtml()}</div>
   </div>
   <div class="search-layout"><div id="search-embed"></div><aside class="search-side" aria-label="Suggestions"></aside></div>`;
 }
@@ -1237,6 +1338,7 @@ function mountSearch(query) {
   document.querySelector("#search-embed")?.append(searchEmbed.wrap);
   paintSide();
   loadInspired();
+  loadSearchMoods();
   if (query != null && query !== lastQuery) {
     lastQuery = query;
     searchView.search(query);
@@ -1274,6 +1376,62 @@ function syncLine() {
   }
   return `<div class="sync-line"><span class="dot-state ${dot}"></span><span>${text}</span><span class="nav-spacer"></span>${action}${viewToggle}</div>`;
 }
+function pageProfile() {
+  const user = account();
+  const stats = profileStats({ shows: SHOWS, library });
+  const statusLine = user.connected
+    ? "AniList connected"
+    : user.expired
+      ? "AniList sign-in expired"
+      : user.name
+        ? "Public list imported"
+        : "Local library on this device";
+  const statCards = [
+    ["watching", "Watching", stats.counts.watching],
+    ["plan", "Plan to watch", stats.counts.plan],
+    ["finished", "Finished", stats.counts.finished],
+    ["dropped", "Dropped", stats.counts.dropped],
+  ].map(([key, label, count]) => `<a class="pf-stat" href="#list/${key}"><b>${count}</b><span>${label}</span></a>`).join("");
+  const extras = `<div class="pf-stat is-plain"><b>${stats.episodesLogged.toLocaleString()}</b><span>Episodes logged</span></div>
+    <div class="pf-stat is-plain"><b>${stats.finishedThisYear}</b><span>Finished this year</span></div>`;
+  const genres = stats.topGenres.length
+    ? `<div class="pf-chips">${stats.topGenres.map((row) => `<a class="chip" href="#browse/${encodeURIComponent(row.name)}">${esc(row.name)} <b>${row.count}</b></a>`).join("")}</div>`
+    : `<p class="muted">Genres show up once shows are on your list.</p>`;
+  const history = stats.recent.length
+    ? `<div class="pf-history">${stats.recent.map((row) => {
+      const show = byId.get(row.id);
+      const art = show ? posterImg(show) : (row.cover ? `<img src="${esc(row.cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="ph">${esc((row.title || "?")[0])}</span>`);
+      const progress = row.status === "finished"
+        ? "Finished"
+        : row.episodes
+          ? `${row.progress} of ${row.episodes} eps`
+          : row.progress
+            ? `Ep ${row.progress}`
+            : STATUS[row.status] || row.status;
+      return `<a class="pf-hist" href="#show/${esc(row.id)}">${art}<div><b>${esc(row.title)}</b><span class="muted">${esc(progress)} · ${esc(ago(row.at))}</span></div><span class="pf-hist-status">${esc(STATUS[row.status] || row.status)}</span></a>`;
+    }).join("")}</div>`
+    : `<div class="empty"><p class="muted">Nothing watched yet. Press Play on a show and it will show up here.</p><a class="btn" href="#browse">Browse shows</a></div>`;
+  return `<section class="pf-hero">
+      <div class="pf-head">${avatarHtml("xl")}<div>
+        <h1 class="page-title">${esc(user.name || "Your profile")}</h1>
+        <p class="page-sub">${esc(statusLine)} · ${stats.listed.toLocaleString()} show${stats.listed === 1 ? "" : "s"} on your list</p>
+        <div class="pf-actions"><a class="btn sm" href="#settings/account">Accounts</a><a class="btn sm ghost" href="#list">My list</a></div>
+      </div></div>
+    </section>
+    <section class="pf-section">
+      <div class="row-head"><h2>Stats</h2></div>
+      <div class="pf-stats">${statCards}${extras}</div>
+    </section>
+    <section class="pf-section">
+      <div class="row-head"><h2>Top genres</h2></div>
+      ${genres}
+    </section>
+    <section class="pf-section">
+      <div class="row-head"><h2>Recently watched</h2><span class="muted">${stats.recent.length ? `${stats.recent.length} recent` : ""}</span></div>
+      ${history}
+    </section>`;
+}
+
 function pageList(tab) {
   if (tab && STATUS[tab]) listTab = tab;
   const items = sortByLastWatched(inStatus(listTab));
@@ -1554,6 +1712,8 @@ function pageShow(id, seasonArg) {
         </div>
         <div class="show-native">${multi ? `<b class="season-pill">${esc(season.label)}${seasonName ? ` · ${esc(seasonName)}` : ""}</b>` : ""}${show.romaji && show.romaji !== show.title ? esc(show.romaji) : ""}</div>
         <div class="show-meta"><span>★ ${season.score ? (season.score / 10).toFixed(1) : score(show)}</span>${season.year ? `<span>${seasonLabel(season)}${season.year}</span>` : ""}<span>${season.episodes ? `${season.episodes} ${season.episodes === 1 ? "ep" : "eps"}` : "Ongoing"}</span>${show.duration && season.format !== "MOVIE" ? `<span>${show.duration} min</span>` : ""}${show.studio ? `<span>${esc(show.studio)}</span>` : ""}<span>${season.status === "RELEASING" ? "Airing" : released(season) ? "Complete" : "Upcoming"}</span></div>
+        ${show.genres.length ? `<div class="show-tags">${show.genres.slice(0, 6).map((g) => `<span>${esc(g)}</span>`).join("")}</div>` : ""}
+        ${audioLabelOf(show) ? `<div class="show-audio">${audioTagHtml(show)}</div>` : ""}
         <div class="show-avail">${crBadge(show, "large", { episode: nextEp })}${playHint ? `<span class="play-hint">${playHint}</span>` : ""}</div>
         <div class="show-actions">
           ${actions}
@@ -1572,6 +1732,7 @@ function pageShow(id, seasonArg) {
     <aside>
       <div class="side-card"><h3>Details</h3><dl class="facts">
         ${show.genres.length ? `<dt>Genres</dt><dd>${esc(show.genres.join(", "))}</dd>` : ""}
+        ${audioLabelOf(show) ? `<dt>Audio</dt><dd>${esc(audioLabelOf(show))}</dd>` : ""}
         ${multi ? `<dt>Seasons</dt><dd>${seasons.length - movies}${movies ? ` + ${movies} movie${movies > 1 ? "s" : ""}` : ""}</dd>` : ""}
         <dt>Episodes</dt><dd>${multi && totalEps ? `${totalEps} total` : show.episodes || "Ongoing"}</dd>
         <dt>Year</dt><dd>${show.year || "–"}${multi && lastYear && lastYear !== show.year ? `–${lastYear}` : ""}</dd><dt>Studio</dt><dd>${esc(show.studio) || "–"}</dd><dt>Score</dt><dd>${score(show)} / 10</dd></dl></div>
@@ -2109,7 +2270,11 @@ function profilePop() {
 }
 function paintAccount() {
   const button = document.querySelector(".profile-btn");
-  if (button) { button.innerHTML = avatarHtml(); button.title = account().name ? `${account().name} · Accounts` : "Accounts"; }
+  if (button) {
+    button.innerHTML = avatarHtml();
+    button.title = account().name ? `${account().name} · Profile` : "Profile";
+    button.setAttribute("aria-label", button.title);
+  }
   const pop = document.querySelector("#profile-pop");
   if (!pop) return;
   pop.innerHTML = profilePop();
@@ -2160,10 +2325,19 @@ const SYSTEM_NOTICE = new Set(["sync_preview", "sync_applied", "import_preview",
 function notes() {
   const asks = (view?.notices || []).map((row) => {
     const system = SYSTEM_NOTICE.has(row.kind);
+    const preview = PREVIEW_NOTICE_KINDS.has(row.kind);
+    const acts = preview
+      ? [["apply", row.action || "Apply"], ["view", row.viewAction || "View changes"], ["ignore", "Dismiss"]]
+      : [
+        row.action ? [system ? "open" : "update", row.action] : null,
+        ["ignore", row.kind === "ask" ? "Ignore" : "Dismiss"],
+      ].filter(Boolean);
     return {
       id: row.id,
       real: true,
       system,
+      preview,
+      kind: row.kind,
       section: noticeSection(row),
       href: row.href || "",
       show: system ? null : SHOWS.find((show) => show.title === row.title),
@@ -2172,10 +2346,7 @@ function notes() {
       text: row.message,
       time: row.createdAt,
       unread: row.kind === "ask" || system,
-      acts: [
-        row.action ? [system ? "open" : "update", row.action] : null,
-        ["ignore", row.kind === "ask" ? "Ignore" : "Dismiss"],
-      ].filter(Boolean),
+      acts,
     };
   });
   const seasons = SHOWS.filter(nextSeason).map((show) => {
@@ -2248,6 +2419,27 @@ function paintDrawer() {
 async function noteAction(id, act, button) {
   const note = notes().find((n) => n.id === id);
   if (!note) return;
+  // Import/sync preview: open the Import pane without dismissing — Apply is the AniList commit.
+  if (act === "view") {
+    document.body.classList.remove("drawer-open");
+    location.hash = (note.href || "#settings/import").replace(/^#/, "");
+    return;
+  }
+  if (act === "apply" && note.preview) {
+    if (button) button.disabled = true;
+    const reply = await send("applyImport", { skip: [] });
+    if (!reply?.ok) {
+      if (button) button.disabled = false;
+      return toast(reply?.error || "Couldn't apply those changes");
+    }
+    await send("resolveNotice", { id, action: "ignore" });
+    const result = reply.result || {};
+    toast(result.error ? `Stopped: ${result.error}` : `Updated ${result.applied || 0} on AniList`);
+    document.body.classList.remove("drawer-open");
+    if (reply.view) applyView(reply.view);
+    else await reload().finally(() => paintDrawer());
+    return;
+  }
   if (act === "open") {
     document.body.classList.remove("drawer-open");
     if (note.system || note.href) {
@@ -2302,7 +2494,7 @@ function nav() {
     <button class="nav-btn" data-act="theme" title="Theme" aria-label="Theme">${icon("palette")}</button>
     <button class="nav-btn" data-act="drawer" title="Notifications" aria-label="Notifications">${icon("bell")}<span class="dot" hidden></span></button>
     <a class="nav-btn" data-route="settings" href="#settings" title="Settings" aria-label="Settings">${icon("gear")}</a>
-    <button class="nav-btn profile-btn" data-act="profile" aria-haspopup="dialog" title="Accounts">${avatarHtml()}</button>
+    <a class="nav-btn profile-btn" data-route="profile" href="#profile" title="Profile" aria-label="Profile">${avatarHtml()}</a>
   </nav>`;
 }
 function wheelControls() {
@@ -2668,10 +2860,12 @@ async function saveSeasons(show, changes, note) {
     return reload();
   }
   const before = JSON.stringify(library);
+  const beforeCw = JSON.stringify(continueActivity);
   if (!writes) library = reply.library || library;
+  if (reply.continueActivity) applyContinueActivity(reply.continueActivity);
   applyView(reply.view);
   if (reply.syncNote && /not updated|expired|reconnect/i.test(reply.syncNote)) toast(reply.syncNote);
-  if (JSON.stringify(library) !== before) rerender();
+  if (JSON.stringify(library) !== before || JSON.stringify(continueActivity) !== beforeCw) rerender();
 }
 function setStatus(show, index, status) {
   const seasons = seasonsOf(show);
@@ -2696,6 +2890,28 @@ function toggleList(show) {
   const record = library[show.id];
   if (record) return saveSeasons(show, Object.keys(record.s).map((index) => ({ index: Number(index), status: null })), `Removed ${show.title}`);
   return saveSeasons(show, [{ index: 0, status: "plan", progress: 0 }], `Added ${show.title} to Plan to watch`);
+}
+async function hideFromContinue(show) {
+  const target = {
+    id: show.id,
+    anilistId: show.anilistId,
+    anilistIds: [show.anilistId, ...(show.seasons || []).map((season) => season?.anilistId)],
+    title: show.title,
+  };
+  continueActivity = removeContinueForShow(continueActivity, target);
+  applyContinueDismissed(addContinueDismissed(continueDismissed, target));
+  toast(`Hidden ${show.title} from Continue watching`);
+  rerender();
+  writes += 1;
+  const reply = await data.hideContinueShow(show.id, { title: show.title, anilistId: show.anilistId });
+  writes -= 1;
+  if (!reply?.ok) {
+    toast(reply?.error || "Couldn't hide that show");
+    return reload();
+  }
+  if (reply.continueActivity) applyContinueActivity(reply.continueActivity);
+  if (reply.continueDismissed) applyContinueDismissed(reply.continueDismissed);
+  rerender();
 }
 
 function loadingPage() {
@@ -2757,6 +2973,7 @@ function route() {
     settings: () => pageSettings(arg),
     browse: () => pageBrowse(arg ? decode(arg) : route.keep ? undefined : ""),
     airing: pageAiring,
+    profile: () => pageProfile(),
     imports: () => (importState ? renderImportsHistory(importState) : `<p class="muted">Loading import history…</p>`),
     welcome: () => welcome.render(welcomeApi()),
   };
@@ -2766,6 +2983,7 @@ function route() {
   main.innerHTML = !loaded && needsShows ? loadingPage()
     : !SHOWS.length && needsShows ? emptyHome()
     : page === "home" ? home.render(api) : pages[page]();
+  requestAnimationFrame(() => markWrappedAudio(main));
   document.querySelectorAll("[data-route]").forEach((el) => el.classList.toggle("on", el.dataset.route === page));
   if (page === "search") mountSearch(searchQuery);
   if (page === "home") { loadHomeRows(); setTimeout(warmPlay, 1500); }
@@ -2883,9 +3101,11 @@ async function reload({ first = false } = {}) {
   const hadShows = SHOWS.length > 0;
   const before = JSON.stringify(library);
   const beforeCw = JSON.stringify(continueActivity);
+  const beforeDismissed = JSON.stringify(continueDismissed);
   setShows(reply.shows);
   if (!writes) library = reply.library || {};
   applyContinueActivity(reply.continueActivity);
+  applyContinueDismissed(reply.continueDismissed);
   if (Array.isArray(reply.unrecommended)) unrecommended = reply.unrecommended;
   loaded = true;
   applyView(reply.view);
@@ -2898,7 +3118,11 @@ async function reload({ first = false } = {}) {
   }
   if (!forYou.loaded) loadForYou();
   // Continue-watching activity can change without the AniList library mirror changing.
-  if (JSON.stringify(library) !== before || JSON.stringify(continueActivity) !== beforeCw) rerender();
+  if (
+    JSON.stringify(library) !== before
+    || JSON.stringify(continueActivity) !== beforeCw
+    || JSON.stringify(continueDismissed) !== beforeDismissed
+  ) rerender();
 }
 
 function bind() {
@@ -3036,15 +3260,7 @@ function bind() {
     }
     if (act === "theme") { document.querySelector("#profile-pop")?.classList.remove("open"); const pop = document.querySelector("#theme-pop"); const r = target.getBoundingClientRect(); pop.style.top = `${Math.min(r.bottom + 10, innerHeight - 280)}px`; pop.style.left = `${Math.max(12, Math.min(r.left - 120, innerWidth - 300))}px`; pop.classList.toggle("open"); event.stopPropagation(); return; }
     if (act === "profile") {
-      const pop = document.querySelector("#profile-pop");
-      const r = target.getBoundingClientRect();
-      document.querySelector("#theme-pop")?.classList.remove("open");
-      pop.style.top = `${r.bottom + 10}px`;
-      pop.style.right = `${Math.max(12, innerWidth - r.right - 8)}px`;
-      pop.style.left = "auto";
-      if (!pop.classList.contains("open")) checkHistory();
-      pop.classList.toggle("open");
-      event.stopPropagation();
+      location.hash = "profile";
       return;
     }
     if (target.closest("#profile-pop") && target.tagName === "A") document.querySelector("#profile-pop").classList.remove("open");
@@ -3374,7 +3590,7 @@ export const api = {
   send: (...args) => send(...args),
   icon, esc, cssUrl, score, eps, clip, card, wide, rail, entry, inStatus, continueWatching, seasonsOf, epLabel, seasonCount, nextSeason,
   popular, rated, fresh, similar, forYouRail, newForYouRail, homeRowsHtml, bannerRows, bannerRoll, bannerExpiresAt, updatesInLabel,
-  aiOn, matchBadge, statusBadge, STATUS, MOODS, artOf, posterImg,
+  aiOn, matchBadge, statusBadge, audioTagHtml, markWrappedAudio, STATUS, MOODS, artOf, posterImg,
   prefs: () => ({ ...prefs, reduce: lite() }), player, stopPreview, soundButton, openTrailer, welcomeLine, onCrunchyroll, playLabel, crBadge,
   onMyServices, mineServices, homePool, mineHome: () => mineHome, setMineHome,
   guideBubbleHtml, emptyGuideTip,

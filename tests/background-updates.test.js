@@ -92,6 +92,13 @@ test("combined settings patches expand to the underlying switches", async () => 
   assert.equal(tracking.trackHidive, false);
   assert.equal(trackWhileWatching(tracking), true);
   assert.equal(trackWhileWatching(applySettingsPatch(tracking, { trackWhileWatching: false })), false);
+  const optedOut = applySettingsPatch(tracking, { trackNetflix: false });
+  assert.equal(optedOut.trackNetflix, false);
+  assert.equal(optedOut.trackNetflixOptOut, true);
+  const optedIn = applySettingsPatch(optedOut, { trackNetflix: true });
+  assert.equal(optedIn.trackNetflix, true);
+  assert.equal(optedIn.trackNetflixOptOut, false);
+  assert.equal(applySettingsPatch(optedIn, { trackWhileWatching: false }).trackNetflixOptOut, true);
 
   const pub = publicSettings(applySettingsPatch(defaultSettings(), { whereFilterMode: "remember", lastWhereSite: "hidive" }));
   assert.equal(pub.whereFilterMode, "remember");

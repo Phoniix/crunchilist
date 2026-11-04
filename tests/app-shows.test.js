@@ -89,8 +89,8 @@ test("libraryMirror maps each season to its own AniList entry", () => {
     "cr:GR2": { key: "cr:GR2", crSeriesId: "GR2", status: "plan", progress: null },
   };
   const mirror = libraryMirror(shows, library);
-  assert.deepEqual(mirror.GR1, { at: 1, s: { 0: { status: "finished", progress: 12 }, 1: { status: "watching", progress: 4 } } });
-  assert.deepEqual(mirror.GR2, { at: 0, s: { 0: { status: "plan", progress: 0 } } });
+  assert.deepEqual(mirror.GR1, { at: 1, lastWatchedAt: 0, s: { 0: { status: "finished", progress: 12 }, 1: { status: "watching", progress: 4 } } });
+  assert.deepEqual(mirror.GR2, { at: 0, lastWatchedAt: 0, s: { 0: { status: "plan", progress: 0 } } });
   assert.equal(mirror.GR3, undefined);
 });
 
@@ -116,7 +116,7 @@ test("saving season 2 creates its own entry and leaves season 1 alone", () => {
 test("applySeasonChanges updates seasons, moves the current season and drops empty shows", () => {
   const start = { GR1: { at: 0, s: { 0: { status: "watching", progress: 3 } } } };
   const finished = applySeasonChanges(start, "GR1", [{ index: 0, status: "finished", progress: 12 }, { index: 1, status: "watching", progress: 1 }]);
-  assert.deepEqual(finished.GR1, { at: 1, s: { 0: { status: "finished", progress: 12 }, 1: { status: "watching", progress: 1 } } });
+  assert.deepEqual(finished.GR1, { at: 1, lastWatchedAt: 0, s: { 0: { status: "finished", progress: 12 }, 1: { status: "watching", progress: 1 } } });
   assert.deepEqual(start.GR1.s, { 0: { status: "watching", progress: 3 } }, "the old copy is left alone");
   const planned = applySeasonChanges({}, "GR2", [{ index: 2, status: "plan" }, { index: 1, status: "plan" }]);
   assert.equal(planned.GR2.at, 1, "with only plans, the earliest planned season is current");

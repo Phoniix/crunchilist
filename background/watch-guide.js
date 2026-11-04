@@ -14,16 +14,16 @@ function hintFor(kind, { title = "", episode = null } = {}) {
   return `Added “${name}” to Continue watching`;
 }
 
-export async function buildWatchGuidePayload({ kind, title = "", episode = null, service = "" } = {}) {
+export async function buildWatchGuidePayload({ kind, title = "", episode = null, service = "", hint = "", force = false } = {}) {
   const state = await loadState();
   const settings = state.settings || {};
-  if (notificationStyle(settings) === "off") return null;
+  if (!force && notificationStyle(settings) === "off") return null;
   const favorite = (await chrome.storage.local.get(KEYS.favoriteCharacter))[KEYS.favoriteCharacter] || null;
   const safeKind = kind === "watched" ? "watched" : "tracked";
   const line = guideLine({
     kind: "look_here",
     seed: `watch-${safeKind}-${service || "site"}`,
-    hint: hintFor(safeKind, { title, episode }),
+    hint: hint || hintFor(safeKind, { title, episode }),
     favorite,
     settingsFavoriteId: settings.favoriteCharacterId || "",
   });

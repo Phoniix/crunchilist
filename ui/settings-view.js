@@ -1,3 +1,4 @@
+import { dubLanguageOptions } from "../lib/audio-locales.js";
 import { PROVIDERS } from "../lib/providers.js";
 import { filterTagSuggestions } from "../lib/taste.js";
 import { BADGE_CORNERS, BADGE_CSS, BADGE_STYLES, badgeOptions, paintBadge } from "./badge-style.js";
@@ -51,6 +52,14 @@ export const SETTINGS_CSS = `
   .st-field + .st-field { margin-top: 6px; }
   .st-label { font: 800 13px/1.2 ${ROUNDED}; }
   .st-hint { color: var(--faint); font: 600 12px/1.35 ${ROUNDED}; }
+  .st-dubs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .st-dub {
+    display: inline-flex; align-items: center; min-height: 28px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); font: 700 12px/1 ${ROUNDED};
+  }
+  .st-dub:hover { color: var(--text); border-color: var(--line-strong); }
+  .st-dub.is-on { color: var(--on-accent, #1a0d05); background: var(--accent); border-color: transparent; }
+  .st-dubs[hidden], .st-field.is-dubs[hidden] { display: none; }
   .st-tokens { display: flex; flex-wrap: wrap; gap: 5px; }
   .st-token {
     display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border: 0; border-radius: 9px; cursor: pointer;
@@ -417,8 +426,45 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
   };
   const audio = el("select", { "aria-label": "Sub or dub" });
   for (const [value, label] of [["any", "Any audio"], ["sub", "Prefer sub"], ["dub", "Prefer dub"]]) audio.append(el("option", { value, text: label }));
-  tasteBox.append(el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Sub or dub" }), audio]));
-  audio.addEventListener("change", () => view && act("setTaste", { taste: { ...view.taste, subDub: audio.value } }));
+  const dubRow = el("div", { class: "st-dubs", role: "group", "aria-label": "Preferred dub languages" });
+  const dubButtons = new Map();
+  for (const row of dubLanguageOptions()) {
+    const button = el("button", { class: "st-dub", type: "button", text: `${row.label} Dub`, "aria-pressed": "false", "data-dub": row.code });
+    button.addEventListener("click", () => {
+      if (!view?.taste) return;
+      const current = new Set(view.taste.dubLangs || []);
+      if (current.has(row.code)) current.delete(row.code);
+      else current.add(row.code);
+      act("setTaste", { taste: { ...view.taste, subDub: audio.value === "sub" ? "dub" : audio.value, dubLangs: [...current] } });
+    });
+    dubButtons.set(row.code, button);
+    dubRow.append(button);
+  }
+  const dubField = el("div", { class: "st-field is-dubs" }, [
+    el("span", { class: "st-label", text: "Preferred dubs" }),
+    el("span", { class: "st-hint", text: "Boost shows that carry these dubs. Pick one or more." }),
+    dubRow,
+  ]);
+  tasteBox.append(
+    el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Sub or dub" }), audio]),
+    dubField,
+  );
+  audio.addEventListener("change", () => {
+    if (!view?.taste) return;
+    const next = { ...view.taste, subDub: audio.value };
+    if (audio.value === "sub") next.dubLangs = [];
+    act("setTaste", { taste: next });
+  });
+  function paintDubLangs() {
+    const preferSub = (view?.taste?.subDub || "any") === "sub";
+    dubField.hidden = preferSub;
+    const selected = new Set(view?.taste?.dubLangs || []);
+    for (const [code, button] of dubButtons) {
+      const on = selected.has(code);
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
 
   accountButton.addEventListener("click", () => {
     if (view?.settings?.anilistConnected) {
@@ -577,6 +623,7 @@ export function createSettingsView({ send, onView = () => {}, pageContext = fals
       applySection(activeSection);
       for (const [field, tokens] of Object.entries(fields)) tokenList(tokens, view.taste?.[field], field);
       if (focused() !== audio) audio.value = view.taste?.subDub || "any";
+      paintDubLangs();
       const keys = settings.keys || {};
       const savedCount = Object.values(keys).filter(Boolean).length;
       if (focused() !== service) service.value = settings.aiService || "auto";

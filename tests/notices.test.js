@@ -12,7 +12,22 @@ test("system notices replace the same kind and keep episode asks", () => {
   assert.equal(notices.filter((row) => row.kind === "sync_preview").length, 1);
   assert.equal(notices.find((row) => row.kind === "sync_preview").count, 5);
   assert.equal(notices.find((row) => row.kind === "ask").episode, 3);
-  assert.match(describeNotice(notices[0]).action, /Review|Open/);
+  assert.equal(describeNotice(notices[0]).action, "Apply");
+  assert.equal(describeNotice(notices[0]).viewAction, "View changes");
+});
+
+test("preview notices offer Apply and View changes", () => {
+  const row = addNotice([], {
+    kind: "import_preview",
+    title: "Import preview ready",
+    message: "3 changes ready to review in Import.",
+    href: "#settings/import",
+    count: 3,
+  }, 1)[0];
+  const info = describeNotice(row);
+  assert.equal(info.action, "Apply");
+  assert.equal(info.viewAction, "View changes");
+  assert.equal(info.href, "#settings/import");
 });
 
 

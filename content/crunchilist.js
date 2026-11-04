@@ -529,6 +529,14 @@
   .crl-menu .crl-ico { box-shadow: none; }
   .crl-menu-check { margin-left: auto; color: #f47521; font-weight: 800; }
   .crl-menu-sep { display: block; height: 1px; margin: 5px 4px; background: rgba(255,255,255,.08); }
+  .crl-menu button.crl-menu-danger {
+    color: #ff8a80; font-weight: 800;
+  }
+  .crl-menu button.crl-menu-danger:hover, .crl-menu button.crl-menu-danger:focus-visible {
+    background: rgba(255, 80, 80, .16); color: #ffb4ae;
+  }
+  .crl-menu button.crl-menu-danger .crl-ico { color: #ff8a80; }
+  .crl-menu button.crl-menu-hide-cw { color: #cfc8c2; }
 `;
   function badgeIcon(doc, mark) {
     const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -634,7 +642,7 @@
     if (refocus && opener?.isConnected) opener.focus({ preventScroll: true });
     opener = null;
   }
-  function openBadgeMenu(badge, { mark, title = "", onPick }) {
+  function openBadgeMenu(badge, { mark, title = "", continueRail = false, onPick }) {
     closeBadgeMenu();
     const doc = badge.ownerDocument;
     const view = doc.defaultView;
@@ -648,12 +656,15 @@
       heading.textContent = title;
       menu.append(heading);
     }
-    const option = (status, text2) => {
+    const option = (status, text2, { danger = false, tip = "", className = "" } = {}) => {
       const button = doc.createElement("button");
       button.type = "button";
       button.setAttribute("role", "menuitem");
-      button.append(badgeIcon(doc, status), doc.createTextNode(text2));
-      button.classList.add(`crl-t-${status}`);
+      button.append(badgeIcon(doc, status === "hide_continue" ? "unwatched" : status), doc.createTextNode(text2));
+      button.classList.add(`crl-t-${status === "hide_continue" ? "unwatched" : status}`);
+      if (danger) button.classList.add("crl-menu-danger");
+      if (className) button.classList.add(className);
+      if (tip) button.title = tip;
       if (status === mark) {
         const check = doc.createElement("span");
         check.className = "crl-menu-check";
@@ -669,10 +680,22 @@
       return button;
     };
     for (const status of CHOICES) menu.append(option(status, BADGE_LABELS[status]));
-    if (mark !== "unwatched") {
+    if (mark !== "unwatched" || continueRail) {
       const sep = doc.createElement("span");
       sep.className = "crl-menu-sep";
-      menu.append(sep, option("unwatched", "Remove from list"));
+      menu.append(sep);
+    }
+    if (continueRail) {
+      menu.append(option("hide_continue", "Hide from Continue watching", {
+        tip: "Removes this show from the Continue watching rail on this device only. Your list status stays the same.",
+        className: "crl-menu-hide-cw"
+      }));
+    }
+    if (mark !== "unwatched") {
+      menu.append(option("unwatched", "Remove from list", {
+        danger: true,
+        tip: "Removes this show from your list (and AniList when connected). It stays in the catalog and search."
+      }));
     }
     doc.documentElement.append(menu);
     const box = badge.getBoundingClientRect();
@@ -1099,7 +1122,51 @@
     hulu: "Hulu"
   };
 
+  // lib/audio-locales.js
+  var LOCALE_NAMES = {
+    "ja-jp": "Japanese",
+    "en-us": "English",
+    "en-gb": "English",
+    "es-419": "Spanish",
+    "es-es": "Spanish",
+    "es-la": "Spanish",
+    "pt-br": "Portuguese",
+    "pt-pt": "Portuguese",
+    "fr-fr": "French",
+    "de-de": "German",
+    "it-it": "Italian",
+    "ru-ru": "Russian",
+    "ar-sa": "Arabic",
+    "ar-me": "Arabic",
+    "hi-in": "Hindi",
+    "ta-in": "Tamil",
+    "te-in": "Telugu",
+    "th-th": "Thai",
+    "id-id": "Indonesian",
+    "ms-my": "Malay",
+    "vi-vn": "Vietnamese",
+    "ko-kr": "Korean",
+    "zh-cn": "Chinese",
+    "zh-hans": "Chinese",
+    "zh-hant": "Chinese",
+    "zh-hk": "Chinese",
+    "zh-tw": "Chinese",
+    "pl-pl": "Polish",
+    "tr-tr": "Turkish",
+    "ca-es": "Catalan"
+  };
+  function dubLanguageOptions() {
+    const byCode = /* @__PURE__ */ new Map();
+    for (const [locale, name] of Object.entries(LOCALE_NAMES)) {
+      const code = locale.slice(0, 2);
+      if (!name || code === "ja" || byCode.has(code)) continue;
+      byCode.set(code, name);
+    }
+    return [...byCode.entries()].map(([code, label]) => ({ code, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }
+
   // lib/taste.js
+  var DUB_CODES = new Set(dubLanguageOptions().map((row) => row.code));
   var ANILIST_GENRES = [
     "Action",
     "Adventure",
@@ -1434,6 +1501,16 @@
     width: 8px; height: 8px; border-radius: 50%; flex: none;
     background: var(--sv-svc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sv-svc) 22%, transparent);
   }
+  .sv-audio {
+    display: inline-flex; align-items: flex-start; max-width: 100%;
+    padding: 2px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    color: color-mix(in srgb, var(--accent) 72%, #fff);
+    font: 700 10.5px/1.3 ${ROUNDED};
+    white-space: normal;
+  }
+  .sv-audio.is-wrap { border-radius: 8px; }
   .sv-foot-spacer { flex: 1; }
   .sv-status-select {
     height: 30px; padding: 0 10px; border-radius: 10px; font: 700 12px/1 ${ROUNDED};
@@ -1455,8 +1532,13 @@
   .sv-poster-art img, .sv-poster-art .sv-fallback { width: 124px; height: 176px; object-fit: cover; display: block; background: var(--raised); transition: transform .35s var(--ease); }
   .sv-poster-link:hover .sv-poster-art { border-color: var(--line-strong); transform: translateY(-2px); box-shadow: 0 14px 30px rgba(0, 0, 0, .35); }
   .sv-poster-link:hover .sv-poster-art img { transform: scale(1.05); }
-  .sv-poster-title { font: 700 13px/1.25 ${ROUNDED}; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sv-poster-title {
+    font: 700 13px/1.25 ${ROUNDED}; min-height: calc(1.25em * 2);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
   .sv-poster-link:hover .sv-poster-title { color: #ffb185; }
+  .sv-poster .sv-svcs { min-height: 22px; align-content: flex-start; }
+  .sv-poster .sv-audio { max-width: 124px; }
   .sv-status { display: inline-flex; align-items: center; gap: 2px; }
   .sv-plan {
     display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 10px; cursor: pointer;
@@ -1829,6 +1911,19 @@
       paint();
       return el("span", { class: "sv-status" }, [plan, select]);
     }
+    function markWrapped(root2) {
+      if (!root2) return;
+      for (const chip2 of root2.querySelectorAll(".sv-audio, .audio-tag")) {
+        const style = getComputedStyle(chip2);
+        const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.3 || 14;
+        chip2.classList.toggle("is-wrap", chip2.scrollHeight > line * 1.5);
+      }
+    }
+    function audioPill(item) {
+      const label = String(item.audioLabel || "").trim();
+      if (!label) return null;
+      return el("span", { class: "sv-audio", title: label, text: label });
+    }
     function servicePills(item) {
       const ids = [...new Set(item.sources || [])].filter(Boolean);
       if (!ids.length) return null;
@@ -1857,7 +1952,9 @@
       ]);
       const foot = el("div", { class: "sv-foot" });
       const services = kind !== "mention" ? servicePills(item) : null;
+      const audio = kind !== "mention" ? audioPill(item) : null;
       if (services) foot.append(services);
+      if (audio) foot.append(audio);
       if (kind !== "mention") for (const tag of (item.tags || []).slice(0, 5)) foot.append(el("span", { class: "sv-tag", text: tag }));
       foot.append(el("span", { class: "sv-foot-spacer" }), statusControl(item));
       const node = el("article", { class: `sv-card is-${kind}${index >= 0 ? " is-appear" : ""}` }, [
@@ -1865,6 +1962,7 @@
         el("div", { class: "sv-card-body" }, [head, item.reason ? el("p", { class: "sv-reason", text: item.reason }) : null, foot])
       ]);
       if (index >= 0) node.style.animationDelay = `${Math.min(index, 8) * 28}ms`;
+      requestAnimationFrame(() => markWrapped(node));
       return node;
     }
     function section(title, children, { count, extra } = {}) {
@@ -1881,14 +1979,21 @@
     function poster(item) {
       const mark = STATUS_LABEL[item.status];
       const services = servicePills(item);
-      return el("article", { class: "sv-poster" }, [
+      const audio = audioPill(item);
+      let chipRow2 = services;
+      if (services && audio) services.append(audio);
+      else if (audio) chipRow2 = el("span", { class: "sv-svcs" }, [audio]);
+      else if (!chipRow2) chipRow2 = el("span", { class: "sv-svcs" });
+      const node = el("article", { class: "sv-poster" }, [
         el("a", linkAttrs(item, { class: "sv-poster-link" }), [
           el("span", { class: "sv-poster-art" }, [art(item), mark ? el("span", { class: "sv-mark", text: mark }) : null]),
           el("span", { class: "sv-poster-title", text: item.title })
         ]),
-        services,
+        chipRow2,
         statusControl(item)
       ]);
+      requestAnimationFrame(() => markWrapped(node));
+      return node;
     }
     function aiState(text2, busy) {
       return el("span", { class: busy ? "sv-ai-state is-busy" : "sv-ai-state" }, [icon("sparkle", 14), el("span", { text: text2 })]);
@@ -2388,6 +2493,19 @@
     };
   }
 
+  // lib/notices.js
+  var EPISODE_KINDS = /* @__PURE__ */ new Set(["ask", "done"]);
+  var SYSTEM_KINDS = /* @__PURE__ */ new Set([
+    "sync_preview",
+    "sync_applied",
+    "import_preview",
+    "update",
+    "tracker_preview",
+    "sync_skipped"
+  ]);
+  var PREVIEW_NOTICE_KINDS = /* @__PURE__ */ new Set(["sync_preview", "import_preview", "tracker_preview"]);
+  var KINDS = /* @__PURE__ */ new Set([...EPISODE_KINDS, ...SYSTEM_KINDS]);
+
   // ui/notices-view.js
   var NOTICES_CSS = `
   .nt { display: flex; flex-direction: column; gap: 12px; }
@@ -2460,17 +2578,47 @@
       if (response.view) onView(response.view);
     }
     function item(row) {
-      const update = row.action ? el("button", { class: "btn primary", type: "button", text: row.action }) : null;
+      const preview = PREVIEW_NOTICE_KINDS.has(row.kind);
       const ignore = el("button", { class: "btn", type: "button", text: row.kind === "ask" ? "Ignore" : "Dismiss" });
-      update?.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "update" }, [update, ignore]));
-      ignore.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "ignore" }, [ignore]));
+      const buttons = [];
+      if (preview) {
+        const apply = el("button", { class: "btn primary", type: "button", text: row.action || "Apply" });
+        const view = el("button", { class: "btn", type: "button", text: row.viewAction || "View changes" });
+        apply.addEventListener("click", async () => {
+          for (const button of [apply, view, ignore]) button.disabled = true;
+          const response = await send2("applyImport", { skip: [] });
+          if (!response?.ok) {
+            for (const button of [apply, view, ignore]) button.disabled = false;
+            status.textContent = response?.error || "Couldn't apply those changes.";
+            return;
+          }
+          await act("resolveNotice", { id: row.id, action: "ignore" }, [apply, view, ignore]);
+          const result = response.result || {};
+          status.textContent = result.error ? `Stopped: ${result.error}` : `Updated ${result.applied || 0} on AniList.`;
+        });
+        view.addEventListener("click", () => send2("openApp", { hash: row.href || "#settings/import" }));
+        buttons.push(apply, view);
+      } else if (row.action) {
+        const update = el("button", { class: "btn primary", type: "button", text: row.action });
+        update.addEventListener("click", () => {
+          if (row.href && row.kind !== "ask") {
+            act("resolveNotice", { id: row.id, action: "ignore" }, [update, ignore]);
+            send2("openApp", { hash: row.href });
+            return;
+          }
+          act("resolveNotice", { id: row.id, action: "update" }, [update, ignore]);
+        });
+        buttons.push(update);
+      }
+      ignore.addEventListener("click", () => act("resolveNotice", { id: row.id, action: "ignore" }, [ignore, ...buttons]));
+      buttons.push(ignore);
       return el("article", { class: `nt-item is-${row.kind}` }, [
         row.cover ? el("img", { class: "nt-art", src: row.cover, alt: "", referrerpolicy: "no-referrer" }) : el("span", { class: "nt-art" }),
         el("div", { class: "nt-copy" }, [
           el("p", { class: "nt-title", text: row.title }),
           el("p", { class: "nt-message", text: row.message }),
           el("span", { class: "nt-time", text: ago(row.createdAt) }),
-          el("div", { class: "nt-actions" }, [update, ignore])
+          el("div", { class: "nt-actions" }, buttons)
         ])
       ]);
     }
@@ -2928,6 +3076,14 @@
   .st-field + .st-field { margin-top: 6px; }
   .st-label { font: 800 13px/1.2 ${ROUNDED}; }
   .st-hint { color: var(--faint); font: 600 12px/1.35 ${ROUNDED}; }
+  .st-dubs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .st-dub {
+    display: inline-flex; align-items: center; min-height: 28px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); font: 700 12px/1 ${ROUNDED};
+  }
+  .st-dub:hover { color: var(--text); border-color: var(--line-strong); }
+  .st-dub.is-on { color: var(--on-accent, #1a0d05); background: var(--accent); border-color: transparent; }
+  .st-dubs[hidden], .st-field.is-dubs[hidden] { display: none; }
   .st-tokens { display: flex; flex-wrap: wrap; gap: 5px; }
   .st-token {
     display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border: 0; border-radius: 9px; cursor: pointer;
@@ -3272,8 +3428,45 @@
     };
     const audio = el("select", { "aria-label": "Sub or dub" });
     for (const [value, label] of [["any", "Any audio"], ["sub", "Prefer sub"], ["dub", "Prefer dub"]]) audio.append(el("option", { value, text: label }));
-    tasteBox.append(el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Sub or dub" }), audio]));
-    audio.addEventListener("change", () => view && act("setTaste", { taste: { ...view.taste, subDub: audio.value } }));
+    const dubRow = el("div", { class: "st-dubs", role: "group", "aria-label": "Preferred dub languages" });
+    const dubButtons = /* @__PURE__ */ new Map();
+    for (const row of dubLanguageOptions()) {
+      const button = el("button", { class: "st-dub", type: "button", text: `${row.label} Dub`, "aria-pressed": "false", "data-dub": row.code });
+      button.addEventListener("click", () => {
+        if (!view?.taste) return;
+        const current = new Set(view.taste.dubLangs || []);
+        if (current.has(row.code)) current.delete(row.code);
+        else current.add(row.code);
+        act("setTaste", { taste: { ...view.taste, subDub: audio.value === "sub" ? "dub" : audio.value, dubLangs: [...current] } });
+      });
+      dubButtons.set(row.code, button);
+      dubRow.append(button);
+    }
+    const dubField = el("div", { class: "st-field is-dubs" }, [
+      el("span", { class: "st-label", text: "Preferred dubs" }),
+      el("span", { class: "st-hint", text: "Boost shows that carry these dubs. Pick one or more." }),
+      dubRow
+    ]);
+    tasteBox.append(
+      el("div", { class: "st-field" }, [el("span", { class: "st-label", text: "Sub or dub" }), audio]),
+      dubField
+    );
+    audio.addEventListener("change", () => {
+      if (!view?.taste) return;
+      const next = { ...view.taste, subDub: audio.value };
+      if (audio.value === "sub") next.dubLangs = [];
+      act("setTaste", { taste: next });
+    });
+    function paintDubLangs() {
+      const preferSub = (view?.taste?.subDub || "any") === "sub";
+      dubField.hidden = preferSub;
+      const selected = new Set(view?.taste?.dubLangs || []);
+      for (const [code, button] of dubButtons) {
+        const on = selected.has(code);
+        button.classList.toggle("is-on", on);
+        button.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+    }
     accountButton.addEventListener("click", () => {
       if (view?.settings?.anilistConnected) {
         say("Refreshing AniList\u2026");
@@ -3417,6 +3610,7 @@
         applySection(activeSection);
         for (const [field, tokens] of Object.entries(fields)) tokenList(tokens, view.taste?.[field], field);
         if (focused() !== audio) audio.value = view.taste?.subDub || "any";
+        paintDubLangs();
         const keys = settings.keys || {};
         const savedCount = Object.values(keys).filter(Boolean).length;
         if (focused() !== service) service.value = settings.aiService || "auto";

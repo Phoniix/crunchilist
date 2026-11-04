@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { matchGroups, mergeWatched, planChanges, watchedParts } from "../lib/import-plan.js";
+import { matchGroups, mergeWatched, planChanges, watchedParts, withCatchUpLift } from "../lib/import-plan.js";
 import { safeChange, sameDate, toFuzzy } from "../lib/safe-change.js";
 
 const T = (iso) => Date.parse(iso);
@@ -67,7 +67,7 @@ test("sub and dub seasons on one entry merge to furthest progress", () => {
     { anilistId: 1, progress: 5, firstPlayed: 30, lastPlayed: 50, source: { key: "sub" } },
     { anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 40, source: { key: "dub" } },
   ]);
-  assert.deepEqual(merged, [{ anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 50, sources: [{ key: "sub" }, { key: "dub" }] }]);
+  assert.deepEqual(merged, [{ anilistId: 1, progress: 9, firstPlayed: 10, lastPlayed: 50, catchUpLift: 0, sources: [{ key: "sub" }, { key: "dub" }] }]);
 });
 
 test("the plan lists only real changes, newest first, and counts up to date", () => {
@@ -81,4 +81,50 @@ test("the plan lists only real changes, newest first, and counts up to date", ()
   const { changes, unchanged } = planChanges(items, entries, media);
   assert.deepEqual(changes.map((change) => [change.title, change.after.status]), [["Two", "COMPLETED"], ["One", "CURRENT"]]);
   assert.equal(unchanged, 1);
+});
+
+test("matchGroups keeps a catch-up lift only for unnumbered Netflix groups", () => {
+  const match = () => ({
+    anilistId: 5,
+    confidence: "high",
+    parts: [{ anilistId: 5, episodes: [1, 2], progress: 2 }],
+  });
+  const unnumbered = matchGroups([{
+    key: "netflix:show/s1",
+    catchUp: true,
+    absolute: false,
+    catchUpCount: 2,
+    episodes: [1, 2],
+    played: { 1: 10, 2: 20 },
+    series: "Show",
+    season: "Season 1",
+  }], match);
+  assert.equal(unnumbered.watched[0].progress, 2);
+  assert.equal(unnumbered.watched[0].catchUpLift, 2);
+  const numbered = matchGroups([{
+    key: "netflix:show/s1",
+    catchUp: true,
+    absolute: true,
+    catchUpCount: 2,
+    episodes: [2, 4],
+    played: { 2: 10, 4: 20 },
+    series: "Show",
+    season: "Season 1",
+  }], () => ({
+    anilistId: 5,
+    confidence: "high",
+    parts: [{ anilistId: 5, episodes: [2, 4], progress: 4 }],
+  }));
+  assert.equal(numbered.watched[0].progress, 4);
+  assert.equal(numbered.watched[0].catchUpLift, 0);
+});
+
+test("Netflix catch-up without absolute numbers lifts onto existing AniList progress", () => {
+  assert.deepEqual(withCatchUpLift({ progress: 3, catchUpLift: 3 }, { progress: 12 }), { progress: 15, catchUpLift: 3 });
+  assert.deepEqual(withCatchUpLift({ progress: 3, catchUpLift: 0 }, { progress: 12 }), { progress: 3, catchUpLift: 0 });
+  const items = [{ anilistId: 1, progress: 3, catchUpLift: 3, firstPlayed: 1, lastPlayed: 100, source: {} }];
+  const entries = new Map([[1, { id: 1, status: "CURRENT", progress: 12 }]]);
+  const media = new Map([[1, { ...finished, title: "Show", episodes: 24 }]]);
+  const { changes } = planChanges(items, entries, media);
+  assert.equal(changes[0].after.progress, 15);
 });

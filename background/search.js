@@ -1,4 +1,5 @@
 import { cacheKeyForSeries, readCache, showFactsFromHit } from "../lib/anilist.js";
+import { audioAvailability, audioDescriptor, audioSearchTags } from "../lib/audio-locales.js";
 import {
   applyCatalogChip,
   buildHomeSections,
@@ -30,6 +31,15 @@ import {
   rotateWatched,
   sessionMood,
 } from "../lib/home-rows.js";
+import {
+  buildSearchMoodsPrompt,
+  DEFAULT_MOODS,
+  fallbackMoods,
+  moodExpiryFor,
+  needsMoodRefresh,
+  parseSearchMoods,
+  SEARCH_MOODS_SCHEMA,
+} from "../lib/search-moods.js";
 import { unrecommendedIds } from "../lib/unrecommended.js";
 import { cleanSearches, inspiredRequest, interleave, recentlyWatched } from "../lib/inspired.js";
 import { activeEntries, statusForSeries } from "../lib/library.js";
@@ -37,7 +47,7 @@ import { hasIntent, parseQuery, placeVariants } from "../lib/query.js";
 import { LIGHT_MODEL_CANDIDATES } from "../lib/llm.js";
 import { remoteSignature } from "../lib/settings.js";
 import { buildIndex, docFromShow, searchIndex } from "../lib/search-index.js";
-import { allowedByTaste, buildWeights, compactProfile, scoreLabels } from "../lib/taste.js";
+import { allowedByTaste, audioTasteScore, buildWeights, compactProfile, scoreLabels } from "../lib/taste.js";
 import { applyStoredCovers, currentToken, liveSearch, validBearer } from "./catalog-sync.js";
 import { loadServiceCatalogs } from "./catalog-store.js";
 import { loadDead } from "./dead-links.js";
@@ -145,6 +155,13 @@ function sourcesFor(state, item, sourceMap) {
 function docFor(state, item, sourceMap = sourcesCache.map) {
   const hit = hitFor(state, item);
   const sources = sourcesFor(state, item, sourceMap);
+  const audio = item.audioMode
+    ? { mode: item.audioMode, locales: item.audioLocales || [], languages: item.audioLanguages || [] }
+    : audioAvailability({ locales: item.audioLocales, isDubbed: item.isDubbed, isSubbed: item.isSubbed });
+  const audioMode = audio.mode || null;
+  const audioLocales = audio.locales || [];
+  const audioLabel = item.audioLabel || audioDescriptor(audio);
+  const hiddenTags = [...new Set([...(hit?.hiddenTags || []), ...(item.hiddenTags || []), ...audioSearchTags(audio)])];
   return docFromShow({
     id: item.id,
     title: item.title,
@@ -155,7 +172,7 @@ function docFor(state, item, sourceMap = sourcesCache.map) {
     synonyms: hit?.synonyms,
     genres: hit?.genres || item.genres,
     tags: hit?.tags || item.tags,
-    hiddenTags: hit?.hiddenTags,
+    hiddenTags,
     tagRanks: hit?.tagRanks,
     about: hit?.about || item.about || "",
     format: hit?.format || item.format,
@@ -163,7 +180,10 @@ function docFor(state, item, sourceMap = sourcesCache.map) {
     score: hit?.score ?? item.score,
     popularity: hit?.popularity ?? item.popularity,
     sources,
-    item: { ...item, sources },
+    audioMode,
+    audioLocales,
+    audioLabel,
+    item: { ...item, sources, audioMode, audioLocales, audioLabel },
   });
 }
 
@@ -234,7 +254,11 @@ function avoidedTitleNote(state, catalog, text, scoreFor) {
 
 function tasteRank(state) {
   const weights = buildWeights(state);
-  return { weights, scoreFor: (item) => scoreLabels(labelsFor(state, item), weights) };
+  const taste = state.taste;
+  return {
+    weights,
+    scoreFor: (item) => scoreLabels(labelsFor(state, item), weights) + audioTasteScore(item, taste),
+  };
 }
 
 function forYouRanked(state, catalog, scoreFor) {
@@ -267,6 +291,10 @@ function presentCatalogItem(state, item) {
   const where = names.length ? names.join(" · ") : "Crunchyroll";
   // Prefer ranked catalog/gap play URL (same as Prism) when streaming rows exist.
   const play = item.streaming?.length ? pickPlayLink(item) : null;
+  const audio = item.audioMode
+    ? { mode: item.audioMode, locales: item.audioLocales || [], languages: item.audioLanguages || [] }
+    : audioAvailability({ locales: item.audioLocales, isDubbed: item.isDubbed, isSubbed: item.isSubbed });
+  const audioLabel = item.audioLabel || audioDescriptor(audio) || "";
   return {
     id: `sight:${item.id}`,
     title: item.title,
@@ -274,6 +302,7 @@ function presentCatalogItem(state, item) {
     reason: item.type === "movie" || movie ? `Movie on ${where}.` : item.episodes ? `${item.episodes} episodes on ${where}.` : `On ${where}.`,
     tags,
     sources,
+    audioLabel: audioLabel || null,
     status: status === "unwatched" ? null : status,
     poster: posterFor(state, item) || item.cover || "",
   };
@@ -293,6 +322,7 @@ function presentSuggestion(state, item, forYou, weights) {
 function candidateFromCatalogItem(state, item) {
   const matched = hitFor(state, item);
   const play = item.streaming?.length ? pickPlayLink(item) : null;
+  const presented = presentCatalogItem(state, item);
   return {
     id: `sight:${item.id}`,
     title: item.title,
@@ -303,6 +333,8 @@ function candidateFromCatalogItem(state, item) {
     tags: matched?.tags || [],
     genres: matched?.genres || [],
     audio: "unknown",
+    audioLabel: presented.audioLabel || null,
+    sources: presented.sources || [],
     anilistMatched: Boolean(matched),
     poster: posterFor(state, item),
     ...showFactsFromHit(matched),
@@ -324,6 +356,8 @@ function presentFromModel(candidates, parsed) {
       tags: [...(candidate?.genres || []), ...(candidate?.tags || [])].slice(0, 5),
       status: candidate?.status && candidate.status !== "unwatched" ? candidate.status : null,
       audio: candidate?.audio || "unknown",
+      audioLabel: candidate?.audioLabel || null,
+      sources: candidate?.sources || [],
       poster: candidate?.poster || "",
     };
   });
@@ -410,10 +444,23 @@ function cleanTags(tags) {
   return [...new Set((Array.isArray(tags) ? tags : []).map((tag) => String(tag || "").trim()).filter(Boolean))].slice(0, 8);
 }
 
+function audioTagsForItem(item) {
+  if (Array.isArray(item?.hiddenTags) && item.hiddenTags.length) return item.hiddenTags;
+  const audio = item?.audioMode
+    ? { mode: item.audioMode, locales: item.audioLocales || [], languages: item.audioLanguages || [] }
+    : audioAvailability({ locales: item?.audioLocales, isDubbed: item?.isDubbed, isSubbed: item?.isSubbed });
+  return audioSearchTags(audio);
+}
+
 function hasTags(state, item, tags, without = []) {
   if (!tags.length && !without.length) return true;
   const hit = hitFor(state, item);
-  const labels = new Set([...(hit?.genres || []), ...(hit?.tags || []), ...(hit?.hiddenTags || [])].map((label) => String(label).toLowerCase()));
+  const labels = new Set([
+    ...(hit?.genres || []),
+    ...(hit?.tags || []),
+    ...(hit?.hiddenTags || []),
+    ...audioTagsForItem(item),
+  ].map((label) => String(label).toLowerCase()));
   return tags.every((tag) => labels.has(tag.toLowerCase())) && !without.some((tag) => labels.has(tag.toLowerCase()));
 }
 
@@ -712,6 +759,91 @@ export async function searchInspired(searches, { ai = true, fresh = false } = {}
 
 const HOME_ROWS_KEY = "crHomeRows";
 let homeRowsInFlight = null;
+const SEARCH_MOODS_KEY = "crSearchMoods";
+let searchMoodsInFlight = null;
+
+export async function searchMoods(searches, { ai = true, fresh = false } = {}) {
+  const state = await loadState();
+  const { weights } = tasteRank(state);
+  const entries = activeEntries(state.library);
+  const liked = likedTags(state, weights);
+  const watched = recentlyWatched(entries, 6);
+  const recent = cleanSearches(searches);
+  const wantAi = ai && state.settings.useAi !== false;
+  const signature = activitySignature({
+    taste: state.taste,
+    watchedIds: entries.filter((entry) => entry.status === "finished" || entry.status === "in_progress").map((entry) => entry.crSeriesId || entry.title),
+    searches: recent,
+    aiKey: wantAi ? remoteSignature(state.settings) || "chrome" : "off",
+  });
+  let saved = null;
+  try {
+    saved = (await chrome.storage.local.get(SEARCH_MOODS_KEY))[SEARCH_MOODS_KEY] || null;
+  } catch {
+    saved = null;
+  }
+  const now = Date.now();
+  if (!fresh && !needsMoodRefresh(saved, signature, now)) {
+    return {
+      moods: saved.moods,
+      by: saved.by || "",
+      ai: Boolean(saved.ai),
+      createdAt: saved.createdAt,
+      expiresAt: saved.expiresAt,
+    };
+  }
+  if (searchMoodsInFlight) return searchMoodsInFlight;
+  searchMoodsInFlight = (async () => {
+    const previous = saved?.moods || [];
+    const mood = sessionMood(now);
+    const avoids = state.taste?.hardAvoids || [];
+    let moods = [];
+    let by = "";
+    let gotAi = false;
+    if (wantAi) {
+      const prompt = buildSearchMoodsPrompt({
+        profile: compactProfile(state.taste),
+        liked,
+        watched,
+        searches: recent,
+        previous,
+        sessionMood: mood,
+      });
+      const answer = await askJson(state, {
+        ...prompt,
+        schema: SEARCH_MOODS_SCHEMA,
+        parse: (text) => parseSearchMoods(text, avoids, { previous }),
+      });
+      if (answer.ok && answer.parsed.moods?.length) {
+        moods = answer.parsed.moods;
+        by = answer.by || "";
+        gotAi = true;
+      }
+    }
+    if (!moods.length) {
+      moods = fallbackMoods({ liked, watched, searches: recent, avoids, previous, now, sessionMood: mood });
+    }
+    if (!moods.length) moods = [...DEFAULT_MOODS];
+    const record = {
+      moods,
+      by,
+      ai: gotAi,
+      signature,
+      previous,
+      createdAt: now,
+      expiresAt: moodExpiryFor({ wantedAi: wantAi, gotAi, now }),
+    };
+    await chrome.storage.local.set({ [SEARCH_MOODS_KEY]: record }).catch(() => {});
+    return {
+      moods: record.moods,
+      by: record.by,
+      ai: record.ai,
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+    };
+  })().finally(() => { searchMoodsInFlight = null; });
+  return searchMoodsInFlight;
+}
 
 function likedTags(state, weights, limit = 8) {
   const avoids = new Set((state.taste?.hardAvoids || []).map((label) => String(label).toLowerCase()));

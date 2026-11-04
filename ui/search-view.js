@@ -299,6 +299,16 @@ export const SEARCH_CSS = `
     width: 8px; height: 8px; border-radius: 50%; flex: none;
     background: var(--sv-svc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sv-svc) 22%, transparent);
   }
+  .sv-audio {
+    display: inline-flex; align-items: flex-start; max-width: 100%;
+    padding: 2px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    color: color-mix(in srgb, var(--accent) 72%, #fff);
+    font: 700 10.5px/1.3 ${ROUNDED};
+    white-space: normal;
+  }
+  .sv-audio.is-wrap { border-radius: 8px; }
   .sv-foot-spacer { flex: 1; }
   .sv-status-select {
     height: 30px; padding: 0 10px; border-radius: 10px; font: 700 12px/1 ${ROUNDED};
@@ -320,8 +330,13 @@ export const SEARCH_CSS = `
   .sv-poster-art img, .sv-poster-art .sv-fallback { width: 124px; height: 176px; object-fit: cover; display: block; background: var(--raised); transition: transform .35s var(--ease); }
   .sv-poster-link:hover .sv-poster-art { border-color: var(--line-strong); transform: translateY(-2px); box-shadow: 0 14px 30px rgba(0, 0, 0, .35); }
   .sv-poster-link:hover .sv-poster-art img { transform: scale(1.05); }
-  .sv-poster-title { font: 700 13px/1.25 ${ROUNDED}; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sv-poster-title {
+    font: 700 13px/1.25 ${ROUNDED}; min-height: calc(1.25em * 2);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
   .sv-poster-link:hover .sv-poster-title { color: #ffb185; }
+  .sv-poster .sv-svcs { min-height: 22px; align-content: flex-start; }
+  .sv-poster .sv-audio { max-width: 124px; }
   .sv-status { display: inline-flex; align-items: center; gap: 2px; }
   .sv-plan {
     display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 10px; cursor: pointer;
@@ -716,6 +731,21 @@ export function createSearchView({
     return el("span", { class: "sv-status" }, [plan, select]);
   }
 
+  function markWrapped(root) {
+    if (!root) return;
+    for (const chip of root.querySelectorAll(".sv-audio, .audio-tag")) {
+      const style = getComputedStyle(chip);
+      const line = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.3 || 14;
+      chip.classList.toggle("is-wrap", chip.scrollHeight > line * 1.5);
+    }
+  }
+
+  function audioPill(item) {
+    const label = String(item.audioLabel || "").trim();
+    if (!label) return null;
+    return el("span", { class: "sv-audio", title: label, text: label });
+  }
+
   function servicePills(item) {
     const ids = [...new Set(item.sources || [])].filter(Boolean);
     if (!ids.length) return null;
@@ -747,7 +777,9 @@ export function createSearchView({
     ]);
     const foot = el("div", { class: "sv-foot" });
     const services = kind !== "mention" ? servicePills(item) : null;
+    const audio = kind !== "mention" ? audioPill(item) : null;
     if (services) foot.append(services);
+    if (audio) foot.append(audio);
     if (kind !== "mention") for (const tag of (item.tags || []).slice(0, 5)) foot.append(el("span", { class: "sv-tag", text: tag }));
     foot.append(el("span", { class: "sv-foot-spacer" }), statusControl(item));
     const node = el("article", { class: `sv-card is-${kind}${index >= 0 ? " is-appear" : ""}` }, [
@@ -755,6 +787,7 @@ export function createSearchView({
       el("div", { class: "sv-card-body" }, [head, item.reason ? el("p", { class: "sv-reason", text: item.reason }) : null, foot]),
     ]);
     if (index >= 0) node.style.animationDelay = `${Math.min(index, 8) * 28}ms`;
+    requestAnimationFrame(() => markWrapped(node));
     return node;
   }
 
@@ -773,14 +806,21 @@ export function createSearchView({
   function poster(item) {
     const mark = STATUS_LABEL[item.status];
     const services = servicePills(item);
-    return el("article", { class: "sv-poster" }, [
+    const audio = audioPill(item);
+    let chipRow = services;
+    if (services && audio) services.append(audio);
+    else if (audio) chipRow = el("span", { class: "sv-svcs" }, [audio]);
+    else if (!chipRow) chipRow = el("span", { class: "sv-svcs" });
+    const node = el("article", { class: "sv-poster" }, [
       el("a", linkAttrs(item, { class: "sv-poster-link" }), [
         el("span", { class: "sv-poster-art" }, [art(item), mark ? el("span", { class: "sv-mark", text: mark }) : null]),
         el("span", { class: "sv-poster-title", text: item.title }),
       ]),
-      services,
+      chipRow,
       statusControl(item),
     ]);
+    requestAnimationFrame(() => markWrapped(node));
+    return node;
   }
 
   function aiState(text, busy) {

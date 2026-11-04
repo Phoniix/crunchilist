@@ -1,7 +1,7 @@
 import { DEV_BRIDGE_TOKEN, allowsDevBridge, isDevBridgeSender } from "../lib/build-channel.js";
 import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { currentActivity, watchActivity } from "./activity.js";
-import { appData, setSeasonState } from "./app-data.js";
+import { appData, hideContinueShow, setSeasonState } from "./app-data.js";
 import { entryForSeries } from "../lib/library.js";
 import { providerById, providerOrigin } from "../lib/providers.js";
 import { applySettingsPatch } from "../lib/settings.js";
@@ -26,7 +26,7 @@ import { applyHistory, cancelHistory, historyPlan, historyProgress, scanHistory,
 import { modelStatus, originAllowed, resolveModel } from "./model.js";
 import { currentView, makeView, pageUpdate, showForSeries } from "./page.js";
 import { backToCrunchilist, keepTab, moveTab, playEpisode, switchTabs, tabRole, tokenArrived, undoMove, warmEpisodes, watchPlayerTabs } from "./player.js";
-import { catalogRerank, catalogSearch, catalogSuggest, forYouPicksCache, homeRows, searchInspired } from "./search.js";
+import { catalogRerank, catalogSearch, catalogSuggest, forYouPicksCache, homeRows, searchInspired, searchMoods } from "./search.js";
 import { loadCatalog, loadState, saveState } from "./store.js";
 import { checkForUpdate, markUpdateAnnounced } from "./updates.js";
 import { readCatalogs } from "./catalog-reader.js";
@@ -201,6 +201,8 @@ async function handle(message, sender) {
         nudge: typeof message.nudge === "string" ? message.nudge : undefined,
         excludeIds: Array.isArray(message.excludeIds) ? message.excludeIds : [],
       });
+    case "searchMoods":
+      return searchMoods(message.searches, { ai: message.ai !== false, fresh: Boolean(message.fresh) });
     case "catalogProgress":
       return catalogProgress();
     case "refreshCatalogCovers":
@@ -289,6 +291,8 @@ async function handle(message, sender) {
       return disconnectSite(message.service || message.id);
     case "appData":
       return appData();
+    case "hideContinueShow":
+      return hideContinueShow(message.showId, { title: message.title, anilistId: message.anilistId });
     case "titleFeeds":
       return {
         whereMap: await whereMapStatus(),

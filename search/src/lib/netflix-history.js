@@ -27,6 +27,23 @@ export function seasonNumberOf(season) {
   return match ? Number(match[1]) : null;
 }
 
+/** Absolute episode number from Netflix labels ("Episode 14", "E14", "S1:E12", "1x12", "#12"). Null when unknown. */
+export function episodeNumberOf(episode) {
+  const text = String(episode || "").trim();
+  if (!text) return null;
+  const seasonEp = /\bS\d{1,2}\s*[:.\-–]?\s*E(\d{1,4})\b/i.exec(text)
+    || /\b(\d{1,2})\s*[x×]\s*(\d{1,4})\b/i.exec(text);
+  if (seasonEp) {
+    const n = Number(seasonEp[2] != null ? seasonEp[2] : seasonEp[1]);
+    if (Number.isInteger(n) && n > 0 && n < 10000) return n;
+  }
+  const match = /(?:^|[^\p{L}\p{N}])(?:episode|ep\.?|e|#)\s*(\d{1,4})\b/iu.exec(` ${text}`)
+    || /^(\d{1,4})\s*[-–:.]\s*\S/u.exec(text);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isInteger(n) && n > 0 && n < 10000 ? n : null;
+}
+
 // Titles Netflix sends without the show's name (': "Episode 14"') can't be matched.
 const usable = (name) => /^\p{L}|^\p{N}/u.test(name || "") && /\p{L}/u.test(name);
 
@@ -35,11 +52,16 @@ function episodeRow({ series: full, season, episode, playedAt, watched, key, inf
   const { name: series, year } = splitYear(full);
   const label = GENERIC_SEASON.test(season) ? "" : season;
   const seriesId = looseKey(full);
-  const seasonId = looseKey(label);
+  const seasonNumber = seasonNumberOf(label);
+  // Prefer sN so Continue Watching / tracking match keys line up with resolveContinueTarget.
+  const seasonId = seasonNumber != null ? `s${seasonNumber}` : looseKey(label);
   if (!seriesId) return null;
+  const episodeNumber = episodeNumberOf(episode);
   return {
     key, kind: "episode", groupId: `season:${seriesId}/${seasonId}`, seriesId, seasonId,
-    series, year: info.year || year, anime: info.anime ?? null, season: label, seasonNumber: seasonNumberOf(label), episodeKey: looseKey(episode) || key, watched, playedAt,
+    series, year: info.year || year, anime: info.anime ?? null, season: label, seasonNumber,
+    episode: episodeNumber, episodeKey: episodeNumber ? `#${episodeNumber}` : (looseKey(episode) || key),
+    watched, playedAt,
   };
 }
 
@@ -92,6 +114,13 @@ export function parseActivity(payload, seenSoFar = 0) {
   const known = Number.isFinite(total) && total > 0;
   const more = items.length > 0 && (known ? seenSoFar + items.length < total : true);
   return { rows, count: items.length, total: known ? total : null, more };
+}
+
+// Page 0 that already knows a history size but returned no rows is Netflix still booting after a reload,
+// not an account with nothing watched. Treating it as the end of history commits an empty checkpoint.
+export function netflixHistoryStalled(value, page = 0) {
+  const items = value?.viewedItems;
+  return (Number(page) || 0) === 0 && Number(value?.vhSize) > 0 && Array.isArray(items) && items.length === 0;
 }
 
 // ---- The CSV from netflix.com/viewingactivity -> "Download all" ----
@@ -151,6 +180,45 @@ export function splitTitle(title, heads = new Map()) {
   return { movie: title };
 }
 
+// Tab / chrome chrome that is never a show title.
+const JUNK_TITLE = /^(netflix|home|browse|my list|title details|watch|loading|…|\.{3}|null|undefined)$/i;
+export function usablePlayerSeries(name) {
+  const series = text(name, 200);
+  if (!series || JUNK_TITLE.test(series) || series.length < 2) return "";
+  return series;
+}
+
+// Live player / tab labels (mediaSession, document.title). Unlike CSV, "Show: Episode" is almost always a series.
+// Also strips a leading "Watch " Netflix sometimes puts on the tab title.
+export function splitPlayerTitle(title) {
+  let line = text(title, 400).replace(/^\s*watch\s+/i, "").trim();
+  if (!line || JUNK_TITLE.test(line)) return null;
+  const parts = line.split(": ");
+  const at = parts.findIndex((part, index) => index > 0 && SEASON_PART.test(part));
+  if (at > 0) {
+    const series = usablePlayerSeries(parts.slice(0, at).join(": "));
+    if (!series) return null;
+    return {
+      series,
+      season: parts[at],
+      seasonNumber: seasonNumberOf(parts[at]),
+      episode: parts.slice(at + 1).join(": ") || parts[at],
+    };
+  }
+  if (parts.length >= 2) {
+    const series = usablePlayerSeries(parts[0]);
+    if (!series) return null;
+    return {
+      series,
+      season: "",
+      seasonNumber: null,
+      episode: parts.slice(1).join(": "),
+    };
+  }
+  const series = usablePlayerSeries(line);
+  return series ? { series, season: "", seasonNumber: null, episode: "" } : null;
+}
+
 export function parseNetflixCsv(source) {
   const table = parseCsv(source);
   const header = (table[0] || []).map((name) => name.trim().toLowerCase());
@@ -172,25 +240,81 @@ export function parseNetflixCsv(source) {
   }).filter(Boolean);
 }
 
-// Rows -> one group per season (or film). Episodes are numbered 1..n in the order first played.
+/** Fill missing episode numbers between 1 and max (ep 2 then 4 → also 1 and 3). */
+export function fillEpisodeGaps(episodes) {
+  const list = [...new Set((episodes || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+  if (!list.length) return [];
+  const top = list[list.length - 1];
+  return Array.from({ length: top }, (_, index) => index + 1);
+}
+
+// Live unnumbered catch-up. Titles first played before this are backlog, not a lift onto AniList.
+const NETFLIX_CATCH_UP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Distinct unnumbered titles whose first play is inside the catch-up window.
+ * `played` is the group map of episode → first-play time. Gap-fill zeros and older
+ * history do not count — the whole scan's 1..n is not a fresh lift.
+ */
+export function unnumberedCatchUpCount(played, { now = Date.now(), windowMs = NETFLIX_CATCH_UP_MS } = {}) {
+  // Keep in sync with lib/netflix-history.js — recent first-plays only (phone + tracked).
+  const floor = now - windowMs;
+  let count = 0;
+  for (const at of Object.values(played || {})) {
+    const time = Number(at) || 0;
+    if (time >= floor) count += 1;
+  }
+  return count;
+}
+
+// Rows -> one group per season (or film).
+// When Netflix labels carry absolute episode numbers, keep those and fill gaps (2 then 4 → progress 4).
+// Otherwise fall back to counting distinct episodes 1..n in the order first played.
 export function groupNetflix(rows) {
   const groups = new Map();
   for (const row of rows || []) {
     if (!row?.groupId || !row.watched) continue;
     let group = groups.get(row.groupId);
     if (!group) {
-      group = { id: row.groupId, kind: row.kind, seriesId: row.seriesId, seasonId: row.seasonId, series: row.series, year: row.year, anime: row.anime ?? null, season: row.season, seasonNumber: row.seasonNumber, seen: new Map() };
+      group = {
+        id: row.groupId, kind: row.kind, seriesId: row.seriesId, seasonId: row.seasonId,
+        series: row.series, year: row.year, anime: row.anime ?? null, season: row.season,
+        seasonNumber: row.seasonNumber, seen: new Map(), numbered: true,
+      };
       groups.set(row.groupId, group);
     }
     if (row.anime != null && group.anime == null) group.anime = row.anime;
     if (row.year && !group.year) group.year = row.year;
-    const earlier = group.seen.get(row.episodeKey);
-    group.seen.set(row.episodeKey, earlier ? Math.min(earlier, row.playedAt || earlier) : row.playedAt || 0);
+    if (!row.episode) group.numbered = false;
+    const id = row.episode ? `#${row.episode}` : row.episodeKey || row.key;
+    const earlier = group.seen.get(id)?.at || 0;
+    const at = row.playedAt || 0;
+    group.seen.set(id, {
+      episode: row.episode || null,
+      at: earlier && at ? Math.min(earlier, at) : earlier || at,
+    });
   }
-  return [...groups.values()].map(({ seen, ...group }) => {
-    const order = [...seen.values()].sort((a, b) => a - b);
-    const played = Object.fromEntries(order.map((at, index) => [index + 1, at]));
-    const times = order.filter(Boolean);
-    return { ...group, played, episodes: order.map((_, index) => index + 1), firstPlayed: times.length ? Math.min(...times) : 0, lastPlayed: times.length ? Math.max(...times) : 0 };
+  return [...groups.values()].map(({ seen, numbered, ...group }) => {
+    const list = [...seen.values()];
+    const played = {};
+    if (numbered) {
+      for (const { episode, at } of list) if (episode) played[episode] = at;
+      const filled = fillEpisodeGaps(Object.keys(played).map(Number));
+      for (const episode of filled) if (played[episode] == null) played[episode] = 0;
+    } else {
+      list.sort((a, b) => (a.at || Infinity) - (b.at || Infinity)).forEach(({ at }, index) => { played[index + 1] = at; });
+    }
+    const episodes = Object.keys(played).map(Number).sort((a, b) => a - b);
+    const times = Object.values(played).filter(Boolean);
+    return {
+      ...group,
+      absolute: numbered,
+      // How many distinct titles this pass saw — used to lift catch-up onto AniList progress when unnumbered.
+      catchUpCount: list.length,
+      played,
+      episodes,
+      firstPlayed: times.length ? Math.min(...times) : 0,
+      lastPlayed: times.length ? Math.max(...times) : 0,
+    };
   });
 }
