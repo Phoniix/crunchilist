@@ -5,6 +5,32 @@ import { normalizeState } from "../lib/state.js";
 
 const show = { crSeriesId: "SHOW", anilistId: 7, title: "Show", cover: "https://img/x.jpg", episodes: 12 };
 
+test("system notices replace the same kind and keep episode asks", () => {
+  let notices = addNotice([], { kind: "ask", show, episode: 3, from: 2 }, 1);
+  notices = addNotice(notices, { kind: "sync_preview", title: "Daily sync found changes", message: "2 changes ready.", href: "#settings/import", count: 2 }, 2);
+  notices = addNotice(notices, { kind: "sync_preview", title: "Daily sync found changes", message: "5 changes ready.", count: 5 }, 3);
+  assert.equal(notices.filter((row) => row.kind === "sync_preview").length, 1);
+  assert.equal(notices.find((row) => row.kind === "sync_preview").count, 5);
+  assert.equal(notices.find((row) => row.kind === "ask").episode, 3);
+  assert.equal(describeNotice(notices[0]).action, "Apply");
+  assert.equal(describeNotice(notices[0]).viewAction, "View changes");
+});
+
+test("preview notices offer Apply and View changes", () => {
+  const row = addNotice([], {
+    kind: "import_preview",
+    title: "Import preview ready",
+    message: "3 changes ready to review in Import.",
+    href: "#settings/import",
+    count: 3,
+  }, 1)[0];
+  const info = describeNotice(row);
+  assert.equal(info.action, "Apply");
+  assert.equal(info.viewAction, "View changes");
+  assert.equal(info.href, "#settings/import");
+});
+
+
 test("a newer question about the same show replaces the older one", () => {
   let notices = addNotice([], { kind: "ask", show, episode: 3, from: 2 }, 1);
   notices = addNotice(notices, { kind: "done", show: { ...show, crSeriesId: "OTHER" }, episode: 5, from: 4 }, 2);

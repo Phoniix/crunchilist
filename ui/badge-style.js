@@ -127,6 +127,14 @@ export const BADGE_MENU_CSS = `
   .crl-menu .crl-ico { box-shadow: none; }
   .crl-menu-check { margin-left: auto; color: #f47521; font-weight: 800; }
   .crl-menu-sep { display: block; height: 1px; margin: 5px 4px; background: rgba(255,255,255,.08); }
+  .crl-menu button.crl-menu-danger {
+    color: #ff8a80; font-weight: 800;
+  }
+  .crl-menu button.crl-menu-danger:hover, .crl-menu button.crl-menu-danger:focus-visible {
+    background: rgba(255, 80, 80, .16); color: #ffb4ae;
+  }
+  .crl-menu button.crl-menu-danger .crl-ico { color: #ff8a80; }
+  .crl-menu button.crl-menu-hide-cw { color: #cfc8c2; }
 `;
 
 export function badgeIcon(doc, mark) {

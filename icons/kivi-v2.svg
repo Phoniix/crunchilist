@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="512" height="512" role="img" aria-label="Kivi v2">
+  <title>Kivi - chibi guide (v2)</title>
+  <defs>
+    <linearGradient id="sky2" x1=".2" y1="0" x2=".8" y2="1">
+      <stop offset="0%" stop-color="#1e1a3a"/>
+      <stop offset="100%" stop-color="#0e0c1c"/>
+    </linearGradient>
+    <linearGradient id="hair2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c8b8ff"/>
+      <stop offset="50%" stop-color="#8f7cff"/>
+      <stop offset="100%" stop-color="#4fd1ff"/>
+    </linearGradient>
+    <linearGradient id="skin2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff0e6"/>
+      <stop offset="100%" stop-color="#f0c4a8"/>
+    </linearGradient>
+  </defs>
+  <rect width="160" height="160" rx="36" fill="url(#sky2)"/>
+  <!-- orbit ring -->
+  <ellipse cx="80" cy="86" rx="58" ry="18" fill="none" stroke="#4fd1ff" stroke-width="1.5" opacity=".35"/>
+  <circle cx="128" cy="78" r="3.5" fill="#4fd1ff"/>
+  <!-- body -->
+  <ellipse cx="80" cy="128" rx="26" ry="18" fill="#4fd1ff"/>
+  <ellipse cx="80" cy="124" rx="18" ry="12" fill="#a99cff"/>
+  <!-- scarf -->
+  <path fill="#4fd1ff" d="M58 108c8 8 36 8 44 0l-4 16c-6 4-30 4-36 0z"/>
+  <path fill="#7de8ff" d="M96 110c8 4 14 16 12 24-6-2-10-10-12-18z"/>
+  <!-- neck -->
+  <rect x="72" y="100" width="16" height="12" rx="4" fill="url(#skin2)"/>
+  <!-- head -->
+  <circle cx="80" cy="72" r="36" fill="url(#skin2)"/>
+  <!-- hair bowl + twin tails -->
+  <path fill="url(#hair2)" d="M44 72c0-28 16-44 36-44s36 16 36 44c0 6-2 10-4 12-4-16-14-28-32-28s-28 12-32 28c-2-2-4-6-4-12z"/>
+  <path fill="url(#hair2)" d="M44 74c-10 8-16 28-12 44 6 2 10-2 12-10 2-12 4-22 6-30z"/>
+  <path fill="url(#hair2)" d="M116 74c10 8 16 28 12 44-6 2-10-2-12-10-2-12-4-22-6-30z"/>
+  <!-- bangs -->
+  <path fill="url(#hair2)" d="M50 66c8-24 20-30 30-30 12 0 24 8 30 28-8-6-14-14-22-12-6 2-8 10-14 10s-10-6-16-8c-4-2-8 4-8 12z"/>
+  <!-- ahoge -->
+  <path d="M78 30c2-12 10-16 14-10-6 2-8 8-8 14" fill="none" stroke="#a99cff" stroke-width="4" stroke-linecap="round"/>
+  <!-- eyes big chibi -->
+  <ellipse cx="66" cy="76" rx="9" ry="11" fill="#fff"/>
+  <ellipse cx="94" cy="76" rx="9" ry="11" fill="#fff"/>
+  <ellipse cx="67" cy="78" rx="5.5" ry="7" fill="#5b6cff"/>
+  <ellipse cx="95" cy="78" rx="5.5" ry="7" fill="#5b6cff"/>
+  <ellipse cx="68" cy="80" rx="2.6" ry="3.4" fill="#12122a"/>
+  <ellipse cx="96" cy="80" rx="2.6" ry="3.4" fill="#12122a"/>
+  <circle cx="70" cy="75" r="1.8" fill="#fff"/>
+  <circle cx="98" cy="75" r="1.8" fill="#fff"/>
+  <circle cx="64" cy="82" r="1" fill="#fff" opacity=".7"/>
+  <circle cx="92" cy="82" r="1" fill="#fff" opacity=".7"/>
+  <!-- brows -->
+  <path d="M56 64c5-4 14-4 20 0" fill="none" stroke="#6a5cc0" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M84 64c5-4 14-4 20 0" fill="none" stroke="#6a5cc0" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- mouth open happy -->
+  <ellipse cx="80" cy="96" rx="5" ry="4" fill="#c45a72"/>
+  <path d="M76 95h8" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity=".5"/>
+  <!-- blush marks -->
+  <g stroke="#ff8fab" stroke-width="1.4" stroke-linecap="round" opacity=".8">
+    <path d="M52 88v6M56 87v8M48 88v6"/>
+    <path d="M108 88v6M104 87v8M112 88v6"/>
+  </g>
+</svg>

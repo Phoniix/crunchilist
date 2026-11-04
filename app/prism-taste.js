@@ -1,6 +1,9 @@
 // The taste popup next to the search bar: genre likes and dislikes, tags, hard avoids and sub or dub.
 // Edits save straight to the same taste the search engine, Picked for you and the banner rank by.
+import { dubLanguageOptions } from "../lib/audio-locales.js";
 import { ANILIST_GENRES, filterTagSuggestions, sanitizeTaste } from "../lib/taste.js";
+
+const DUB_OPTIONS = dubLanguageOptions();
 
 const FIELDS = ["liked", "disliked", "dropped", "hardAvoids"];
 const GROUPS = [
@@ -79,8 +82,17 @@ export function createTastePop({ send, getView, icon, esc, onView, onChanged }) 
     const typed = input?.value || "";
     const focused = input && document.activeElement === input;
     const was = pop.contains(document.activeElement) ? document.activeElement.dataset : {};
-    const refocus = was.tpGenre ? `[data-tp-genre="${CSS.escape(was.tpGenre)}"]` : was.tpAudio ? `[data-tp-audio="${was.tpAudio}"]` : was.tpMode ? `[data-tp-mode="${was.tpMode}"]` : "";
+    const refocus = was.tpGenre ? `[data-tp-genre="${CSS.escape(was.tpGenre)}"]`
+      : was.tpAudio ? `[data-tp-audio="${was.tpAudio}"]`
+      : was.tpDub ? `[data-tp-dub="${was.tpDub}"]`
+      : was.tpMode ? `[data-tp-mode="${was.tpMode}"]` : "";
     const chosen = groups();
+    const preferSub = taste.subDub === "sub";
+    const selectedDubs = new Set(taste.dubLangs || []);
+    const dubChips = DUB_OPTIONS.map((row) => {
+      const on = selectedDubs.has(row.code);
+      return `<button class="tp-dub${on ? " on" : ""}" data-tp-dub="${esc(row.code)}" aria-pressed="${on}">${esc(row.label)} Dub</button>`;
+    }).join("");
     pop.innerHTML = `<div class="tp-head"><h4>Your taste</h4><button class="tp-close" data-tp-close aria-label="Close">${icon("close")}</button></div>
       <p class="tp-sub">Shapes Picked for you, the banner, match scores and search.</p>
       <div class="tp-label">Genres<small>Click once to like, twice to dislike</small></div>
@@ -93,6 +105,10 @@ export function createTastePop({ send, getView, icon, esc, onView, onChanged }) 
       ${chosen || '<p class="tp-empty">No tags yet. Your likes also grow from shows you rate highly.</p>'}
       <div class="tp-label">Audio</div>
       <div class="seg tp-audio" role="group" aria-label="Sub or dub">${[["any", "Any"], ["sub", "Prefer sub"], ["dub", "Prefer dub"]].map(([value, name]) => `<button class="${taste.subDub === value ? "on" : ""}" data-tp-audio="${value}" aria-pressed="${taste.subDub === value}">${name}</button>`).join("")}</div>
+      <div class="tp-dubs"${preferSub ? " hidden" : ""}>
+        <div class="tp-label">Preferred dubs<small>Boost shows with these</small></div>
+        <div class="tp-dub-row" role="group" aria-label="Preferred dub languages">${dubChips}</div>
+      </div>
       <a href="#settings" data-tp-settings>All taste settings →</a>`;
     const next = pop.querySelector(".tp-input");
     next.value = typed;
@@ -123,12 +139,26 @@ export function createTastePop({ send, getView, icon, esc, onView, onChanged }) 
     event.stopPropagation();
     const target = event.target.closest("button, a");
     if (!target) return;
-    const { tpGenre, tpRemove, tpMode, tpAudio, tpAdd } = target.dataset;
+    const { tpGenre, tpRemove, tpMode, tpAudio, tpDub, tpAdd } = target.dataset;
     if (tpGenre !== undefined) return save(placeLabel(taste, tpGenre, nextGenreField(tasteFieldOf(taste, tpGenre))));
     if (tpRemove !== undefined) return save(placeLabel(taste, tpRemove, ""));
     if (tpAdd !== undefined) return add(tpAdd);
     if (tpMode) { mode = tpMode; return paint(); }
-    if (tpAudio) return save({ ...taste, subDub: tpAudio });
+    if (tpAudio) {
+      const next = { ...taste, subDub: tpAudio };
+      if (tpAudio === "sub") next.dubLangs = [];
+      return save(next);
+    }
+    if (tpDub) {
+      const current = new Set(taste.dubLangs || []);
+      if (current.has(tpDub)) current.delete(tpDub);
+      else current.add(tpDub);
+      return save({
+        ...taste,
+        subDub: taste.subDub === "sub" ? "dub" : taste.subDub,
+        dubLangs: [...current],
+      });
+    }
     if (target.dataset.tpClose !== undefined) close({ restoreFocus: true });
     if (target.dataset.tpSettings !== undefined) close({ restoreFocus: false });
   });

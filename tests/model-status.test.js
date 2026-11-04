@@ -14,7 +14,9 @@ test("chrome's model reads online, offline, or unknown", () => {
   assert.deepEqual([stalled.state, stalled.label], ["unknown", "Error"]);
   assert.match(stalled.detail, /22 GB/);
   assert.equal(describeModelStatus({ chromePresent: true, availability: "downloadable" }).state, "offline");
-  assert.equal(describeModelStatus({ chromePresent: true, availability: "unavailable" }).state, "offline");
+  const unavailable = describeModelStatus({ chromePresent: true, availability: "unavailable" });
+  assert.equal(unavailable.state, "offline");
+  assert.equal(unavailable.label, "Unavailable here");
   assert.equal(describeModelStatus({ chromePresent: false }).state, "unknown");
   assert.equal(describeModelStatus({ chromePresent: true, availabilityError: true }).label, "Error");
   assert.equal(describeModelStatus({ chromePresent: true, availability: "something new" }).state, "unknown");

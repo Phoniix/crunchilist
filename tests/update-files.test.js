@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gitBlobSha, isPackagePath, packageFiles, rawUrl, sameAsGitHub, staleFiles, withoutCarriageReturns } from "../lib/update-files.js";
+import { PACKAGE_FOLDERS, gitBlobSha, isPackagePath, packageFiles, rawUrl, sameAsGitHub, staleFiles, withoutCarriageReturns } from "../lib/update-files.js";
 
 test("the manual update files ship with the extension", () => {
   assert.equal(isPackagePath("update.cmd", {}), true);
@@ -25,6 +25,17 @@ test("only shipped files count as part of the extension", () => {
   assert.equal(isPackagePath("lib/x.test.js", MANIFEST), false);
   assert.equal(isPackagePath("app/../manifest.json", MANIFEST), false);
   assert.equal(isPackagePath("app/has space.js", MANIFEST), false);
+});
+
+test("feeds and injected site scripts ship; content sources stay out", () => {
+  assert.ok(PACKAGE_FOLDERS.includes("feeds"));
+  assert.ok(!PACKAGE_FOLDERS.includes("content"));
+  assert.equal(isPackagePath("feeds/id-map.json", MANIFEST), true);
+  assert.equal(isPackagePath("feeds/where-map.json", MANIFEST), true);
+  assert.equal(isPackagePath("content/site/netflix.js", MANIFEST), true);
+  assert.equal(isPackagePath("content/site-panel.js", MANIFEST), true);
+  assert.equal(isPackagePath("content/sites/netflix.js", MANIFEST), false);
+  assert.equal(isPackagePath("content/main.js", MANIFEST), false);
 });
 
 test("GitHub's tree is cut down to blobs the extension ships", () => {

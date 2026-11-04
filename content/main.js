@@ -1,12 +1,15 @@
 import { applyBadges, clearBadges } from "./badges.js";
 import { createPanel } from "./panel.js";
+import { SEARCH_PLATFORMS } from "../ui/search-view.js";
 import { createPlayerBar, pauseVideos } from "./player-bar.js";
 import { scanDocument } from "./scan.js";
 import { ENABLED_KEY, isEnabled } from "../lib/enabled.js";
 import { buildObservation, parseCmsObjects, parseCmsSeasons } from "../lib/page-model.js";
+import { bootWatchGuide } from "./watch-guide.js";
 
 if (!globalThis.__crCornerBooted) {
   globalThis.__crCornerBooted = true;
+  bootWatchGuide();
   boot();
 }
 
@@ -56,6 +59,7 @@ function start() {
   if (!panel) {
     panel = createPanel(document, {
       send,
+      platforms: SEARCH_PLATFORMS,
       onOpenChange: (panelOpen) => send("setUi", { panelOpen }),
       onCorner: (panelCorner) => send("setUi", { panelCorner }),
       onView: (view) => renderView(view),
@@ -138,7 +142,7 @@ function onPageMessage(event) {
 
 function schedule() {
   window.clearTimeout(scanTimer);
-  scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 1200 : 450);
+  scanTimer = window.setTimeout(runScan, latestView?.settings?.liteMode ? 2000 : 450);
 }
 
 function observationSignature(observation) {
@@ -250,6 +254,7 @@ function onVideoTime(event) {
       return;
     }
     if (!response.toast || response.mode === "none") return;
+    if (response.watchGuide) globalThis.__ksWatchGuide?.show(response.watchGuide);
     showEpisodeToast(response);
   });
 }

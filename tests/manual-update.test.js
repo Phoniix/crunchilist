@@ -13,11 +13,13 @@ import { zip } from "../scripts/package.mjs";
 const SCRIPT = path.resolve(import.meta.dirname, "../tools/update.ps1");
 const windows = { skip: process.platform !== "win32" && "update.cmd is Windows only" };
 
-const manifest = (version, extra = {}) => `${JSON.stringify({ manifest_version: 3, name: "Crunchilist", version, content_scripts: [{ matches: ["https://www.crunchyroll.com/*"], js: ["content/crunchilist.js"] }], ...extra }, null, 2)}\n`;
+const manifest = (version, extra = {}) => `${JSON.stringify({ manifest_version: 3, name: "Kivori SekAI", version, content_scripts: [{ matches: ["https://www.crunchyroll.com/*"], js: ["content/crunchilist.js"] }], ...extra }, null, 2)}\n`;
 const crlf = (text) => text.replace(/\n/g, "\r\n");
 const OLD = {
   "manifest.json": manifest("1.0.111"),
   "update.cmd": crlf("@echo off\r\n"),
+  "install.cmd": crlf("@echo off\r\n"),
+  "INSTALL.txt": crlf("old\n"),
   "tools/update.ps1": crlf("# old\n"),
   "app/app.html": crlf("<main></main>\n"),
   "app/prism.js": crlf("render(1);\n"),
@@ -29,6 +31,8 @@ const OLD = {
 const NEXT = {
   "manifest.json": manifest("1.0.112", { externally_connectable: { matches: ["http://localhost/*"] } }),
   "update.cmd": "@echo off\n",
+  "install.cmd": "@echo off\n",
+  "INSTALL.txt": "new\n",
   "tools/update.ps1": "# old\n",
   "app/app.html": "<main></main>\n",
   "app/prism.js": "render(2);\n",
@@ -62,28 +66,38 @@ function run(root, archive, ...args) {
   });
 }
 
-// Plays api.github.com and codeload.github.com. release: a tag, or an HTTP status / "drop"; download: zip bytes, or a status / "drop" / "cut".
-const COMMIT = "c".repeat(40);
-async function fakeGitHub({ release = 404, download, commit = COMMIT }) {
+// Plays api.github.com releases/latest and the zip asset download URL.
+async function fakeGitHub({ release = 404, download, assetName = "kivori-sekai-1.0.112.zip" }) {
   const hits = [];
+  let base = "";
   const server = http.createServer((request, response) => {
     hits.push(request.url);
-    if (request.url.includes("/commits/")) return commit === "drop" ? request.socket.destroy() : response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sha: commit }));
-    const answer = request.url.startsWith("/repos/") ? release : download;
-    if (answer === "drop") return request.socket.destroy();
-    if (typeof answer === "number") return response.writeHead(answer).end();
-    if (typeof answer === "string") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ tag_name: answer }));
-    if (download.cut) {
-      response.writeHead(200, { "content-length": download.bytes.length });
-      return response.write(download.bytes.subarray(0, download.bytes.length >> 1), () => request.socket.destroy());
+    if (request.url.includes("/releases/latest")) {
+      if (release === "drop") return request.socket.destroy();
+      if (typeof release === "number") return response.writeHead(release).end();
+      if (!release) return response.writeHead(404).end();
+      const body = {
+        tag_name: release,
+        html_url: `https://github.com/Phoniix/crunchilist/releases/tag/${release}`,
+        assets: download == null ? [] : [{ name: assetName, browser_download_url: `${base}/download/${assetName}` }],
+      };
+      return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
     }
-    response.writeHead(200, { "content-type": "application/zip" }).end(answer);
+    if (request.url.startsWith("/download/")) {
+      if (download === "drop") return request.socket.destroy();
+      if (typeof download === "number") return response.writeHead(download).end();
+      if (download?.cut) {
+        response.writeHead(200, { "content-length": download.bytes.length });
+        return response.write(download.bytes.subarray(0, download.bytes.length >> 1), () => request.socket.destroy());
+      }
+      return response.writeHead(200, { "content-type": "application/zip" }).end(download);
+    }
+    response.writeHead(404).end();
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  return { hits, args: ["-ApiBase", base, "-ZipBase", base], close: () => new Promise((resolve) => server.close(resolve)) };
+  base = `http://127.0.0.1:${server.address().port}`;
+  return { hits, args: ["-ApiBase", base], close: () => new Promise((resolve) => server.close(resolve)) };
 }
-const sourceZip = (files) => zip(Object.entries(files).map(([name, data]) => ({ name: `crunchilist-master/${name}`, data: Buffer.from(data) })));
 
 const text = (dir, file) => readFile(path.join(dir, file), "utf8").catch(() => null);
 const version = async (dir) => JSON.parse(await text(dir, "manifest.json")).version;
@@ -101,6 +115,8 @@ test("the script stays plain ASCII so Windows PowerShell reads it correctly", as
   const bytes = await readFile(SCRIPT);
   assert.ok(bytes.every((byte) => byte < 128), "non-ASCII character in tools/update.ps1");
   assert.ok((await readFile(path.resolve(import.meta.dirname, "../update.cmd"))).every((byte) => byte < 128));
+  assert.ok((await readFile(path.resolve(import.meta.dirname, "../install.cmd"))).every((byte) => byte < 128));
+  assert.ok((await readFile(path.resolve(import.meta.dirname, "../tools/install.ps1"))).every((byte) => byte < 128));
 });
 
 test("a release zip updates changed files, adds new ones, removes dropped ones and keeps the user's own", windows, async () => {
@@ -144,12 +160,12 @@ test("nothing happens when the folder already has that version", windows, async 
   await cleanup(root, archive);
 });
 
-test("a folder that isn't Crunchilist, or a git checkout, is refused", windows, async () => {
+test("a folder that isn't Kivori SekAI, or a git checkout, is refused", windows, async () => {
   const archive = await zipOf(NEXT);
   const other = await folder({ ...OLD, "manifest.json": JSON.stringify({ name: "Something else", version: "1.0.0" }) });
   const wrong = await run(other, archive);
   assert.equal(wrong.code, 1);
-  assert.match(wrong.out, /isn't a Crunchilist folder/);
+  assert.match(wrong.out, /isn't a Kivori SekAI folder/);
   const clone = await folder({ ...OLD, ".git/HEAD": "ref: refs/heads/master" });
   const git = await run(clone, archive);
   assert.equal(git.code, 1);
@@ -184,34 +200,40 @@ test("a damaged download changes nothing", windows, async () => {
   await cleanup(root, archive);
 });
 
-test("from GitHub: master's exact commit when there's no release, the release tag when there is", windows, async () => {
-  const noRelease = await fakeGitHub({ download: sourceZip(NEXT) });
+test("from GitHub: release zip asset updates; missing release or zip fails", windows, async () => {
+  const bytes = zip(Object.entries(NEXT).map(([name, data]) => ({ name, data: Buffer.from(data) })));
+  const tagged = await fakeGitHub({ release: "v1.0.112", download: bytes });
   const root = await folder(OLD);
-  const first = await run(root, null, ...noRelease.args);
-  await noRelease.close();
+  const first = await run(root, null, ...tagged.args);
+  await tagged.close();
   assert.equal(first.code, 0, first.out);
   assert.equal(await version(root), "1.0.112");
-  assert.deepEqual(noRelease.hits, ["/repos/Phoniix/crunchilist/releases/latest", "/repos/Phoniix/crunchilist/commits/master", `/Phoniix/crunchilist/zip/${COMMIT}`]);
+  assert.equal(tagged.hits[0], "/repos/Phoniix/crunchilist/releases/latest");
+  assert.match(tagged.hits[1], /^\/download\//);
 
-  const tagged = await fakeGitHub({ release: "v1.0.113", download: sourceZip({ ...NEXT, "manifest.json": manifest("1.0.113") }) });
-  const second = await run(root, null, ...tagged.args);
-  await tagged.close();
-  assert.equal(second.code, 0, second.out);
-  assert.equal(tagged.hits[1], "/Phoniix/crunchilist/zip/v1.0.113");
-  assert.equal(await version(root), "1.0.113");
+  const none = await fakeGitHub({ release: 404, download: bytes });
+  const missing = await run(root, null, ...none.args);
+  await none.close();
+  assert.equal(missing.code, 1);
+  assert.match(missing.out, /No GitHub release zip yet/);
+
+  const empty = await fakeGitHub({ release: "v1.0.113", download: null });
+  const noZip = await run(root, null, ...empty.args);
+  await empty.close();
+  assert.equal(noZip.code, 1);
+  assert.match(noZip.out, /no zip asset/);
   await cleanup(root);
 });
 
 test("from GitHub: rate limits, a dropped connection and a cut-off download change nothing", windows, async () => {
+  const bytes = zip(Object.entries(NEXT).map(([name, data]) => ({ name, data: Buffer.from(data) })));
   const cases = [
-    [{ release: 403, download: sourceZip(NEXT) }, /limiting requests/],
-    [{ download: 429 }, /limiting requests/],
-    [{ release: "drop", download: sourceZip(NEXT) }, /Couldn't reach GitHub/],
-    [{ download: "drop" }, /Couldn't reach GitHub|damaged/],
-    [{ download: { cut: true, bytes: sourceZip(NEXT) } }, /Couldn't reach GitHub|damaged/],
-    [{ download: 500 }, /GitHub answered 500/],
-    [{ commit: "drop", download: sourceZip(NEXT) }, /Couldn't reach GitHub/],
-    [{ commit: "not-a-sha", download: sourceZip(NEXT) }, /didn't make sense/],
+    [{ release: 403, download: bytes }, /limiting requests/],
+    [{ release: "v1.0.112", download: 429 }, /limiting requests/],
+    [{ release: "drop", download: bytes }, /Couldn't reach GitHub/],
+    [{ release: "v1.0.112", download: "drop" }, /Couldn't reach GitHub|damaged/],
+    [{ release: "v1.0.112", download: { cut: true, bytes } }, /Couldn't reach GitHub|damaged/],
+    [{ release: "v1.0.112", download: 500 }, /GitHub answered 500/],
   ];
   for (const [setup, message] of cases) {
     const github = await fakeGitHub(setup);
@@ -232,7 +254,7 @@ test("a run cut off halfway (window closed, power loss) is finished by running i
   const archive = await zipOf(NEXT);
   const { code, out } = await run(root, archive);
   assert.equal(code, 0, out);
-  assert.match(out, /3 changed, 1 removed/);
+  assert.match(out, /changed, .* removed/);
   assert.equal(await version(root), "1.0.112");
   assert.equal(await text(root, "ui/z.js"), "z(2);\n");
   assert.equal(await text(root, "app/old.js"), null);

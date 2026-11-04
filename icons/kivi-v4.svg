@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="512" height="512" role="img" aria-label="Kivi v4">
+  <title>Kivi - neon night (v4)</title>
+  <defs>
+    <radialGradient id="sky4" cx="40%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#3a2f6e"/>
+      <stop offset="70%" stop-color="#16122c"/>
+      <stop offset="100%" stop-color="#0a0914"/>
+    </radialGradient>
+    <linearGradient id="hair4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2ecff"/>
+      <stop offset="35%" stop-color="#c4b4ff"/>
+      <stop offset="75%" stop-color="#7a6ae8"/>
+      <stop offset="100%" stop-color="#3ecfff"/>
+    </linearGradient>
+    <linearGradient id="skin4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff2ea"/>
+      <stop offset="100%" stop-color="#efc2a6"/>
+    </linearGradient>
+    <filter id="glow4" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="160" height="160" rx="36" fill="url(#sky4)"/>
+  <!-- star field -->
+  <g fill="#eef0ff" opacity=".55">
+    <circle cx="24" cy="28" r="1.2"/><circle cx="40" cy="18" r=".9"/><circle cx="130" cy="30" r="1.1"/>
+    <circle cx="142" cy="52" r=".8"/><circle cx="18" cy="60" r=".7"/><circle cx="148" cy="88" r="1"/>
+  </g>
+  <!-- long hair cascade -->
+  <path fill="url(#hair4)" d="M34 70c4-40 24-58 46-58s42 18 46 58c2 34-6 58-14 70H48c-8-12-16-36-14-70z"/>
+  <!-- shoulders hoodie -->
+  <path fill="#252048" d="M40 150c10-24 24-36 40-36s30 12 40 36H40z"/>
+  <path fill="#4fd1ff" opacity=".85" d="M66 120c6 4 22 4 28 0 2 6 0 14-4 18-6 2-14 2-20 0-4-4-6-12-4-18z"/>
+  <path fill="#a99cff" d="M78 118h4v28h-4z"/>
+  <!-- neck face -->
+  <path fill="url(#skin4)" d="M72 108c2 10 6 16 10 16s8-6 10-16v-4H72z"/>
+  <ellipse cx="82" cy="74" rx="30" ry="34" fill="url(#skin4)"/>
+  <!-- layered bangs -->
+  <path fill="url(#hair4)" d="M52 60c8-26 22-34 32-34 12 0 26 10 32 30 0 4-6 4-8 0-6-8-12-16-18-14-6 2-8 12-14 12s-10-8-14-10c-4-2-12 4-10 16z"/>
+  <path fill="url(#hair4)" d="M54 68c-4-14 2-28 12-34 0 10-2 22-6 32-2 4-6 6-6 2z"/>
+  <path fill="url(#hair4)" d="M110 68c4-14-2-28-12-34 0 10 2 22 6 32 2 4 6 6 6 2z"/>
+  <!-- long side strands over shoulders -->
+  <path fill="url(#hair4)" d="M46 78c-6 22-4 44 2 58 4 2 8-2 8-8 0-16-2-32-2-46 0-4-4-6-8-4z"/>
+  <path fill="url(#hair4)" d="M118 78c6 22 4 44-2 58-4 2-8-2-8-8 0-16 2-32 2-46 0-4 4-6 8-4z"/>
+  <!-- glowing eyes -->
+  <g filter="url(#glow4)">
+    <ellipse cx="70" cy="78" rx="8" ry="9.5" fill="#fff"/>
+    <ellipse cx="94" cy="78" rx="8" ry="9.5" fill="#fff"/>
+    <ellipse cx="71" cy="80" rx="4.6" ry="6" fill="#4fd1ff"/>
+    <ellipse cx="95" cy="80" rx="4.6" ry="6" fill="#4fd1ff"/>
+    <ellipse cx="72" cy="81.5" rx="2.2" ry="3" fill="#0e1028"/>
+    <ellipse cx="96" cy="81.5" rx="2.2" ry="3" fill="#0e1028"/>
+    <circle cx="73.5" cy="77" r="1.5" fill="#fff"/>
+    <circle cx="97.5" cy="77" r="1.5" fill="#fff"/>
+  </g>
+  <path d="M62 74c3-4 11-5 16-1" fill="none" stroke="#2a2048" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M86 74c3-4 11-5 16-1" fill="none" stroke="#2a2048" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M62 66c5-3 14-3 18 0" fill="none" stroke="#9b8cf0" stroke-width="2" stroke-linecap="round"/>
+  <path d="M86 66c5-3 14-3 18 0" fill="none" stroke="#9b8cf0" stroke-width="2" stroke-linecap="round"/>
+  <!-- soft smile -->
+  <path d="M76 96c3 5 9 5 12 0" fill="none" stroke="#c07080" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M82 88c0 3 1 4 0 5" fill="none" stroke="#d4a090" stroke-width="1.3" stroke-linecap="round"/>
+  <ellipse cx="60" cy="90" rx="7" ry="4" fill="#ff8fab" opacity=".4"/>
+  <ellipse cx="104" cy="90" rx="7" ry="4" fill="#ff8fab" opacity=".4"/>
+  <!-- earphone / trail charm -->
+  <circle cx="118" cy="56" r="5" fill="none" stroke="#4fd1ff" stroke-width="2"/>
+  <path d="M118 61v14c0 6 6 8 10 6" fill="none" stroke="#4fd1ff" stroke-width="2" stroke-linecap="round"/>
+</svg>

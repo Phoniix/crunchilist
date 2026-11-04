@@ -1047,7 +1047,25 @@ async function runOne(name) {
     windows: { update: async () => {}, create: async (info) => info, getAll: async () => [] },
     commands: { onCommand: event(), getAll: async () => [] },
     identity: { getRedirectURL: () => "https://scenario.chromiumapp.org/" },
-    permissions: { contains: async () => true },
+    permissions: {
+      contains: async () => true,
+      getAll: async () => ({ origins: [], permissions: [] }),
+      onAdded: event(),
+      onRemoved: event(),
+    },
+    alarms: {
+      onAlarm: event(),
+      create: async () => {},
+      get: async () => undefined,
+      clear: async () => {},
+      getAll: async () => [],
+    },
+    scripting: {
+      executeScript: async () => [],
+      registerContentScripts: async () => {},
+      unregisterContentScripts: async () => {},
+      getRegisteredContentScripts: async () => [],
+    },
     webNavigation: { onBeforeNavigate: event(), onCommitted: event(), onErrorOccurred: event(), onReferenceFragmentUpdated: event() },
   };
   if (scenario.model) globalThis.LanguageModel = scenario.model;

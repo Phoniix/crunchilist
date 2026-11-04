@@ -1,25 +1,84 @@
 import { LIBRARY_STATUS, buildAppShows, libraryMirror, mediaWanted, seasonTarget } from "../lib/app-shows.js";
+import { catalogOnlyShows } from "../lib/catalog-shows.js";
+import { availability, withCatalogLinks } from "../lib/catalogs.js";
 import { setEntryProgress, setEntryStatus } from "../lib/library.js";
 import { CHAIN_DEPTH, EXTRAS_BATCH, EXTRAS_QUERY, extrasFrontier, keepReachable, mediaNode, missingNode } from "../lib/seasons.js";
 import { changeLibrary } from "./anilist-sync.js";
+import { readCatalogs } from "./catalog-reader.js";
+import { loadServiceCatalogs } from "./catalog-store.js";
+import {
+  clearContinueForShow,
+  dismissContinueShow,
+  expireProvisionalContinueActivity,
+  loadContinueActivity,
+  loadContinueDismissed,
+} from "./continue-activity.js";
+import { refreshIdMap } from "./id-map-store.js";
 import { makeView } from "./page.js";
 import { anilist, delay, loadCatalog, loadMedia, loadState, saveMedia } from "./store.js";
-import { refreshYoutube, youtubeFor } from "./youtube.js";
+import { loadDead } from "./dead-links.js";
+import { loadUnrecommended } from "./unrecommended.js";
+import { loadGaps, refreshWhereMap } from "./where-map-store.js";
 
 async function loadShows(state) {
   const catalog = await loadCatalog();
   const media = await loadMedia();
-  const youtube = await youtubeFor(state, catalog, media);
-  return { catalog, shows: buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library, youtube }) };
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = Object.keys(catalogs).filter((id) => catalogs[id]?.links);
+  const found = availability(catalogs, connected, { gaps, dead });
+  const base = buildAppShows({ catalog, cache: state.anilistCache, media, library: state.library });
+  const already = new Set(base.map((show) => show.anilistId).filter(Boolean));
+  // Same enrich gate as search: title + genres/about only (high-confidence matches come from availability).
+  const extras = catalogOnlyShows(found, media, already, { enrich: true });
+  const shows = [...base, ...extras].map((show) => withCatalogLinks(show, found, { dead }));
+  return { catalog, shows };
 }
 
-// Everything the Crunchilist page shows. Secrets never leave the background: the view carries public settings only.
+// Everything the Kivori SekAI page shows. Secrets never leave the background: the view carries public settings only.
 export async function appData() {
   const state = await loadState();
   const { catalog, shows } = await loadShows(state);
   refreshMediaExtras().catch(() => {});
-  refreshYoutube().catch(() => {});
-  return { shows, library: libraryMirror(shows, state.library), view: makeView(state, catalog) };
+  refreshWhereMap().catch(() => {});
+  refreshIdMap().catch(() => {});
+  readCatalogs(["crunchyroll"]).catch(() => {});
+  const continueActivity = await expireProvisionalContinueActivity().catch(() => loadContinueActivity());
+  const continueDismissed = await loadContinueDismissed().catch(() => []);
+  const view = makeView(state, catalog);
+  view.unrecommended = await loadUnrecommended();
+  return {
+    shows,
+    library: libraryMirror(shows, state.library),
+    continueActivity,
+    continueDismissed,
+    view,
+    unrecommended: view.unrecommended,
+  };
+}
+
+export async function hideContinueShow(showId, extras = {}) {
+  const id = String(showId || "").trim();
+  if (!id) throw new Error("Nothing to hide.");
+  const { shows } = await loadShows(await loadState());
+  const show = shows.find((row) => row.id === id);
+  const activity = (await loadContinueActivity()).find((row) => String(row?.id) === id);
+  if (!show && !activity && !extras.title && !extras.anilistId) {
+    throw new Error("That show isn't on Continue watching anymore.");
+  }
+  const result = await dismissContinueShow({
+    id,
+    anilistIds: [
+      show?.anilistId,
+      ...(show?.seasons || []).map((season) => season?.anilistId),
+      activity?.anilistId,
+      extras.anilistId,
+    ],
+    title: show?.title || activity?.title || extras.title || "",
+  });
+  return {
+    continueActivity: result.continueActivity,
+    continueDismissed: result.continueDismissed,
+  };
 }
 
 export async function setSeasonState(showId, changes) {
@@ -38,7 +97,21 @@ export async function setSeasonState(showId, changes) {
     }
     return next;
   }, show.anilistId ? "" : "Saved on this device.");
-  return { library: libraryMirror(shows, result.state.library), view: makeView(result.state, await loadCatalog()), syncNote: result.syncNote };
+  // Finished / dropped / removed from the rail badge must leave Continue Watching too.
+  const leaveRail = changes.some((change) => change?.status === "finished" || change?.status === "dropped" || change?.status == null);
+  const continueActivity = leaveRail
+    ? await clearContinueForShow({
+      id: show.id,
+      anilistIds: [show.anilistId, ...(show.seasons || []).map((season) => season?.anilistId)],
+      title: show.title,
+    })
+    : await loadContinueActivity();
+  return {
+    library: libraryMirror(shows, result.state.library),
+    continueActivity,
+    view: makeView(result.state, await loadCatalog()),
+    syncNote: result.syncNote,
+  };
 }
 
 let extrasJob = null;
@@ -52,7 +125,15 @@ export function refreshMediaExtras(signal) {
 async function fetchExtras(signal) {
   const state = await loadState();
   const catalog = await loadCatalog();
-  const { ids, catalogIds, offCatalog } = mediaWanted({ catalog, cache: state.anilistCache, library: state.library });
+  const [gaps, catalogs, dead] = await Promise.all([loadGaps(), loadServiceCatalogs(), loadDead()]);
+  const connected = Object.keys(catalogs).filter((id) => catalogs[id]?.links);
+  const found = availability(catalogs, connected, { gaps, dead });
+  const { ids, catalogIds, offCatalog } = mediaWanted({
+    catalog,
+    cache: state.anilistCache,
+    library: state.library,
+    found,
+  });
   if (!ids.length) return;
   const media = await loadMedia();
   let changed = false;

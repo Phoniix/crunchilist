@@ -213,7 +213,13 @@ export async function tabRole(sender) {
   const player = await load();
   const home = await homeTab(player);
   const main = await playerTab(player);
-  const base = { backButton: prefs.backButton !== false, showTips: prefs.showTips !== false, home: Boolean(home), miniPlayer: prefs.miniPlayer === true };
+  const base = {
+    backButton: prefs.backButton !== false,
+    showTips: prefs.showTips !== false,
+    home: Boolean(home),
+    miniPlayer: prefs.miniPlayer === true,
+    liteMode: Boolean(prefs.liteMode),
+  };
   if (!tab || !isCrunchyroll(tab.url)) return { ...base, role: "other" };
   if (main?.id === tab.id) {
     const undoFor = player.lastMove?.tabId === tab.id ? Math.max(0, MOVE_UNDO_MS - (Date.now() - player.lastMove.at)) : 0;
@@ -291,7 +297,9 @@ export async function switchTabs(openApp) {
       await save(player);
     }
     await focus(main);
+    return {};
   }
+  if (typeof openApp === "function") await openApp();
   return {};
 }
 

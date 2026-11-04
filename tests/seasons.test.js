@@ -41,6 +41,17 @@ test("mediaNode keeps trailers, studio, airing and season links", () => {
   assert.equal(mediaNode(media(1, { description: "A <b>story</b>." }), NOW, { keepAbout: true }).about, "A story.");
 });
 
+test("mediaNode keeps only app streaming sites (drops YouTube and other AniList hosts)", () => {
+  const node = mediaNode(media(1, {
+    externalLinks: [
+      { site: "YouTube", url: "https://www.youtube.com/playlist?list=PLx", type: "STREAMING" },
+      { site: "Crunchyroll", url: "https://www.crunchyroll.com/series/x", type: "STREAMING" },
+      { site: "Disney Plus", url: "https://www.disneyplus.com/x", type: "STREAMING" },
+    ],
+  }), NOW);
+  assert.deepEqual(node.streaming, [{ site: "Crunchyroll", url: "https://www.crunchyroll.com/series/x" }]);
+});
+
 test("mediaNode drops trailers that aren't YouTube", () => {
   assert.equal(mediaNode(media(1, { trailer: { id: "x123456", site: "dailymotion" } }), NOW).trailer, "");
   assert.equal(mediaNode(media(1, { trailer: { id: "bad id <script>", site: "youtube" } }), NOW).trailer, "");
